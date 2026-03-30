@@ -359,11 +359,46 @@ async def upload_video(file: UploadFile = File(...), match_id: str = "", current
 
 @api_router.post("/videos/upload/init")
 async def init_chunked_upload(input: ChunkedUploadInit, current_user: dict = Depends(get_current_user)):
-    """Initialize a chunked upload for large files (10GB+)"""
+    """Initialize a chunked upload for large files (10GB+) - supports resume"""
     match = await db.matches.find_one({"id": input.match_id, "user_id": current_user["id"]}, {"_id": 0})
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
     
+    # Check for existing upload session with same file
+    existing_upload = await db.chunked_uploads.find_one({
+        "user_id": current_user["id"],
+        "match_id": input.match_id,
+        "filename": input.filename,
+        "file_size": input.file_size,
+        "status": {"$in": ["initialized", "in_progress"]}
+    }, {"_id": 0})
+    
+    if existing_upload:
+        # Resume existing upload
+        upload_id = existing_upload["upload_id"]
+        video_id = existing_upload["video_id"]
+        chunks_received = existing_upload.get("chunks_received", 0)
+        chunk_size = 10485760  # 10MB
+        
+        # Get list of already uploaded chunks
+        uploaded_chunks = []
+        temp_dir = f"/tmp/uploads/{upload_id}"
+        if os.path.exists(temp_dir):
+            chunk_files = [f for f in os.listdir(temp_dir) if f.startswith('chunk_')]
+            uploaded_chunks = [int(f.split('_')[1].split('.')[0]) for f in chunk_files]
+            uploaded_chunks.sort()
+        
+        logger.info(f"Resuming upload: {upload_id} for video {video_id}, {chunks_received} chunks already received")
+        return {
+            "upload_id": upload_id,
+            "video_id": video_id,
+            "chunk_size": chunk_size,
+            "resume": True,
+            "chunks_received": chunks_received,
+            "uploaded_chunks": uploaded_chunks
+        }
+    
+    # Create new upload session
     upload_id = str(uuid.uuid4())
     video_id = str(uuid.uuid4())
     
@@ -377,12 +412,40 @@ async def init_chunked_upload(input: ChunkedUploadInit, current_user: dict = Dep
         "content_type": input.content_type,
         "chunks_received": 0,
         "status": "initialized",
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "last_chunk_at": datetime.now(timezone.utc).isoformat()
     }
     await db.chunked_uploads.insert_one(upload_doc)
     
-    logger.info(f"Initialized chunked upload: {upload_id} for video {video_id}, size: {input.file_size} bytes")
-    return {"upload_id": upload_id, "video_id": video_id, "chunk_size": 10485760}  # 10MB chunks
+    logger.info(f"Initialized new chunked upload: {upload_id} for video {video_id}, size: {input.file_size} bytes")
+    return {"upload_id": upload_id, "video_id": video_id, "chunk_size": 10485760, "resume": False}
+
+@api_router.get("/videos/upload/status/{upload_id}")
+async def get_upload_status(upload_id: str, current_user: dict = Depends(get_current_user)):
+    """Get status of a chunked upload"""
+    upload = await db.chunked_uploads.find_one({"upload_id": upload_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    
+    # Get list of uploaded chunks
+    uploaded_chunks = []
+    temp_dir = f"/tmp/uploads/{upload_id}"
+    if os.path.exists(temp_dir):
+        chunk_files = [f for f in os.listdir(temp_dir) if f.startswith('chunk_')]
+        uploaded_chunks = [int(f.split('_')[1].split('.')[0]) for f in chunk_files]
+        uploaded_chunks.sort()
+    
+    return {
+        "upload_id": upload_id,
+        "video_id": upload.get("video_id"),
+        "filename": upload.get("filename"),
+        "file_size": upload.get("file_size"),
+        "chunks_received": upload.get("chunks_received", 0),
+        "status": upload.get("status"),
+        "uploaded_chunks": uploaded_chunks,
+        "created_at": upload.get("created_at"),
+        "last_chunk_at": upload.get("last_chunk_at")
+    }
 
 @api_router.post("/videos/upload/chunk")
 async def upload_chunk(
@@ -392,37 +455,65 @@ async def upload_chunk(
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
 ):
-    """Upload a single chunk of a large video file - stores to temp file instead of DB"""
+    """Upload a single chunk of a large video file - stores to temp file, supports resume"""
     upload = await db.chunked_uploads.find_one({"upload_id": upload_id, "user_id": current_user["id"]}, {"_id": 0})
     if not upload:
         raise HTTPException(status_code=404, detail="Upload session not found")
     
-    # Read chunk data
-    chunk_data = await file.read()
-    
-    # Store chunk to temporary file instead of database
+    # Setup temp directory
     temp_dir = f"/tmp/uploads/{upload_id}"
     os.makedirs(temp_dir, exist_ok=True)
     chunk_file_path = f"{temp_dir}/chunk_{chunk_index:06d}.bin"
     
+    # Check if chunk already exists (resume scenario)
+    if os.path.exists(chunk_file_path):
+        existing_size = os.path.getsize(chunk_file_path)
+        logger.info(f"Chunk {chunk_index+1}/{total_chunks} already exists (resume), size: {existing_size} bytes")
+        
+        # Update status to in_progress
+        await db.chunked_uploads.update_one(
+            {"upload_id": upload_id},
+            {"$set": {"status": "in_progress", "last_chunk_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        
+        # If all chunks received, finalize
+        if chunk_index + 1 == total_chunks:
+            # Check if we actually have all chunks
+            chunk_files = [f for f in os.listdir(temp_dir) if f.startswith('chunk_')]
+            if len(chunk_files) >= total_chunks:
+                logger.info(f"All chunks present for {upload_id}, starting assembly...")
+                return await finalize_chunked_upload(upload_id, current_user, temp_dir)
+        
+        return {"status": "chunk_skipped", "chunk_index": chunk_index, "message": "Chunk already uploaded (resumed)"}
+    
+    # Read and save new chunk data
+    chunk_data = await file.read()
     with open(chunk_file_path, 'wb') as f:
         f.write(chunk_data)
     
-    # Update progress (just count, don't store data in DB)
+    # Update progress
     await db.chunked_uploads.update_one(
         {"upload_id": upload_id},
         {
             "$inc": {"chunks_received": 1},
-            "$set": {f"chunks.{chunk_index}": {"size": len(chunk_data), "path": chunk_file_path}}
+            "$set": {
+                "status": "in_progress",
+                "last_chunk_at": datetime.now(timezone.utc).isoformat()
+            }
         }
     )
     
-    logger.info(f"Chunk {chunk_index+1}/{total_chunks} saved to temp file for upload {upload_id}, size: {len(chunk_data)} bytes")
+    logger.info(f"Chunk {chunk_index+1}/{total_chunks} saved for upload {upload_id}, size: {len(chunk_data)} bytes")
     
     # If all chunks received, assemble and upload to storage
     if chunk_index + 1 == total_chunks:
-        logger.info(f"All chunks received for {upload_id}, starting assembly and upload...")
-        return await finalize_chunked_upload(upload_id, current_user, temp_dir)
+        # Double-check all chunks are present
+        chunk_files = [f for f in os.listdir(temp_dir) if f.startswith('chunk_')]
+        if len(chunk_files) >= total_chunks:
+            logger.info(f"All {total_chunks} chunks received for {upload_id}, starting assembly...")
+            return await finalize_chunked_upload(upload_id, current_user, temp_dir)
+        else:
+            logger.warning(f"Final chunk received but only {len(chunk_files)}/{total_chunks} chunks present")
     
     return {"status": "chunk_received", "chunk_index": chunk_index, "chunks_received": chunk_index + 1, "total_chunks": total_chunks}
 

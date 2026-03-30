@@ -99,7 +99,7 @@ const MatchDetail = () => {
     try {
       console.log(`Starting chunked upload for file: ${file.name} (${(file.size / (1024*1024*1024)).toFixed(2)}GB)`);
       
-      // Initialize chunked upload
+      // Initialize chunked upload (will resume if possible)
       const initResponse = await axios.post(
         `${API}/videos/upload/init`,
         {
@@ -111,13 +111,32 @@ const MatchDetail = () => {
         { headers: getAuthHeader(), timeout: 30000 }
       );
 
-      const { upload_id, video_id, chunk_size } = initResponse.data;
+      const { upload_id, video_id, chunk_size, resume, uploaded_chunks } = initResponse.data;
       const totalChunks = Math.ceil(file.size / chunk_size);
+      
+      // Create Set for fast lookup of already uploaded chunks
+      const uploadedSet = new Set(uploaded_chunks || []);
 
-      console.log(`Initialized upload: ${upload_id}, uploading ${totalChunks} chunks of ${(chunk_size/(1024*1024)).toFixed(1)}MB each`);
+      if (resume && uploaded_chunks && uploaded_chunks.length > 0) {
+        const resumePercent = Math.round((uploaded_chunks.length / totalChunks) * 100);
+        console.log(`🔄 RESUMING upload from chunk ${uploaded_chunks.length + 1}/${totalChunks} (${resumePercent}% complete)`);
+        alert(`Resuming previous upload from ${resumePercent}%. ${uploaded_chunks.length} of ${totalChunks} chunks already uploaded.`);
+      } else {
+        console.log(`📤 Starting NEW upload: ${upload_id}, ${totalChunks} chunks of ${(chunk_size/(1024*1024)).toFixed(1)}MB each`);
+      }
 
-      // Upload chunks
+      // Upload chunks (skip already uploaded ones)
+      let chunksUploaded = uploaded_chunks ? uploaded_chunks.length : 0;
+      
       for (let i = 0; i < totalChunks; i++) {
+        // Skip if chunk already uploaded
+        if (uploadedSet.has(i)) {
+          const progress = Math.round(((i + 1) / totalChunks) * 100);
+          setUploadProgress(progress);
+          console.log(`⏭️  Skipping chunk ${i + 1}/${totalChunks} (already uploaded)`);
+          continue;
+        }
+
         const start = i * chunk_size;
         const end = Math.min(start + chunk_size, file.size);
         const chunk = file.slice(start, end);
@@ -125,9 +144,9 @@ const MatchDetail = () => {
         const chunkFormData = new FormData();
         chunkFormData.append('file', chunk);
 
-        console.log(`Uploading chunk ${i + 1}/${totalChunks}...`);
+        console.log(`⬆️  Uploading chunk ${i + 1}/${totalChunks}...`);
         
-        await axios.post(
+        const chunkResponse = await axios.post(
           `${API}/videos/upload/chunk?upload_id=${upload_id}&chunk_index=${i}&total_chunks=${totalChunks}`,
           chunkFormData,
           {
@@ -136,13 +155,24 @@ const MatchDetail = () => {
           }
         );
 
-        const progress = Math.round(((i + 1) / totalChunks) * 100);
+        chunksUploaded++;
+        const progress = Math.round((chunksUploaded / totalChunks) * 100);
         setUploadProgress(progress);
-        console.log(`✓ Chunk ${i + 1}/${totalChunks} uploaded (${progress}%)`);
+        
+        if (chunkResponse.data.status === 'chunk_skipped') {
+          console.log(`⏭️  Chunk ${i + 1}/${totalChunks} was already uploaded (${progress}%)`);
+        } else {
+          console.log(`✓ Chunk ${i + 1}/${totalChunks} uploaded (${progress}%)`);
+        }
+        
+        // Check if upload completed
+        if (chunkResponse.data.status === 'completed') {
+          console.log('✅ All chunks uploaded and assembled successfully!');
+          break;
+        }
       }
 
-      console.log('All chunks uploaded successfully, navigating to video page...');
-      // Navigate to video page
+      console.log('Upload complete, navigating to video page...');
       navigate(`/video/${video_id}`);
     } catch (err) {
       console.error('Chunked upload failed:', err);
@@ -163,8 +193,13 @@ const MatchDetail = () => {
         } else {
           errorMessage += `Error ${status}`;
         }
+        
+        // For network errors during upload, suggest resume
+        if (status >= 500 || !status) {
+          errorMessage += '\n\nYou can try uploading again - the system will resume from where it stopped.';
+        }
       } else if (err.request) {
-        errorMessage += 'Network error. Please check your connection and try again.';
+        errorMessage += 'Network error. You can try again and it will resume from where it stopped.';
       } else {
         errorMessage += err.message || 'Unknown error occurred.';
       }
