@@ -97,6 +97,8 @@ const MatchDetail = () => {
     setUploading(true);
     
     try {
+      console.log(`Starting chunked upload for file: ${file.name} (${(file.size / (1024*1024*1024)).toFixed(2)}GB)`);
+      
       // Initialize chunked upload
       const initResponse = await axios.post(
         `${API}/videos/upload/init`,
@@ -106,13 +108,13 @@ const MatchDetail = () => {
           file_size: file.size,
           content_type: file.type || 'video/mp4'
         },
-        { headers: getAuthHeader() }
+        { headers: getAuthHeader(), timeout: 30000 }
       );
 
       const { upload_id, video_id, chunk_size } = initResponse.data;
       const totalChunks = Math.ceil(file.size / chunk_size);
 
-      console.log(`Uploading ${totalChunks} chunks of ${chunk_size} bytes each`);
+      console.log(`Initialized upload: ${upload_id}, uploading ${totalChunks} chunks of ${(chunk_size/(1024*1024)).toFixed(1)}MB each`);
 
       // Upload chunks
       for (let i = 0; i < totalChunks; i++) {
@@ -123,6 +125,8 @@ const MatchDetail = () => {
         const chunkFormData = new FormData();
         chunkFormData.append('file', chunk);
 
+        console.log(`Uploading chunk ${i + 1}/${totalChunks}...`);
+        
         await axios.post(
           `${API}/videos/upload/chunk?upload_id=${upload_id}&chunk_index=${i}&total_chunks=${totalChunks}`,
           chunkFormData,
@@ -134,17 +138,31 @@ const MatchDetail = () => {
 
         const progress = Math.round(((i + 1) / totalChunks) * 100);
         setUploadProgress(progress);
-        console.log(`Uploaded chunk ${i + 1}/${totalChunks} (${progress}%)`);
+        console.log(`✓ Chunk ${i + 1}/${totalChunks} uploaded (${progress}%)`);
       }
 
+      console.log('All chunks uploaded successfully, navigating to video page...');
       // Navigate to video page
       navigate(`/video/${video_id}`);
     } catch (err) {
       console.error('Chunked upload failed:', err);
+      console.error('Error details:', err.response?.data);
+      
       let errorMessage = 'Large file upload failed. ';
       
       if (err.response) {
-        errorMessage += err.response.data?.detail || `Error: ${err.response.status}`;
+        const detail = err.response.data?.detail;
+        const status = err.response.status;
+        
+        if (status === 404) {
+          errorMessage += 'Match not found. Please refresh the page and try again.';
+        } else if (status === 401) {
+          errorMessage += 'Session expired. Please log in again.';
+        } else if (detail) {
+          errorMessage += detail;
+        } else {
+          errorMessage += `Error ${status}`;
+        }
       } else if (err.request) {
         errorMessage += 'Network error. Please check your connection and try again.';
       } else {

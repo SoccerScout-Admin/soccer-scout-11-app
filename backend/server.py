@@ -264,6 +264,17 @@ async def health_check():
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
+@api_router.get("/debug/match/{match_id}")
+async def debug_match(match_id: str, current_user: dict = Depends(get_current_user)):
+    """Debug endpoint to check if match exists for user"""
+    match = await db.matches.find_one({"id": match_id, "user_id": current_user["id"]}, {"_id": 0})
+    return {
+        "match_exists": match is not None,
+        "match_id": match_id,
+        "user_id": current_user["id"],
+        "match": match
+    }
+
 @app.get("/health")
 async def root_health_check():
     return {
