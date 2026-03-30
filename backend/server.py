@@ -200,7 +200,7 @@ async def register(input: RegisterRequest):
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    hashed = bcrypt.hashpw(input.password.encode('utf-8'), bcrypt.gensalt())
+    hashed = bcrypt.hashpw(input.password.encode('utf-8'), bcrypt.gensalt(rounds=12))
     user_id = str(uuid.uuid4())
     user_doc = {
         "id": user_id,
@@ -212,15 +212,23 @@ async def register(input: RegisterRequest):
     }
     await db.users.insert_one(user_doc)
     token = create_token(user_id, input.email)
+    logger.info(f"New user registered: {input.email}")
     return AuthResponse(token=token, user={"id": user_id, "email": input.email, "name": input.name, "role": input.role})
 
 @api_router.post("/auth/login", response_model=AuthResponse)
 async def login(input: LoginRequest):
     user = await db.users.find_one({"email": input.email}, {"_id": 0})
     if not user:
+        logger.warning(f"Login attempt for non-existent user: {input.email}")
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
-    if not bcrypt.checkpw(input.password.encode('utf-8'), user["password"].encode('utf-8')):
+    try:
+        password_match = bcrypt.checkpw(input.password.encode('utf-8'), user["password"].encode('utf-8'))
+        if not password_match:
+            logger.warning(f"Invalid password attempt for user: {input.email}")
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+    except Exception as e:
+        logger.error(f"Bcrypt error during login for {input.email}: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
     token = create_token(user["id"], user["email"])
@@ -229,6 +237,29 @@ async def login(input: LoginRequest):
 @api_router.get("/auth/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
     return {"id": current_user["id"], "email": current_user["email"], "name": current_user["name"], "role": current_user["role"]}
+
+@api_router.get("/health")
+async def health_check():
+    try:
+        await db.command('ping')
+        db_status = "connected"
+    except Exception:
+        db_status = "disconnected"
+    
+    return {
+        "status": "healthy",
+        "service": "soccer-scout-api",
+        "database": db_status,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+@app.get("/health")
+async def root_health_check():
+    return {
+        "status": "healthy",
+        "service": "soccer-scout-api",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
 
 @api_router.post("/matches", response_model=Match)
 async def create_match(input: MatchCreate, current_user: dict = Depends(get_current_user)):
