@@ -282,34 +282,46 @@ async def get_match(match_id: str, current_user: dict = Depends(get_current_user
 @api_router.post("/videos/upload")
 async def upload_video(file: UploadFile = File(...), match_id: str = "", current_user: dict = Depends(get_current_user)):
     if not match_id:
+        logger.warning(f"Upload attempted without match_id by user {current_user['id']}")
         raise HTTPException(status_code=400, detail="match_id is required")
     
     match = await db.matches.find_one({"id": match_id, "user_id": current_user["id"]}, {"_id": 0})
     if not match:
+        logger.warning(f"Upload attempted for non-existent match {match_id} by user {current_user['id']}")
         raise HTTPException(status_code=404, detail="Match not found")
+    
+    logger.info(f"Starting video upload: {file.filename} ({file.content_type}) for match {match_id}")
     
     ext = file.filename.split(".")[-1] if "." in file.filename else "mp4"
     video_id = str(uuid.uuid4())
     path = f"{APP_NAME}/videos/{current_user['id']}/{video_id}.{ext}"
     
-    data = await file.read()
-    result = put_object(path, data, file.content_type or "video/mp4")
-    
-    video_doc = {
-        "id": video_id,
-        "match_id": match_id,
-        "user_id": current_user["id"],
-        "storage_path": result["path"],
-        "original_filename": file.filename,
-        "content_type": file.content_type or "video/mp4",
-        "size": result["size"],
-        "is_deleted": False,
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    await db.videos.insert_one(video_doc)
-    await db.matches.update_one({"id": match_id}, {"$set": {"video_id": video_id}})
-    
-    return {"video_id": video_id, "path": result["path"], "size": result["size"]}
+    try:
+        data = await file.read()
+        logger.info(f"Video file read successfully: {len(data)} bytes")
+        
+        result = put_object(path, data, file.content_type or "video/mp4")
+        logger.info(f"Video uploaded to storage: {result['path']}")
+        
+        video_doc = {
+            "id": video_id,
+            "match_id": match_id,
+            "user_id": current_user["id"],
+            "storage_path": result["path"],
+            "original_filename": file.filename,
+            "content_type": file.content_type or "video/mp4",
+            "size": result["size"],
+            "is_deleted": False,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.videos.insert_one(video_doc)
+        await db.matches.update_one({"id": match_id}, {"$set": {"video_id": video_id}})
+        
+        logger.info(f"Video upload complete: {video_id}")
+        return {"video_id": video_id, "path": result["path"], "size": result["size"]}
+    except Exception as e:
+        logger.error(f"Video upload failed for match {match_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @api_router.get("/videos/{video_id}")
 async def get_video(video_id: str, current_user: dict = Depends(get_current_user)):

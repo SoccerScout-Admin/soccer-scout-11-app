@@ -28,6 +28,21 @@ const MatchDetail = () => {
     const file = e.target.files[0];
     if (!file) return;
 
+    // Validate file
+    if (!file.type.startsWith('video/')) {
+      alert('Please select a valid video file');
+      return;
+    }
+
+    // Check file size (warn if > 500MB)
+    const maxSize = 500 * 1024 * 1024; // 500MB
+    if (file.size > maxSize) {
+      const confirmUpload = window.confirm(
+        `This video is ${Math.round(file.size / (1024 * 1024))}MB. Large files may take a while to upload. Continue?`
+      );
+      if (!confirmUpload) return;
+    }
+
     setUploading(true);
     const formData = new FormData();
     formData.append('file', file);
@@ -38,19 +53,29 @@ const MatchDetail = () => {
         formData,
         {
           headers: {
-            ...getAuthHeader(),
-            'Content-Type': 'multipart/form-data'
+            ...getAuthHeader()
           },
           onUploadProgress: (progressEvent) => {
             const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
             setUploadProgress(progress);
-          }
+          },
+          timeout: 300000
         }
       );
       navigate(`/video/${response.data.video_id}`);
     } catch (err) {
       console.error('Upload failed:', err);
-      alert('Video upload failed. Please try again.');
+      let errorMessage = 'Video upload failed. ';
+      
+      if (err.response) {
+        errorMessage += err.response.data?.detail || `Error: ${err.response.status}`;
+      } else if (err.request) {
+        errorMessage += 'Network error. Please check your connection.';
+      } else {
+        errorMessage += err.message || 'Unknown error occurred.';
+      }
+      
+      alert(errorMessage);
     } finally {
       setUploading(false);
       setUploadProgress(0);
