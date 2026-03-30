@@ -376,7 +376,7 @@ async def init_chunked_upload(input: ChunkedUploadInit, current_user: dict = Dep
     if existing_upload:
         # Check if temp directory actually exists
         upload_id = existing_upload["upload_id"]
-        temp_dir = f"/app/uploads/{upload_id}"
+        temp_dir = f"/tmp/video_uploads/{upload_id}"
         
         if os.path.exists(temp_dir):
             # Valid resume - temp files exist
@@ -438,7 +438,7 @@ async def get_upload_status(upload_id: str, current_user: dict = Depends(get_cur
     
     # Get list of uploaded chunks
     uploaded_chunks = []
-    temp_dir = f"/app/uploads/{upload_id}"
+    temp_dir = f"/tmp/video_uploads/{upload_id}"
     if os.path.exists(temp_dir):
         chunk_files = [f for f in os.listdir(temp_dir) if f.startswith('chunk_')]
         uploaded_chunks = [int(f.split('_')[1].split('.')[0]) for f in chunk_files]
@@ -469,8 +469,8 @@ async def upload_chunk(
     if not upload:
         raise HTTPException(status_code=404, detail="Upload session not found")
     
-    # Setup temp directory (use persistent location)
-    temp_dir = f"/app/uploads/{upload_id}"
+    # Setup temp directory (use /tmp which has more space)
+    temp_dir = f"/tmp/video_uploads/{upload_id}"
     os.makedirs(temp_dir, exist_ok=True)
     chunk_file_path = f"{temp_dir}/chunk_{chunk_index:06d}.bin"
     
