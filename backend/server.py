@@ -392,61 +392,84 @@ async def upload_chunk(
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
 ):
-    """Upload a single chunk of a large video file"""
+    """Upload a single chunk of a large video file - stores to temp file instead of DB"""
     upload = await db.chunked_uploads.find_one({"upload_id": upload_id, "user_id": current_user["id"]}, {"_id": 0})
     if not upload:
         raise HTTPException(status_code=404, detail="Upload session not found")
     
-    # Read and store chunk
+    # Read chunk data
     chunk_data = await file.read()
-    chunk_doc = {
-        "upload_id": upload_id,
-        "chunk_index": chunk_index,
-        "data": chunk_data,
-        "size": len(chunk_data),
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    await db.upload_chunks.insert_one(chunk_doc)
     
-    # Update progress
+    # Store chunk to temporary file instead of database
+    temp_dir = f"/tmp/uploads/{upload_id}"
+    os.makedirs(temp_dir, exist_ok=True)
+    chunk_file_path = f"{temp_dir}/chunk_{chunk_index:06d}.bin"
+    
+    with open(chunk_file_path, 'wb') as f:
+        f.write(chunk_data)
+    
+    # Update progress (just count, don't store data in DB)
     await db.chunked_uploads.update_one(
         {"upload_id": upload_id},
-        {"$inc": {"chunks_received": 1}}
+        {
+            "$inc": {"chunks_received": 1},
+            "$set": {f"chunks.{chunk_index}": {"size": len(chunk_data), "path": chunk_file_path}}
+        }
     )
     
-    logger.info(f"Received chunk {chunk_index+1}/{total_chunks} for upload {upload_id}, size: {len(chunk_data)} bytes")
+    logger.info(f"Chunk {chunk_index+1}/{total_chunks} saved to temp file for upload {upload_id}, size: {len(chunk_data)} bytes")
     
     # If all chunks received, assemble and upload to storage
     if chunk_index + 1 == total_chunks:
-        logger.info(f"All chunks received for {upload_id}, assembling file...")
-        return await finalize_chunked_upload(upload_id, current_user)
+        logger.info(f"All chunks received for {upload_id}, starting assembly and upload...")
+        return await finalize_chunked_upload(upload_id, current_user, temp_dir)
     
     return {"status": "chunk_received", "chunk_index": chunk_index, "chunks_received": chunk_index + 1, "total_chunks": total_chunks}
 
-async def finalize_chunked_upload(upload_id: str, current_user: dict):
-    """Assemble all chunks and upload to storage"""
+async def finalize_chunked_upload(upload_id: str, current_user: dict, temp_dir: str):
+    """Assemble chunks from temp files and upload to storage"""
     upload = await db.chunked_uploads.find_one({"upload_id": upload_id}, {"_id": 0})
     if not upload:
         raise HTTPException(status_code=404, detail="Upload session not found")
     
     try:
-        # Get all chunks in order
-        chunks = await db.upload_chunks.find({"upload_id": upload_id}, {"_id": 0}).sort("chunk_index", 1).to_list(10000)
+        logger.info(f"Assembling file from temp directory: {temp_dir}")
         
-        logger.info(f"Assembling {len(chunks)} chunks for upload {upload_id}")
-        file_data = bytearray()
-        for chunk in chunks:
-            file_data.extend(chunk["data"])
+        # Get all chunk files sorted by index
+        chunk_files = sorted([f for f in os.listdir(temp_dir) if f.startswith('chunk_')])
+        total_chunks = len(chunk_files)
         
-        total_size = len(file_data)
-        logger.info(f"File assembled: {total_size} bytes ({total_size/(1024*1024*1024):.2f}GB)")
+        logger.info(f"Found {total_chunks} chunk files to assemble")
         
-        # Upload to storage
+        # Create a temporary file for the assembled video
+        assembled_file_path = f"{temp_dir}/assembled_video.tmp"
+        total_size = 0
+        
+        # Assemble chunks into single file
+        with open(assembled_file_path, 'wb') as outfile:
+            for i, chunk_file in enumerate(chunk_files):
+                chunk_path = os.path.join(temp_dir, chunk_file)
+                with open(chunk_path, 'rb') as infile:
+                    chunk_data = infile.read()
+                    outfile.write(chunk_data)
+                    total_size += len(chunk_data)
+                
+                if (i + 1) % 100 == 0:
+                    logger.info(f"Assembled {i+1}/{total_chunks} chunks ({total_size/(1024*1024*1024):.2f}GB)")
+        
+        logger.info(f"File fully assembled: {total_size} bytes ({total_size/(1024*1024*1024):.2f}GB)")
+        
+        # Upload assembled file to storage
         ext = upload["filename"].split(".")[-1] if "." in upload["filename"] else "mp4"
-        path = f"{APP_NAME}/videos/{upload['user_id']}/{upload['video_id']}.{ext}"
+        storage_path = f"{APP_NAME}/videos/{upload['user_id']}/{upload['video_id']}.{ext}"
         
-        logger.info(f"Uploading assembled file to storage: {path}")
-        result = put_object(path, bytes(file_data), upload["content_type"])
+        logger.info(f"Uploading assembled file to storage: {storage_path}")
+        
+        # Read assembled file and upload
+        with open(assembled_file_path, 'rb') as f:
+            file_data = f.read()
+        
+        result = put_object(storage_path, file_data, upload["content_type"])
         logger.info(f"Upload to storage complete: {result['path']}")
         
         # Save video metadata
@@ -470,14 +493,19 @@ async def finalize_chunked_upload(upload_id: str, current_user: dict):
             {"$set": {"status": "completed", "completed_at": datetime.now(timezone.utc).isoformat()}}
         )
         
-        # Clean up chunks from database
-        await db.upload_chunks.delete_many({"upload_id": upload_id})
+        # Clean up temporary files
+        logger.info(f"Cleaning up temporary files: {temp_dir}")
+        shutil.rmtree(temp_dir, ignore_errors=True)
         
         logger.info(f"Chunked upload finalized: {upload['video_id']}")
         return {"status": "completed", "video_id": upload["video_id"], "path": result["path"], "size": result["size"]}
     
     except Exception as e:
         logger.error(f"Failed to finalize chunked upload {upload_id}: {str(e)}")
+        # Clean up on error
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        
         await db.chunked_uploads.update_one(
             {"upload_id": upload_id},
             {"$set": {"status": "failed", "error": str(e)}}
