@@ -146,6 +146,27 @@ class AnnotationCreate(BaseModel):
     content: str
     position: Optional[dict] = None
 
+class Clip(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    video_id: str
+    match_id: str
+    user_id: str
+    title: str
+    start_time: float
+    end_time: float
+    clip_type: str = "highlight"
+    description: str = ""
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class ClipCreate(BaseModel):
+    video_id: str
+    title: str
+    start_time: float
+    end_time: float
+    clip_type: str = "highlight"
+    description: str = ""
+
 def create_token(user_id: str, email: str) -> str:
     payload = {
         "user_id": user_id,
@@ -357,6 +378,73 @@ async def delete_annotation(annotation_id: str, current_user: dict = Depends(get
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Annotation not found")
     return {"message": "Annotation deleted"}
+
+@api_router.post("/clips", response_model=Clip)
+async def create_clip(input: ClipCreate, current_user: dict = Depends(get_current_user)):
+    video = await db.videos.find_one({"id": input.video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    clip_obj = Clip(
+        user_id=current_user["id"],
+        match_id=video["match_id"],
+        **input.model_dump()
+    )
+    await db.clips.insert_one(clip_obj.model_dump())
+    return clip_obj
+
+@api_router.get("/clips/video/{video_id}", response_model=List[Clip])
+async def get_clips(video_id: str, current_user: dict = Depends(get_current_user)):
+    clips = await db.clips.find({"video_id": video_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(1000)
+    return clips
+
+@api_router.delete("/clips/{clip_id}")
+async def delete_clip(clip_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.clips.delete_one({"id": clip_id, "user_id": current_user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    return {"message": "Clip deleted"}
+
+@api_router.get("/highlights/video/{video_id}")
+async def get_highlights_package(video_id: str, current_user: dict = Depends(get_current_user)):
+    video = await db.videos.find_one({"id": video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    match = await db.matches.find_one({"id": video["match_id"]}, {"_id": 0})
+    clips = await db.clips.find({"video_id": video_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(1000)
+    analyses = await db.analyses.find({"video_id": video_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(100)
+    
+    package = {
+        "match": match,
+        "video": {
+            "id": video["id"],
+            "filename": video["original_filename"],
+            "size": video["size"]
+        },
+        "clips": clips,
+        "analyses": analyses,
+        "generated_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    return package
+
+@api_router.get("/clips/{clip_id}/download")
+async def download_clip_info(clip_id: str, current_user: dict = Depends(get_current_user)):
+    clip = await db.clips.find_one({"id": clip_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    
+    video = await db.videos.find_one({"id": clip["video_id"]}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    return {
+        "clip": clip,
+        "video_url": f"/api/videos/{video['id']}",
+        "download_instructions": "Use the start_time and end_time to extract the clip from the video"
+    }
+
 
 app.include_router(api_router)
 
