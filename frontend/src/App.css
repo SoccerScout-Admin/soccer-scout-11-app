@@ -1,34 +1,92 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+.match-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1.5rem;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
+.video-container {
+    position: relative;
+    width: 100%;
+    background: #141414;
+    border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.App-header {
-    background-color: #0f0f10;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+video {
+    width: 100%;
+    height: auto;
+    display: block;
 }
 
-.App-link {
-    color: #61dafb;
+.annotation-toolbar {
+    background: #141414;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 1rem;
 }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+.annotation-marker {
+    position: absolute;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #007AFF;
+    border: 2px solid #fff;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.annotation-marker:hover {
+    transform: scale(1.2);
+}
+
+.stat-card {
+    background: #141414;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 1.5rem;
+}
+
+.stat-card:hover {
+    background: #1F1F1F;
+}
+
+.btn-primary {
+    background: #007AFF;
+    color: #fff;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.btn-primary:hover {
+    background: #005bb5;
+}
+
+.btn-secondary {
+    background: transparent;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.75rem 1.5rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.btn-secondary:hover {
+    background: #1F1F1F;
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.input-field {
+    background: #141414;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #fff;
+    padding: 0.75rem;
+    width: 100%;
+    outline: none;
+}
+
+.input-field:focus {
+    border-color: #007AFF;
+    outline: 2px solid rgba(0, 122, 255, 0.2);
 }
