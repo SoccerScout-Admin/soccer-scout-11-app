@@ -1,0 +1,82 @@
+{
+  "theme": "dark",
+  "archetype": "2 (Performance Pro)",
+  "design_philosophy": "Tactical Minimalism. Command-center focus for elite athleticism. High-visibility data layered over deep obsidian black. No soft gradients, only sharp contrast.",
+  "colors": {
+    "background": "#0A0A0A",
+    "surface": "#141414",
+    "surface_hover": "#1F1F1F",
+    "border": "rgba(255, 255, 255, 0.1)",
+    "primary": "#007AFF",
+    "primary_hover": "#005bb5",
+    "accent_positive": "#39FF14",
+    "accent_negative": "#FF3B30",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#A3A3A3"
+  },
+  "typography": {
+    "heading_font": "Bebas Neue",
+    "body_font": "Manrope",
+    "rules": {
+      "h1": "text-5xl tracking-tighter uppercase leading-none font-bold",
+      "h2": "text-3xl tracking-tight uppercase leading-none font-bold",
+      "h3": "text-xl tracking-tight uppercase leading-none font-bold",
+      "body": "text-base tracking-wide leading-relaxed",
+      "overline": "text-xs tracking-[0.2em] uppercase font-bold text-[#A3A3A3]"
+    }
+  },
+  "layout_and_spacing": {
+    "grid_system": "Control Room Grid. Dense grid-cols-1 md:grid-cols-3 lg:grid-cols-4 with gap-4 or gap-6. Every pixel utilized.",
+    "spacing_scale": "p-4, p-6 inside dashboard widgets. Generous padding for section containers.",
+    "alignment": "Left-align dense content and data metrics. Center-align only major layout structural elements if symmetrical."
+  },
+  "surface_styles": {
+    "cards": "Flat solid background (#141414), 1px solid border (border-white/10). No box-shadow. Sharp corners (rounded-none or max rounded-sm).",
+    "headers": "Solid background (#0A0A0A) with hard bottom border. No glassmorphism. Fixed/sticky z-50.",
+    "buttons": "High-saturation primary color blocks. No rounded corners. Explicit hover states."
+  },
+  "components": {
+    "charts": "Use Recharts. Line and Bar charts should use #007AFF and #39FF14. Remove grid lines or make them extremely faint (opacity 0.05).",
+    "tables": "Dense rows. Bottom border on rows (border-white/10). Hover effect on rows bg-white/5. Left-aligned data.",
+    "video_player": "Takes up major grid space (col-span-full md:col-span-2 lg:col-span-3). Custom control bar with solid backgrounds.",
+    "annotation_toolbar": "Floating or docked toolbar with sharp edges, neon active states when a tool (pen/arrow/note) is selected."
+  },
+  "interactions": {
+    "hover": "Explicit text and bg color changes. E.g. hover:bg-[#1F1F1F] hover:text-white.",
+    "focus": "focus:ring-2 focus:ring-[#007AFF] focus:outline-none.",
+    "testing": "All interactive elements MUST have a data-testid attribute in kebab-case (e.g. data-testid=\"upload-video-btn\", data-testid=\"player-stat-card\")."
+  },
+  "media": [
+    {
+      "category": "background",
+      "url": "https://images.unsplash.com/photo-1765130729366-b54d7b2c8ea2?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwyfHxzb2NjZXIlMjBtYXRjaCUyMHN0YWRpdW0lMjBuaWdodHxlbnwwfHx8fDE3NzQ4NDk4MTR8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Empty soccer stadium at dusk with lights on. Use for login/onboarding background with heavy dark overlay (bg-black/80)."
+    },
+    {
+      "category": "player_portrait",
+      "url": "https://images.unsplash.com/photo-1671680134709-4978c22fb916?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzB8MHwxfHNlYXJjaHw0fHxzb2NjZXIlMjBwbGF5ZXIlMjBwb3J0cmFpdCUyMGRhcmt8ZW58MHx8fHwxNzc0ODQ5ODE1fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Player portrait for analytics dashboard and roster views."
+    },
+    {
+      "category": "data_visualization",
+      "url": "https://images.unsplash.com/photo-1762279389006-43963a0cee55?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHwyfHxkYXRhJTIwdmlzdWFsaXphdGlvbiUyMG5ldHdvcmslMjBkYXJrfGVufDB8fHx8MTc3NDg0OTgyNHww&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract neon lines for tactical formation background or AI processing state overlay."
+    },
+    {
+      "category": "team_logo",
+      "url": "https://images.unsplash.com/photo-1764116679127-dc9d2c1138a7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwzfHxzcG9ydHMlMjB0ZWFtJTIwbG9nb3xlbnwwfHx8fDE3NzQ4MDUyNzB8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Team crest / logo for header and match library cards."
+    }
+  ],
+  "icons_library": "@phosphor-icons/react",
+  "instructions_to_main_agent": [
+    "Run: yarn add @phosphor-icons/react recharts",
+    "All files must be .js or .jsx.",
+    "Implement the 'Control Room' grid for the dashboard. It must be dense.",
+    "Ensure the layout is highly contrasted. Backgrounds are deep obsidian (#0A0A0A), surfaces are dark charcoal (#141414).",
+    "Use Bebas Neue for all H1, H2, H3 elements and keep them uppercase and tightly tracked.",
+    "Do NOT use 'Card' components from Shadcn if they have soft shadows or large border radii. Customize Shadcn to have rounded-none or rounded-sm, 1px solid border-white/10, and no shadows.",
+    "For the manual annotation tools, create a dedicated tool palette UI with high-contrast active states.",
+    "Add 'data-testid' to every button, link, form input, and interactive widget."
+  ]
+}
