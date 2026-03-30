@@ -374,29 +374,38 @@ async def init_chunked_upload(input: ChunkedUploadInit, current_user: dict = Dep
     }, {"_id": 0})
     
     if existing_upload:
-        # Resume existing upload
+        # Check if temp directory actually exists
         upload_id = existing_upload["upload_id"]
-        video_id = existing_upload["video_id"]
-        chunks_received = existing_upload.get("chunks_received", 0)
-        chunk_size = 10485760  # 10MB
-        
-        # Get list of already uploaded chunks
-        uploaded_chunks = []
         temp_dir = f"/app/uploads/{upload_id}"
+        
         if os.path.exists(temp_dir):
+            # Valid resume - temp files exist
+            video_id = existing_upload["video_id"]
+            chunks_received = existing_upload.get("chunks_received", 0)
+            chunk_size = 10485760  # 10MB
+            
+            # Get list of already uploaded chunks
+            uploaded_chunks = []
             chunk_files = [f for f in os.listdir(temp_dir) if f.startswith('chunk_')]
             uploaded_chunks = [int(f.split('_')[1].split('.')[0]) for f in chunk_files]
             uploaded_chunks.sort()
-        
-        logger.info(f"Resuming upload: {upload_id} for video {video_id}, {chunks_received} chunks already received")
-        return {
-            "upload_id": upload_id,
-            "video_id": video_id,
-            "chunk_size": chunk_size,
-            "resume": True,
-            "chunks_received": chunks_received,
-            "uploaded_chunks": uploaded_chunks
-        }
+            
+            logger.info(f"Resuming upload: {upload_id} for video {video_id}, {len(uploaded_chunks)} chunks found on disk")
+            return {
+                "upload_id": upload_id,
+                "video_id": video_id,
+                "chunk_size": chunk_size,
+                "resume": True,
+                "chunks_received": len(uploaded_chunks),
+                "uploaded_chunks": uploaded_chunks
+            }
+        else:
+            # Temp files missing - mark as failed and create new session
+            logger.warning(f"Upload {upload_id} has no temp files, marking as failed")
+            await db.chunked_uploads.update_one(
+                {"upload_id": upload_id},
+                {"$set": {"status": "failed", "error": "Temp files not found"}}
+            )
     
     # Create new upload session
     upload_id = str(uuid.uuid4())
