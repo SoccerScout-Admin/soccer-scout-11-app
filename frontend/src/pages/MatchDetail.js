@@ -34,15 +34,26 @@ const MatchDetail = () => {
       return;
     }
 
-    // Check file size (warn if > 500MB)
-    const maxSize = 500 * 1024 * 1024; // 500MB
-    if (file.size > maxSize) {
-      const confirmUpload = window.confirm(
-        `This video is ${Math.round(file.size / (1024 * 1024))}MB. Large files may take a while to upload. Continue?`
-      );
-      if (!confirmUpload) return;
-    }
+    const fileSizeMB = file.size / (1024 * 1024);
+    const fileSizeGB = file.size / (1024 * 1024 * 1024);
 
+    // For files > 1GB, use chunked upload
+    if (file.size > 1024 * 1024 * 1024) {
+      alert(`Uploading large file (${fileSizeGB.toFixed(2)}GB). This may take several minutes. Please don't close this window.`);
+      await handleChunkedUpload(file);
+    } else {
+      // Standard upload for files < 1GB
+      if (fileSizeMB > 500) {
+        const confirmUpload = window.confirm(
+          `This video is ${Math.round(fileSizeMB)}MB. Continue upload?`
+        );
+        if (!confirmUpload) return;
+      }
+      await handleStandardUpload(file);
+    }
+  };
+
+  const handleStandardUpload = async (file) => {
     setUploading(true);
     const formData = new FormData();
     formData.append('file', file);
@@ -59,7 +70,7 @@ const MatchDetail = () => {
             const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
             setUploadProgress(progress);
           },
-          timeout: 300000
+          timeout: 600000
         }
       );
       navigate(`/video/${response.data.video_id}`);
@@ -71,6 +82,71 @@ const MatchDetail = () => {
         errorMessage += err.response.data?.detail || `Error: ${err.response.status}`;
       } else if (err.request) {
         errorMessage += 'Network error. Please check your connection.';
+      } else {
+        errorMessage += err.message || 'Unknown error occurred.';
+      }
+      
+      alert(errorMessage);
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+    }
+  };
+
+  const handleChunkedUpload = async (file) => {
+    setUploading(true);
+    
+    try {
+      // Initialize chunked upload
+      const initResponse = await axios.post(
+        `${API}/videos/upload/init`,
+        {
+          match_id: matchId,
+          filename: file.name,
+          file_size: file.size,
+          content_type: file.type || 'video/mp4'
+        },
+        { headers: getAuthHeader() }
+      );
+
+      const { upload_id, video_id, chunk_size } = initResponse.data;
+      const totalChunks = Math.ceil(file.size / chunk_size);
+
+      console.log(`Uploading ${totalChunks} chunks of ${chunk_size} bytes each`);
+
+      // Upload chunks
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * chunk_size;
+        const end = Math.min(start + chunk_size, file.size);
+        const chunk = file.slice(start, end);
+
+        const chunkFormData = new FormData();
+        chunkFormData.append('file', chunk);
+
+        await axios.post(
+          `${API}/videos/upload/chunk?upload_id=${upload_id}&chunk_index=${i}&total_chunks=${totalChunks}`,
+          chunkFormData,
+          {
+            headers: getAuthHeader(),
+            timeout: 120000
+          }
+        );
+
+        const progress = Math.round(((i + 1) / totalChunks) * 100);
+        setUploadProgress(progress);
+        console.log(`Uploaded chunk ${i + 1}/${totalChunks} (${progress}%)`);
+      }
+
+      // Navigate to video page
+      navigate(`/video/${video_id}`);
+    } catch (err) {
+      console.error('Chunked upload failed:', err);
+      let errorMessage = 'Large file upload failed. ';
+      
+      if (err.response) {
+        errorMessage += err.response.data?.detail || `Error: ${err.response.status}`;
+      } else if (err.request) {
+        errorMessage += 'Network error. Please check your connection and try again.';
       } else {
         errorMessage += err.message || 'Unknown error occurred.';
       }

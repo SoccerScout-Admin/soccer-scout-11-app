@@ -167,6 +167,17 @@ class ClipCreate(BaseModel):
     clip_type: str = "highlight"
     description: str = ""
 
+class ChunkedUploadInit(BaseModel):
+    match_id: str
+    filename: str
+    file_size: int
+    content_type: str = "video/mp4"
+
+class ChunkedUploadChunk(BaseModel):
+    upload_id: str
+    chunk_index: int
+    total_chunks: int
+
 def create_token(user_id: str, email: str) -> str:
     payload = {
         "user_id": user_id,
@@ -297,11 +308,23 @@ async def upload_video(file: UploadFile = File(...), match_id: str = "", current
     path = f"{APP_NAME}/videos/{current_user['id']}/{video_id}.{ext}"
     
     try:
-        data = await file.read()
-        logger.info(f"Video file read successfully: {len(data)} bytes")
+        # Stream file in chunks to avoid memory issues with large files
+        chunk_size = 5 * 1024 * 1024  # 5MB chunks
+        file_data = bytearray()
         
-        result = put_object(path, data, file.content_type or "video/mp4")
-        logger.info(f"Video uploaded to storage: {result['path']}")
+        logger.info(f"Reading file in chunks (chunk_size: {chunk_size} bytes)")
+        while chunk := await file.read(chunk_size):
+            file_data.extend(chunk)
+            if len(file_data) % (50 * 1024 * 1024) == 0:  # Log every 50MB
+                logger.info(f"Progress: {len(file_data) / (1024*1024):.1f}MB read")
+        
+        total_size = len(file_data)
+        logger.info(f"Video file read successfully: {total_size} bytes ({total_size/(1024*1024):.1f}MB)")
+        
+        # Upload to storage with timeout handling
+        logger.info(f"Uploading {total_size/(1024*1024):.1f}MB to object storage...")
+        result = put_object(path, bytes(file_data), file.content_type or "video/mp4")
+        logger.info(f"Video uploaded to storage: {result['path']}, size: {result['size']}")
         
         video_doc = {
             "id": video_id,
@@ -317,11 +340,138 @@ async def upload_video(file: UploadFile = File(...), match_id: str = "", current
         await db.videos.insert_one(video_doc)
         await db.matches.update_one({"id": match_id}, {"$set": {"video_id": video_id}})
         
-        logger.info(f"Video upload complete: {video_id}")
+        logger.info(f"Video upload complete: {video_id} ({result['size']} bytes)")
         return {"video_id": video_id, "path": result["path"], "size": result["size"]}
     except Exception as e:
         logger.error(f"Video upload failed for match {match_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+@api_router.post("/videos/upload/init")
+async def init_chunked_upload(input: ChunkedUploadInit, current_user: dict = Depends(get_current_user)):
+    """Initialize a chunked upload for large files (10GB+)"""
+    match = await db.matches.find_one({"id": input.match_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    
+    upload_id = str(uuid.uuid4())
+    video_id = str(uuid.uuid4())
+    
+    upload_doc = {
+        "upload_id": upload_id,
+        "video_id": video_id,
+        "match_id": input.match_id,
+        "user_id": current_user["id"],
+        "filename": input.filename,
+        "file_size": input.file_size,
+        "content_type": input.content_type,
+        "chunks_received": 0,
+        "status": "initialized",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.chunked_uploads.insert_one(upload_doc)
+    
+    logger.info(f"Initialized chunked upload: {upload_id} for video {video_id}, size: {input.file_size} bytes")
+    return {"upload_id": upload_id, "video_id": video_id, "chunk_size": 10485760}  # 10MB chunks
+
+@api_router.post("/videos/upload/chunk")
+async def upload_chunk(
+    upload_id: str = "",
+    chunk_index: int = 0,
+    total_chunks: int = 0,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Upload a single chunk of a large video file"""
+    upload = await db.chunked_uploads.find_one({"upload_id": upload_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    
+    # Read and store chunk
+    chunk_data = await file.read()
+    chunk_doc = {
+        "upload_id": upload_id,
+        "chunk_index": chunk_index,
+        "data": chunk_data,
+        "size": len(chunk_data),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.upload_chunks.insert_one(chunk_doc)
+    
+    # Update progress
+    await db.chunked_uploads.update_one(
+        {"upload_id": upload_id},
+        {"$inc": {"chunks_received": 1}}
+    )
+    
+    logger.info(f"Received chunk {chunk_index+1}/{total_chunks} for upload {upload_id}, size: {len(chunk_data)} bytes")
+    
+    # If all chunks received, assemble and upload to storage
+    if chunk_index + 1 == total_chunks:
+        logger.info(f"All chunks received for {upload_id}, assembling file...")
+        return await finalize_chunked_upload(upload_id, current_user)
+    
+    return {"status": "chunk_received", "chunk_index": chunk_index, "chunks_received": chunk_index + 1, "total_chunks": total_chunks}
+
+async def finalize_chunked_upload(upload_id: str, current_user: dict):
+    """Assemble all chunks and upload to storage"""
+    upload = await db.chunked_uploads.find_one({"upload_id": upload_id}, {"_id": 0})
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    
+    try:
+        # Get all chunks in order
+        chunks = await db.upload_chunks.find({"upload_id": upload_id}, {"_id": 0}).sort("chunk_index", 1).to_list(10000)
+        
+        logger.info(f"Assembling {len(chunks)} chunks for upload {upload_id}")
+        file_data = bytearray()
+        for chunk in chunks:
+            file_data.extend(chunk["data"])
+        
+        total_size = len(file_data)
+        logger.info(f"File assembled: {total_size} bytes ({total_size/(1024*1024*1024):.2f}GB)")
+        
+        # Upload to storage
+        ext = upload["filename"].split(".")[-1] if "." in upload["filename"] else "mp4"
+        path = f"{APP_NAME}/videos/{upload['user_id']}/{upload['video_id']}.{ext}"
+        
+        logger.info(f"Uploading assembled file to storage: {path}")
+        result = put_object(path, bytes(file_data), upload["content_type"])
+        logger.info(f"Upload to storage complete: {result['path']}")
+        
+        # Save video metadata
+        video_doc = {
+            "id": upload["video_id"],
+            "match_id": upload["match_id"],
+            "user_id": upload["user_id"],
+            "storage_path": result["path"],
+            "original_filename": upload["filename"],
+            "content_type": upload["content_type"],
+            "size": result["size"],
+            "is_deleted": False,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.videos.insert_one(video_doc)
+        await db.matches.update_one({"id": upload["match_id"]}, {"$set": {"video_id": upload["video_id"]}})
+        
+        # Update upload status
+        await db.chunked_uploads.update_one(
+            {"upload_id": upload_id},
+            {"$set": {"status": "completed", "completed_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        
+        # Clean up chunks from database
+        await db.upload_chunks.delete_many({"upload_id": upload_id})
+        
+        logger.info(f"Chunked upload finalized: {upload['video_id']}")
+        return {"status": "completed", "video_id": upload["video_id"], "path": result["path"], "size": result["size"]}
+    
+    except Exception as e:
+        logger.error(f"Failed to finalize chunked upload {upload_id}: {str(e)}")
+        await db.chunked_uploads.update_one(
+            {"upload_id": upload_id},
+            {"$set": {"status": "failed", "error": str(e)}}
+        )
+        raise HTTPException(status_code=500, detail=f"Upload finalization failed: {str(e)}")
 
 @api_router.get("/videos/{video_id}")
 async def get_video(video_id: str, current_user: dict = Depends(get_current_user)):
