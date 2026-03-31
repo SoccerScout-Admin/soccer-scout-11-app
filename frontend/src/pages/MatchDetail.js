@@ -93,13 +93,30 @@ const MatchDetail = () => {
     }
   };
 
+  const uploadChunkWithRetry = async (url, formData, maxRetries = 3) => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await axios.post(url, formData, {
+          headers: getAuthHeader(),
+          timeout: 300000, // 5 min per chunk
+        });
+        return response;
+      } catch (err) {
+        const isRetryable = !err.response || err.response.status >= 500 || err.code === 'ECONNABORTED';
+        if (attempt === maxRetries || !isRetryable) throw err;
+        const delay = Math.min(2000 * Math.pow(2, attempt - 1), 30000);
+        console.warn(`Chunk upload failed (attempt ${attempt}/${maxRetries}), retrying in ${delay/1000}s...`, err.message);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  };
+
   const handleChunkedUpload = async (file) => {
     setUploading(true);
     
     try {
-      console.log(`Starting chunked upload for file: ${file.name} (${(file.size / (1024*1024*1024)).toFixed(2)}GB)`);
+      console.log(`Starting chunked upload: ${file.name} (${(file.size / (1024*1024*1024)).toFixed(2)}GB)`);
       
-      // Initialize chunked upload (will resume if possible)
       const initResponse = await axios.post(
         `${API}/videos/upload/init`,
         {
@@ -113,27 +130,21 @@ const MatchDetail = () => {
 
       const { upload_id, video_id, chunk_size, resume, uploaded_chunks } = initResponse.data;
       const totalChunks = Math.ceil(file.size / chunk_size);
-      
-      // Create Set for fast lookup of already uploaded chunks
       const uploadedSet = new Set(uploaded_chunks || []);
 
       if (resume && uploaded_chunks && uploaded_chunks.length > 0) {
         const resumePercent = Math.round((uploaded_chunks.length / totalChunks) * 100);
-        console.log(`🔄 RESUMING upload from chunk ${uploaded_chunks.length + 1}/${totalChunks} (${resumePercent}% complete)`);
-        alert(`Resuming previous upload from ${resumePercent}%. ${uploaded_chunks.length} of ${totalChunks} chunks already uploaded.`);
+        console.log(`Resuming from ${resumePercent}% (${uploaded_chunks.length}/${totalChunks} chunks done)`);
       } else {
-        console.log(`📤 Starting NEW upload: ${upload_id}, ${totalChunks} chunks of ${(chunk_size/(1024*1024)).toFixed(1)}MB each`);
+        console.log(`New upload: ${upload_id}, ${totalChunks} chunks of ${(chunk_size/(1024*1024)).toFixed(1)}MB`);
       }
 
-      // Upload chunks (skip already uploaded ones)
       let chunksUploaded = uploaded_chunks ? uploaded_chunks.length : 0;
       
       for (let i = 0; i < totalChunks; i++) {
-        // Skip if chunk already uploaded
         if (uploadedSet.has(i)) {
           const progress = Math.round(((i + 1) / totalChunks) * 100);
           setUploadProgress(progress);
-          console.log(`⏭️  Skipping chunk ${i + 1}/${totalChunks} (already uploaded)`);
           continue;
         }
 
@@ -144,39 +155,28 @@ const MatchDetail = () => {
         const chunkFormData = new FormData();
         chunkFormData.append('file', chunk);
 
-        console.log(`⬆️  Uploading chunk ${i + 1}/${totalChunks}...`);
-        
-        const chunkResponse = await axios.post(
+        const chunkResponse = await uploadChunkWithRetry(
           `${API}/videos/upload/chunk?upload_id=${upload_id}&chunk_index=${i}&total_chunks=${totalChunks}`,
-          chunkFormData,
-          {
-            headers: getAuthHeader(),
-            timeout: 120000
-          }
+          chunkFormData
         );
 
         chunksUploaded++;
         const progress = Math.round((chunksUploaded / totalChunks) * 100);
         setUploadProgress(progress);
         
-        if (chunkResponse.data.status === 'chunk_skipped') {
-          console.log(`⏭️  Chunk ${i + 1}/${totalChunks} was already uploaded (${progress}%)`);
-        } else {
-          console.log(`✓ Chunk ${i + 1}/${totalChunks} uploaded (${progress}%)`);
+        if (i % 50 === 0 || i === totalChunks - 1) {
+          console.log(`Chunk ${i + 1}/${totalChunks} (${progress}%)`);
         }
-        
-        // Check if upload completed
+
         if (chunkResponse.data.status === 'completed') {
-          console.log('✅ All chunks uploaded and assembled successfully!');
+          console.log('Upload completed successfully!');
           break;
         }
       }
 
-      console.log('Upload complete, navigating to video page...');
       navigate(`/video/${video_id}`);
     } catch (err) {
       console.error('Chunked upload failed:', err);
-      console.error('Error details:', err.response?.data);
       
       let errorMessage = 'Large file upload failed. ';
       
@@ -185,7 +185,7 @@ const MatchDetail = () => {
         const status = err.response.status;
         
         if (status === 404) {
-          errorMessage += 'Match not found. Please refresh the page and try again.';
+          errorMessage += 'Match not found. Please refresh and try again.';
         } else if (status === 401) {
           errorMessage += 'Session expired. Please log in again.';
         } else if (detail) {
@@ -193,17 +193,13 @@ const MatchDetail = () => {
         } else {
           errorMessage += `Error ${status}`;
         }
-        
-        // For network errors during upload, suggest resume
-        if (status >= 500 || !status) {
-          errorMessage += '\n\nYou can try uploading again - the system will resume from where it stopped.';
-        }
       } else if (err.request) {
-        errorMessage += 'Network error. You can try again and it will resume from where it stopped.';
+        errorMessage += 'Network error.';
       } else {
-        errorMessage += err.message || 'Unknown error occurred.';
+        errorMessage += err.message || 'Unknown error.';
       }
       
+      errorMessage += '\n\nYou can try uploading again - the system will resume from where it stopped.';
       alert(errorMessage);
     } finally {
       setUploading(false);

@@ -238,7 +238,7 @@ const VideoAnalysis = () => {
                 data-testid="video-player"
                 controls
                 className="w-full"
-                src={`${API}/videos/${videoId}`}
+                src={`${API}/videos/${videoId}?token=${localStorage.getItem('token')}`}
                 onTimeUpdate={(e) => setCurrentTimestamp(e.target.currentTime)}
               />
             </div>
