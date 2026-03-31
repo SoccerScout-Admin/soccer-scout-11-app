@@ -20,6 +20,8 @@ from urllib3.util.retry import Retry
 from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
 import tempfile
 import asyncio
+import time
+from bson import Binary
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -46,10 +48,7 @@ logger = logging.getLogger(__name__)
 def create_storage_session():
     session = requests.Session()
     retry_strategy = Retry(
-        total=5,
-        backoff_factor=2,
-        status_forcelist=[500, 502, 503, 504],
-        allowed_methods=["GET", "PUT", "POST", "DELETE", "HEAD"],
+        total=0,  # No urllib3 retries - all retries at application level
     )
     adapter = HTTPAdapter(
         max_retries=retry_strategy,
@@ -87,13 +86,13 @@ def put_object_sync(path: str, data: bytes, content_type: str) -> dict:
     resp = storage_session.put(
         f"{STORAGE_URL}/objects/{path}",
         headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data, timeout=300
+        data=data, timeout=(3, 15)  # 3s connect, 15s read - fail fast for fallback
     )
     resp.raise_for_status()
     return resp.json()
 
-async def put_object_with_retry(path: str, data: bytes, content_type: str, max_retries: int = 5) -> dict:
-    """Upload to storage with application-level retry and session recreation on SSL errors"""
+async def put_object_with_retry(path: str, data: bytes, content_type: str, max_retries: int = 2) -> dict:
+    """Upload to storage with fast retry and session recreation on SSL errors"""
     global storage_session
     last_error = None
     for attempt in range(max_retries):
@@ -103,14 +102,13 @@ async def put_object_with_retry(path: str, data: bytes, content_type: str, max_r
         except Exception as e:
             last_error = e
             error_str = str(e)
-            is_ssl_or_conn = "SSL" in error_str or "Connection" in error_str or "EOF" in error_str
-            if attempt < max_retries - 1 and is_ssl_or_conn:
-                wait_time = min(2 ** (attempt + 1), 30)
+            is_retryable = "SSL" in error_str or "Connection" in error_str or "EOF" in error_str or "500" in error_str
+            if attempt < max_retries - 1 and is_retryable:
+                wait_time = 2
                 logger.warning(f"Storage upload failed (attempt {attempt+1}/{max_retries}), retrying in {wait_time}s: {error_str[:100]}")
-                # Recreate session to get fresh connections
                 storage_session = create_storage_session()
                 reset_storage()
-                init_storage()  # Re-auth with new session
+                init_storage()
                 await asyncio.sleep(wait_time)
             else:
                 raise
@@ -138,6 +136,80 @@ def put_object(path, data, content_type):
 
 def get_object(path):
     return get_object_sync(path)
+
+# ===== Circuit Breaker for Object Storage =====
+
+class StorageCircuitBreaker:
+    def __init__(self, failure_threshold=1, reset_timeout=120):
+        self.consecutive_failures = 0
+        self.failure_threshold = failure_threshold
+        self.last_failure_time = 0
+        self.reset_timeout = reset_timeout
+
+    @property
+    def is_open(self):
+        if self.consecutive_failures >= self.failure_threshold:
+            if time.time() - self.last_failure_time > self.reset_timeout:
+                self.consecutive_failures = 0
+                return False
+            return True
+        return False
+
+    def record_failure(self):
+        self.consecutive_failures += 1
+        self.last_failure_time = time.time()
+
+    def record_success(self):
+        self.consecutive_failures = 0
+
+storage_breaker = StorageCircuitBreaker()
+
+async def store_chunk(video_id: str, user_id: str, chunk_index: int, data: bytes) -> dict:
+    """Store chunk - tries Object Storage, falls back to MongoDB"""
+    chunk_path = f"{APP_NAME}/videos/{user_id}/{video_id}_chunk_{chunk_index:06d}.bin"
+
+    if not storage_breaker.is_open:
+        try:
+            result = await put_object_with_retry(chunk_path, data, "application/octet-stream", max_retries=2)
+            storage_breaker.record_success()
+            return {"backend": "storage", "path": chunk_path, "size": len(data)}
+        except Exception as e:
+            storage_breaker.record_failure()
+            logger.warning(f"Object Storage failed (breaker: {storage_breaker.consecutive_failures}), falling back to MongoDB: {str(e)[:80]}")
+    else:
+        logger.info(f"Circuit breaker OPEN - skipping Object Storage, using MongoDB directly")
+
+    # Fallback: store in MongoDB
+    await db.video_chunks.update_one(
+        {"video_id": video_id, "chunk_index": chunk_index},
+        {"$set": {
+            "video_id": video_id,
+            "chunk_index": chunk_index,
+            "data": Binary(data),
+            "size": len(data),
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }},
+        upsert=True
+    )
+    logger.info(f"Chunk {chunk_index} stored in MongoDB ({len(data)} bytes)")
+    return {"backend": "mongodb", "path": f"mongodb:{video_id}:{chunk_index}", "size": len(data)}
+
+async def read_chunk_data(video_id: str, chunk_index: int, chunk_info: dict) -> bytes:
+    """Read chunk from the appropriate backend"""
+    backend = chunk_info.get("backend", "storage")
+    path = chunk_info.get("path", "")
+
+    if backend == "mongodb":
+        doc = await db.video_chunks.find_one(
+            {"video_id": video_id, "chunk_index": chunk_index},
+            {"data": 1}
+        )
+        if doc and "data" in doc:
+            return bytes(doc["data"])
+        raise Exception(f"Chunk {chunk_index} not found in MongoDB")
+    else:
+        data, _ = await run_in_threadpool(get_object_sync, path)
+        return data
 
 # ===== Models =====
 
@@ -507,21 +579,21 @@ async def upload_chunk(
         chunk_size_bytes = len(chunk_data)
 
         video_id = upload["video_id"]
-        chunk_path = f"{APP_NAME}/videos/{upload['user_id']}/{video_id}_chunk_{chunk_index:06d}.bin"
 
-        logger.info(f"Uploading chunk {chunk_index+1}/{total_chunks} ({chunk_size_bytes} bytes) to storage...")
-        # Use put_object_with_retry for resilient upload with session recreation on SSL errors
-        result = await put_object_with_retry(chunk_path, chunk_data, "application/octet-stream")
+        logger.info(f"Storing chunk {chunk_index+1}/{total_chunks} ({chunk_size_bytes} bytes)...")
+        # Use store_chunk which tries Object Storage first, falls back to MongoDB
+        store_result = await store_chunk(video_id, upload["user_id"], chunk_index, chunk_data)
         # Free memory immediately
         del chunk_data
 
-        # Track chunk in database
+        # Track chunk in database with backend info
         await db.chunked_uploads.update_one(
             {"upload_id": upload_id},
             {
                 "$inc": {"chunks_received": 1},
                 "$set": {
-                    f"chunk_paths.{chunk_index}": chunk_path,
+                    f"chunk_paths.{chunk_index}": store_result["path"],
+                    f"chunk_backends.{chunk_index}": store_result["backend"],
                     f"chunk_sizes.{chunk_index}": chunk_size_bytes,
                     "status": "in_progress",
                     "last_chunk_at": datetime.now(timezone.utc).isoformat()
@@ -529,7 +601,7 @@ async def upload_chunk(
             }
         )
 
-        logger.info(f"Chunk {chunk_index+1}/{total_chunks} uploaded successfully")
+        logger.info(f"Chunk {chunk_index+1}/{total_chunks} stored ({store_result['backend']})")
 
         # If all chunks received, finalize
         if chunk_index + 1 >= total_chunks:
@@ -579,6 +651,7 @@ async def finalize_chunked_upload(upload_id: str, total_chunks: int, current_use
         "user_id": upload["user_id"],
         "storage_path": f"chunked:{upload_id}",
         "chunk_paths": chunk_paths,
+        "chunk_backends": upload.get("chunk_backends", {}),
         "chunk_sizes": chunk_sizes,
         "total_chunks": actual_chunks,
         "chunk_size": upload.get("chunk_size", CHUNK_SIZE),
@@ -656,23 +729,27 @@ async def serve_single_video(video: dict, range_header: str = None):
     })
 
 async def stream_chunked_video(video: dict, range_header: str = None):
-    """Stream a chunked video from object storage with Range support"""
+    """Stream a chunked video from object storage or MongoDB with Range support"""
     chunk_paths = video.get("chunk_paths", {})
+    chunk_backends = video.get("chunk_backends", {})
     chunk_sizes = video.get("chunk_sizes", {})
     total_chunks = video.get("total_chunks", len(chunk_paths))
     nominal_chunk_size = video.get("chunk_size", CHUNK_SIZE)
     total_size = video.get("size", 0)
     content_type = video.get("content_type", "video/mp4")
+    video_id = video.get("id", "")
 
     # Build a byte offset map for each chunk
-    chunk_offsets = []  # [(start_byte, end_byte, chunk_index, path)]
+    chunk_offsets = []  # [(start_byte, end_byte, chunk_index, chunk_info)]
     current_offset = 0
     for i in range(total_chunks):
         path = chunk_paths.get(str(i))
         if not path:
             continue
         csize = chunk_sizes.get(str(i), nominal_chunk_size)
-        chunk_offsets.append((current_offset, current_offset + csize - 1, i, path))
+        backend = chunk_backends.get(str(i), "storage")
+        chunk_info = {"backend": backend, "path": path}
+        chunk_offsets.append((current_offset, current_offset + csize - 1, i, chunk_info))
         current_offset += csize
 
     if total_size == 0:
@@ -688,17 +765,14 @@ async def stream_chunked_video(video: dict, range_header: str = None):
 
             async def generate_range():
                 bytes_sent = 0
-                for (chunk_start, chunk_end, chunk_idx, path) in chunk_offsets:
-                    # Skip chunks entirely before the range
+                for (chunk_start, chunk_end, chunk_idx, chunk_info) in chunk_offsets:
                     if chunk_end < start:
                         continue
-                    # Stop if we've passed the range
                     if chunk_start > end:
                         break
 
-                    data, _ = await run_in_threadpool(get_object_sync, path)
+                    data = await read_chunk_data(video_id, chunk_idx, chunk_info)
 
-                    # Calculate slice within this chunk
                     slice_start = max(0, start - chunk_start)
                     slice_end = min(len(data), end - chunk_start + 1)
                     chunk_slice = data[slice_start:slice_end]
@@ -725,7 +799,9 @@ async def stream_chunked_video(video: dict, range_header: str = None):
         for i in range(total_chunks):
             path = chunk_paths.get(str(i))
             if path:
-                data, _ = await run_in_threadpool(get_object_sync, path)
+                backend = chunk_backends.get(str(i), "storage")
+                chunk_info = {"backend": backend, "path": path}
+                data = await read_chunk_data(video_id, i, chunk_info)
                 yield data
                 del data
 
@@ -746,7 +822,7 @@ async def get_video_metadata(video_id: str, current_user: dict = Depends(get_cur
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     # Don't send chunk_paths in metadata (too large for large uploads)
-    result = {k: v for k, v in video.items() if k not in ("chunk_paths", "chunk_sizes")}
+    result = {k: v for k, v in video.items() if k not in ("chunk_paths", "chunk_sizes", "chunk_backends")}
     return result
 
 # ===== AI Analysis =====
@@ -929,6 +1005,12 @@ async def startup():
         logger.info("Storage initialized")
     except Exception as e:
         logger.error(f"Storage init failed: {e}")
+    # Create indexes for chunk storage
+    try:
+        await db.video_chunks.create_index([("video_id", 1), ("chunk_index", 1)], unique=True)
+        logger.info("MongoDB indexes created")
+    except Exception as e:
+        logger.error(f"Index creation failed: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
