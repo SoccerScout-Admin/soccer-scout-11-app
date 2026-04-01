@@ -10,6 +10,7 @@ const MatchDetail = () => {
   const [match, setMatch] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState('');
 
   useEffect(() => {
     fetchMatch();
@@ -113,10 +114,9 @@ const MatchDetail = () => {
 
   const handleChunkedUpload = async (file) => {
     setUploading(true);
+    setUploadStatus('Initializing upload...');
     
     try {
-      console.log(`Starting chunked upload: ${file.name} (${(file.size / (1024*1024*1024)).toFixed(2)}GB)`);
-      
       const initResponse = await axios.post(
         `${API}/videos/upload/init`,
         {
@@ -132,22 +132,26 @@ const MatchDetail = () => {
       const totalChunks = Math.ceil(file.size / chunk_size);
       const uploadedSet = new Set(uploaded_chunks || []);
 
-      if (resume && uploaded_chunks && uploaded_chunks.length > 0) {
-        const resumePercent = Math.round((uploaded_chunks.length / totalChunks) * 100);
-        console.log(`Resuming from ${resumePercent}% (${uploaded_chunks.length}/${totalChunks} chunks done)`);
-      } else {
-        console.log(`New upload: ${upload_id}, ${totalChunks} chunks of ${(chunk_size/(1024*1024)).toFixed(1)}MB`);
+      // Build list of only the chunks that still need uploading
+      const chunksToUpload = [];
+      for (let i = 0; i < totalChunks; i++) {
+        if (!uploadedSet.has(i)) chunksToUpload.push(i);
       }
 
-      let chunksUploaded = uploaded_chunks ? uploaded_chunks.length : 0;
-      
-      for (let i = 0; i < totalChunks; i++) {
-        if (uploadedSet.has(i)) {
-          const progress = Math.round(((i + 1) / totalChunks) * 100);
-          setUploadProgress(progress);
-          continue;
-        }
+      const alreadyDone = totalChunks - chunksToUpload.length;
+      let uploadedCount = alreadyDone;
 
+      if (resume && alreadyDone > 0) {
+        const resumePercent = Math.round((alreadyDone / totalChunks) * 100);
+        setUploadProgress(resumePercent);
+        setUploadStatus(`Resuming: ${alreadyDone}/${totalChunks} chunks already saved (${resumePercent}%) — ${chunksToUpload.length} remaining`);
+        console.log(`RESUMING from ${resumePercent}% — ${alreadyDone}/${totalChunks} done, ${chunksToUpload.length} remaining`);
+      } else {
+        setUploadProgress(0);
+        setUploadStatus(`Starting upload: ${totalChunks} chunks`);
+      }
+
+      for (const i of chunksToUpload) {
         const start = i * chunk_size;
         const end = Math.min(start + chunk_size, file.size);
         const chunk = file.slice(start, end);
@@ -160,16 +164,13 @@ const MatchDetail = () => {
           chunkFormData
         );
 
-        chunksUploaded++;
-        const progress = Math.round((chunksUploaded / totalChunks) * 100);
+        uploadedCount++;
+        const progress = Math.round((uploadedCount / totalChunks) * 100);
         setUploadProgress(progress);
-        
-        if (i % 50 === 0 || i === totalChunks - 1) {
-          console.log(`Chunk ${i + 1}/${totalChunks} (${progress}%)`);
-        }
+        setUploadStatus(`Uploading: ${uploadedCount}/${totalChunks} chunks (${progress}%)`);
 
         if (chunkResponse.data.status === 'completed') {
-          console.log('Upload completed successfully!');
+          setUploadStatus('Upload complete!');
           break;
         }
       }
@@ -178,32 +179,22 @@ const MatchDetail = () => {
     } catch (err) {
       console.error('Chunked upload failed:', err);
       
-      let errorMessage = 'Large file upload failed. ';
-      
+      let errorMessage = 'Upload interrupted. ';
       if (err.response) {
         const detail = err.response.data?.detail;
-        const status = err.response.status;
-        
-        if (status === 404) {
-          errorMessage += 'Match not found. Please refresh and try again.';
-        } else if (status === 401) {
-          errorMessage += 'Session expired. Please log in again.';
-        } else if (detail) {
-          errorMessage += detail;
-        } else {
-          errorMessage += `Error ${status}`;
-        }
+        if (detail) errorMessage += detail;
+        else errorMessage += `Error ${err.response.status}`;
       } else if (err.request) {
         errorMessage += 'Network error.';
       } else {
         errorMessage += err.message || 'Unknown error.';
       }
-      
-      errorMessage += '\n\nYou can try uploading again - the system will resume from where it stopped.';
+      errorMessage += '\n\nTry again — it will resume from where it stopped.';
       alert(errorMessage);
     } finally {
       setUploading(false);
       setUploadProgress(0);
+      setUploadStatus('');
     }
   };
 
@@ -250,10 +241,13 @@ const MatchDetail = () => {
               
               {uploading ? (
                 <div className="max-w-md mx-auto">
-                  <div className="bg-[#0A0A0A] h-2 mb-2">
-                    <div className="bg-[#007AFF] h-2 transition-all" style={{ width: `${uploadProgress}%` }}></div>
+                  <div className="bg-[#0A0A0A] h-3 mb-3 rounded-full overflow-hidden">
+                    <div className="bg-[#007AFF] h-3 rounded-full" style={{ width: `${uploadProgress}%`, transition: 'width 0.3s ease' }}></div>
                   </div>
-                  <p className="text-sm text-[#A3A3A3]">Uploading... {uploadProgress}%</p>
+                  <p className="text-sm text-white font-medium mb-1">{uploadProgress}%</p>
+                  {uploadStatus && (
+                    <p className="text-xs text-[#A3A3A3]" data-testid="upload-status-text">{uploadStatus}</p>
+                  )}
                 </div>
               ) : (
                 <label
