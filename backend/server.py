@@ -139,6 +139,9 @@ def get_object(path):
 
 # ===== Circuit Breaker for Object Storage =====
 
+CHUNK_STORAGE_DIR = "/var/video_chunks"
+os.makedirs(CHUNK_STORAGE_DIR, exist_ok=True)
+
 class StorageCircuitBreaker:
     def __init__(self, failure_threshold=1, reset_timeout=120):
         self.consecutive_failures = 0
@@ -165,7 +168,7 @@ class StorageCircuitBreaker:
 storage_breaker = StorageCircuitBreaker()
 
 async def store_chunk(video_id: str, user_id: str, chunk_index: int, data: bytes) -> dict:
-    """Store chunk - tries Object Storage, falls back to MongoDB"""
+    """Store chunk - tries Object Storage first, falls back to local filesystem (/var overlay, 84GB)"""
     chunk_path = f"{APP_NAME}/videos/{user_id}/{video_id}_chunk_{chunk_index:06d}.bin"
 
     if not storage_breaker.is_open:
@@ -175,31 +178,34 @@ async def store_chunk(video_id: str, user_id: str, chunk_index: int, data: bytes
             return {"backend": "storage", "path": chunk_path, "size": len(data)}
         except Exception as e:
             storage_breaker.record_failure()
-            logger.warning(f"Object Storage failed (breaker: {storage_breaker.consecutive_failures}), falling back to MongoDB: {str(e)[:80]}")
+            logger.warning(f"Object Storage failed (breaker: {storage_breaker.consecutive_failures}), falling back to filesystem: {str(e)[:80]}")
     else:
-        logger.info(f"Circuit breaker OPEN - skipping Object Storage, using MongoDB directly")
+        logger.info(f"Circuit breaker OPEN - using filesystem directly")
 
-    # Fallback: store in MongoDB
-    await db.video_chunks.update_one(
-        {"video_id": video_id, "chunk_index": chunk_index},
-        {"$set": {
-            "video_id": video_id,
-            "chunk_index": chunk_index,
-            "data": Binary(data),
-            "size": len(data),
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }},
-        upsert=True
-    )
-    logger.info(f"Chunk {chunk_index} stored in MongoDB ({len(data)} bytes)")
-    return {"backend": "mongodb", "path": f"mongodb:{video_id}:{chunk_index}", "size": len(data)}
+    # Fallback: store on local filesystem (/var is on 84GB overlay, NOT the 9.8GB /app partition)
+    video_dir = os.path.join(CHUNK_STORAGE_DIR, video_id)
+    os.makedirs(video_dir, exist_ok=True)
+    local_path = os.path.join(video_dir, f"chunk_{chunk_index:06d}.bin")
+    await run_in_threadpool(_write_file, local_path, data)
+    logger.info(f"Chunk {chunk_index} stored on filesystem ({len(data)} bytes)")
+    return {"backend": "filesystem", "path": local_path, "size": len(data)}
+
+def _write_file(path: str, data: bytes):
+    with open(path, 'wb') as f:
+        f.write(data)
+
+def _read_file(path: str) -> bytes:
+    with open(path, 'rb') as f:
+        return f.read()
 
 async def read_chunk_data(video_id: str, chunk_index: int, chunk_info: dict) -> bytes:
     """Read chunk from the appropriate backend"""
     backend = chunk_info.get("backend", "storage")
     path = chunk_info.get("path", "")
 
-    if backend == "mongodb":
+    if backend == "filesystem":
+        return await run_in_threadpool(_read_file, path)
+    elif backend == "mongodb":
         doc = await db.video_chunks.find_one(
             {"video_id": video_id, "chunk_index": chunk_index},
             {"data": 1}
@@ -1005,12 +1011,9 @@ async def startup():
         logger.info("Storage initialized")
     except Exception as e:
         logger.error(f"Storage init failed: {e}")
-    # Create indexes for chunk storage
-    try:
-        await db.video_chunks.create_index([("video_id", 1), ("chunk_index", 1)], unique=True)
-        logger.info("MongoDB indexes created")
-    except Exception as e:
-        logger.error(f"Index creation failed: {e}")
+    # Ensure chunk storage directory exists
+    os.makedirs(CHUNK_STORAGE_DIR, exist_ok=True)
+    logger.info(f"Chunk storage dir: {CHUNK_STORAGE_DIR}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
