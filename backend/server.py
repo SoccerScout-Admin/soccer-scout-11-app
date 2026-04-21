@@ -433,6 +433,16 @@ async def create_match(input: MatchCreate, current_user: dict = Depends(get_curr
 @api_router.get("/matches", response_model=List[Match])
 async def get_matches(current_user: dict = Depends(get_current_user)):
     matches = await db.matches.find({"user_id": current_user["id"]}, {"_id": 0}).to_list(1000)
+    # Enrich with processing status
+    for match in matches:
+        if match.get("video_id"):
+            video = await db.videos.find_one(
+                {"id": match["video_id"]},
+                {"_id": 0, "processing_status": 1, "processing_progress": 1}
+            )
+            if video:
+                match["processing_status"] = video.get("processing_status", "none")
+                match["processing_progress"] = video.get("processing_progress", 0)
     return matches
 
 @api_router.get("/matches/{match_id}", response_model=Match)
@@ -676,7 +686,16 @@ async def finalize_chunked_upload(upload_id: str, total_chunks: int, current_use
     )
 
     logger.info(f"Upload finalized: video {upload['video_id']}, {total_size/(1024*1024*1024):.2f}GB, {actual_chunks} chunks")
-    return {"status": "completed", "video_id": upload["video_id"], "size": total_size}
+
+    # Auto-start processing (Hudl/Veo-like)
+    await db.videos.update_one(
+        {"id": upload["video_id"]},
+        {"$set": {"processing_status": "queued", "processing_started_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    asyncio.create_task(run_auto_processing(upload["video_id"], upload["user_id"]))
+    logger.info(f"Auto-processing queued for video {upload['video_id']}")
+
+    return {"status": "completed", "video_id": upload["video_id"], "size": total_size, "processing": "queued"}
 
 # ===== Video Serving (streaming with Range support) =====
 
@@ -831,51 +850,218 @@ async def get_video_metadata(video_id: str, current_user: dict = Depends(get_cur
     result = {k: v for k, v in video.items() if k not in ("chunk_paths", "chunk_sizes", "chunk_backends")}
     return result
 
-# ===== AI Analysis =====
+# ===== Auto-Processing (Hudl/Veo-like) =====
+
+async def run_auto_processing(video_id: str, user_id: str):
+    """Background task: automatically runs all 3 analysis types after upload"""
+    analysis_types = ["tactical", "player_performance", "highlights"]
+    
+    try:
+        await db.videos.update_one(
+            {"id": video_id},
+            {"$set": {"processing_status": "processing", "processing_progress": 0}}
+        )
+
+        video = await db.videos.find_one({"id": video_id}, {"_id": 0})
+        if not video:
+            logger.error(f"Auto-processing: video {video_id} not found")
+            return
+
+        match = await db.matches.find_one({"id": video["match_id"]}, {"_id": 0})
+        if not match:
+            logger.error(f"Auto-processing: match for video {video_id} not found")
+            return
+
+        # Prepare video sample for AI analysis
+        tmp_path = None
+        try:
+            tmp_path = await prepare_video_sample(video)
+        except Exception as e:
+            logger.error(f"Auto-processing: failed to prepare video sample: {e}")
+            await db.videos.update_one(
+                {"id": video_id},
+                {"$set": {
+                    "processing_status": "failed",
+                    "processing_error": f"Failed to prepare video: {str(e)[:200]}"
+                }}
+            )
+            return
+
+        for idx, analysis_type in enumerate(analysis_types):
+            progress = int((idx / len(analysis_types)) * 100)
+            await db.videos.update_one(
+                {"id": video_id},
+                {"$set": {
+                    "processing_progress": progress,
+                    "processing_current": analysis_type
+                }}
+            )
+            logger.info(f"Auto-processing {video_id}: {analysis_type} ({progress}%)")
+
+            try:
+                chat = LlmChat(
+                    api_key=EMERGENT_KEY,
+                    session_id=f"auto-{video_id}-{analysis_type}",
+                    system_message="You are an expert soccer analyst. Analyze match videos and provide detailed tactical insights, player assessments, and highlight identification."
+                ).with_model("gemini", "gemini-3.1-pro-preview")
+
+                video_file = FileContentWithMimeType(file_path=tmp_path, mime_type=video["content_type"])
+
+                prompts = {
+                    "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis covering:\n\n1. **Formations** - What formations are each team using? Any formation changes during the match?\n2. **Pressing Patterns** - How do teams press? High press, mid-block, or low block?\n3. **Build-up Play** - How do teams build from the back? Through the middle or wide?\n4. **Defensive Organization** - Shape, line height, compactness\n5. **Key Tactical Moments** - Pivotal tactical decisions that influenced the game\n6. **Recommendations** - Tactical improvements for both teams",
+                    "player_performance": f"Analyze individual player performances in this soccer match between {match['team_home']} and {match['team_away']}. For each notable player provide:\n\n1. **Standout Performers** - Who were the best players and why?\n2. **Key Contributions** - Goals, assists, key passes, tackles\n3. **Work Rate & Positioning** - Movement, runs, defensive contribution\n4. **Decision Making** - Quality of decisions in key moments\n5. **Areas for Improvement** - What each key player could do better\n6. **Player Ratings** - Rate key players out of 10 with justification",
+                    "highlights": f"Identify and describe ALL key moments and highlights from this soccer match between {match['team_home']} and {match['team_away']}. Include:\n\n1. **Goals & Assists** - Describe each goal in detail with timestamps if visible\n2. **Near Misses** - Close chances that didn't result in goals\n3. **Outstanding Saves** - Goalkeeper heroics\n4. **Tactical Shifts** - Moments where the game's momentum changed\n5. **Key Fouls & Cards** - Significant disciplinary moments\n6. **Game-Changing Plays** - Moments that altered the match outcome\n\nFor each moment, indicate the approximate time if visible and rate its significance (1-5 stars)."
+                }
+                prompt = prompts.get(analysis_type, prompts["tactical"])
+
+                response = await chat.send_message(UserMessage(text=prompt, file_contents=[video_file]))
+
+                analysis_doc = {
+                    "id": str(uuid.uuid4()),
+                    "video_id": video_id,
+                    "match_id": video["match_id"],
+                    "user_id": user_id,
+                    "analysis_type": analysis_type,
+                    "content": response,
+                    "status": "completed",
+                    "auto_generated": True,
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                }
+                await db.analyses.insert_one(analysis_doc)
+                logger.info(f"Auto-processing {video_id}: {analysis_type} COMPLETED")
+
+            except Exception as e:
+                logger.error(f"Auto-processing {video_id}: {analysis_type} FAILED: {e}")
+                # Save partial failure but continue with other analysis types
+                analysis_doc = {
+                    "id": str(uuid.uuid4()),
+                    "video_id": video_id,
+                    "match_id": video["match_id"],
+                    "user_id": user_id,
+                    "analysis_type": analysis_type,
+                    "content": f"Analysis could not be completed: {str(e)[:200]}",
+                    "status": "failed",
+                    "auto_generated": True,
+                    "created_at": datetime.now(timezone.utc).isoformat()
+                }
+                await db.analyses.insert_one(analysis_doc)
+
+        # Mark processing complete
+        await db.videos.update_one(
+            {"id": video_id},
+            {"$set": {
+                "processing_status": "completed",
+                "processing_progress": 100,
+                "processing_current": None,
+                "processing_completed_at": datetime.now(timezone.utc).isoformat()
+            }}
+        )
+        logger.info(f"Auto-processing COMPLETE for video {video_id}")
+
+    except Exception as e:
+        logger.error(f"Auto-processing FAILED for video {video_id}: {e}")
+        await db.videos.update_one(
+            {"id": video_id},
+            {"$set": {
+                "processing_status": "failed",
+                "processing_error": str(e)[:200]
+            }}
+        )
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+async def prepare_video_sample(video: dict) -> str:
+    """Extract a sample from the video for AI analysis. For large videos, only take first ~200MB (enough for AI)."""
+    MAX_SAMPLE_BYTES = 200 * 1024 * 1024  # 200MB sample
+    ext = video["original_filename"].split(".")[-1] if "." in video["original_filename"] else "mp4"
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}")
+    tmp_path = tmp.name
+
+    try:
+        if video.get("is_chunked"):
+            chunk_paths = video.get("chunk_paths", {})
+            chunk_backends = video.get("chunk_backends", {})
+            total_chunks = video.get("total_chunks", len(chunk_paths))
+            bytes_written = 0
+
+            for i in range(total_chunks):
+                if bytes_written >= MAX_SAMPLE_BYTES:
+                    break
+                path = chunk_paths.get(str(i))
+                if not path:
+                    continue
+                backend = chunk_backends.get(str(i), "storage")
+                chunk_info = {"backend": backend, "path": path}
+                data = await read_chunk_data(video["id"], i, chunk_info)
+                tmp.write(data)
+                bytes_written += len(data)
+                del data
+
+            logger.info(f"Prepared {bytes_written/(1024*1024):.0f}MB sample from {total_chunks} chunks")
+        else:
+            data, _ = await run_in_threadpool(get_object_sync, video["storage_path"])
+            tmp.write(data[:MAX_SAMPLE_BYTES])
+            del data
+
+        tmp.close()
+        return tmp_path
+    except Exception:
+        tmp.close()
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+# ===== AI Analysis Endpoints =====
+
+@api_router.get("/videos/{video_id}/processing-status")
+async def get_processing_status(video_id: str, current_user: dict = Depends(get_current_user)):
+    """Polling endpoint for frontend to check processing progress"""
+    video = await db.videos.find_one(
+        {"id": video_id, "user_id": current_user["id"]},
+        {"_id": 0, "chunk_paths": 0, "chunk_sizes": 0, "chunk_backends": 0}
+    )
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    return {
+        "processing_status": video.get("processing_status", "none"),
+        "processing_progress": video.get("processing_progress", 0),
+        "processing_current": video.get("processing_current"),
+        "processing_error": video.get("processing_error"),
+        "processing_completed_at": video.get("processing_completed_at")
+    }
+
+@api_router.post("/videos/{video_id}/reprocess")
+async def reprocess_video(video_id: str, current_user: dict = Depends(get_current_user)):
+    """Manually trigger reprocessing"""
+    video = await db.videos.find_one({"id": video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    # Delete old analyses
+    await db.analyses.delete_many({"video_id": video_id, "user_id": current_user["id"]})
+    
+    await db.videos.update_one(
+        {"id": video_id},
+        {"$set": {"processing_status": "queued", "processing_progress": 0, "processing_error": None}}
+    )
+    asyncio.create_task(run_auto_processing(video_id, current_user["id"]))
+    return {"status": "reprocessing_started"}
 
 @api_router.post("/analysis/generate")
 async def generate_analysis(input: AnalysisRequest, current_user: dict = Depends(get_current_user)):
+    """Manual single analysis generation"""
     video = await db.videos.find_one({"id": input.video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0})
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    # For very large chunked videos, analysis is not practical
-    if video.get("is_chunked") and video.get("size", 0) > 2 * 1024 * 1024 * 1024:
-        raise HTTPException(
-            status_code=400,
-            detail="Video is too large for AI analysis (>2GB). Please create shorter clips and analyze those instead."
-        )
-
     match = await db.matches.find_one({"id": video["match_id"]}, {"_id": 0})
 
-    # Download video data
-    if video.get("is_chunked"):
-        # Download chunks and assemble for analysis
-        chunk_paths = video.get("chunk_paths", {})
-        total_chunks = video.get("total_chunks", len(chunk_paths))
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{video['original_filename'].split('.')[-1]}") as tmp:
-                tmp_path = tmp.name
-                for i in range(total_chunks):
-                    path = chunk_paths.get(str(i))
-                    if path:
-                        data, _ = await run_in_threadpool(get_object_sync, path)
-                        tmp.write(data)
-                        del data
-        except Exception as e:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            raise HTTPException(status_code=500, detail=f"Failed to prepare video for analysis: {str(e)}")
-    else:
-        data, _ = await run_in_threadpool(get_object_sync, video["storage_path"])
-        tmp_path = None
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{video['original_filename'].split('.')[-1]}") as tmp:
-            tmp.write(data)
-            tmp_path = tmp.name
-        del data
-
+    tmp_path = None
     try:
+        tmp_path = await prepare_video_sample(video)
+
         chat = LlmChat(
             api_key=EMERGENT_KEY,
             session_id=f"analysis-{input.video_id}",
@@ -885,13 +1071,15 @@ async def generate_analysis(input: AnalysisRequest, current_user: dict = Depends
         video_file = FileContentWithMimeType(file_path=tmp_path, mime_type=video["content_type"])
 
         prompts = {
-            "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis covering: formations used, pressing patterns, build-up play, defensive organization, key tactical moments, and suggested improvements.",
-            "player_performance": f"Analyze individual player performances in this match. Identify standout players, areas of strength and weakness, work rate, positioning, and decision-making quality.",
-            "highlights": f"Identify and describe the key moments and highlights from this match: goals, near-misses, crucial saves, tactical changes, momentum shifts, and game-changing plays."
+            "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis.",
+            "player_performance": f"Analyze individual player performances in this match between {match['team_home']} and {match['team_away']}.",
+            "highlights": f"Identify key moments and highlights from this match between {match['team_home']} and {match['team_away']}."
         }
         prompt = prompts.get(input.analysis_type, prompts["tactical"])
-
         response = await chat.send_message(UserMessage(text=prompt, file_contents=[video_file]))
+
+        # Delete old analysis of same type
+        await db.analyses.delete_many({"video_id": input.video_id, "user_id": current_user["id"], "analysis_type": input.analysis_type})
 
         analysis_id = str(uuid.uuid4())
         analysis_doc = {

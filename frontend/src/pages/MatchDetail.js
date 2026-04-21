@@ -170,7 +170,7 @@ const MatchDetail = () => {
         setUploadStatus(`Uploading: ${uploadedCount}/${totalChunks} chunks (${progress}%)`);
 
         if (chunkResponse.data.status === 'completed') {
-          setUploadStatus('Upload complete!');
+          setUploadStatus('Upload complete! Starting AI processing...');
           break;
         }
       }

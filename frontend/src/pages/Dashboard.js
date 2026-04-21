@@ -118,9 +118,28 @@ const Dashboard = () => {
                   <span>{new Date(match.date).toLocaleDateString()}</span>
                 </div>
                 {match.video_id && (
-                  <div className="mt-4 flex items-center gap-2 text-[#39FF14] text-sm">
-                    <VideoCamera size={16} />
-                    <span>Video uploaded</span>
+                  <div className="mt-4">
+                    {match.processing_status === 'completed' ? (
+                      <div className="flex items-center gap-2 text-[#4ADE80] text-sm">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                        <span>Analysis Ready</span>
+                      </div>
+                    ) : match.processing_status === 'processing' || match.processing_status === 'queued' ? (
+                      <div className="flex items-center gap-2 text-[#007AFF] text-sm">
+                        <div className="w-3 h-3 border-2 border-[#007AFF] border-t-transparent rounded-full animate-spin" />
+                        <span>Processing ({match.processing_progress || 0}%)</span>
+                      </div>
+                    ) : match.processing_status === 'failed' ? (
+                      <div className="flex items-center gap-2 text-[#EF4444] text-sm">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
+                        <span>Processing Failed</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 text-[#39FF14] text-sm">
+                        <VideoCamera size={16} />
+                        <span>Video uploaded</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
