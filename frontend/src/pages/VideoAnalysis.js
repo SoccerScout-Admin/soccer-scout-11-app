@@ -21,17 +21,34 @@ const VideoAnalysis = () => {
   const [clipFormData, setClipFormData] = useState({ title: '', start_time: 0, end_time: 0, clip_type: 'highlight', description: '' });
   const [currentTimestamp, setCurrentTimestamp] = useState(0);
   const [processingStatus, setProcessingStatus] = useState(null);
+  const [serverBootId, setServerBootId] = useState(null);
+  const [serverRestarted, setServerRestarted] = useState(false);
 
   const fetchProcessingStatus = useCallback(async () => {
     try {
       const response = await axios.get(`${API}/videos/${videoId}/processing-status`, { headers: getAuthHeader() });
-      setProcessingStatus(response.data);
-      return response.data;
+      const data = response.data;
+      setProcessingStatus(data);
+
+      // Detect server restart via boot_id change
+      if (data.server_boot_id) {
+        if (serverBootId && serverBootId !== data.server_boot_id) {
+          console.log('Server restarted detected — boot_id changed');
+          setServerRestarted(true);
+          // If processing was in progress, server auto-resumes on startup
+          // Refresh analyses to get any that completed before restart
+          const res = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
+          setAnalyses(res.data);
+        }
+        setServerBootId(data.server_boot_id);
+      }
+
+      return data;
     } catch (err) {
       console.error('Failed to fetch processing status:', err);
       return null;
     }
-  }, [videoId]);
+  }, [videoId, serverBootId]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -57,24 +74,22 @@ const VideoAnalysis = () => {
     };
     loadData();
     fetchProcessingStatus();
-  }, [videoId, fetchProcessingStatus]);
+  }, [videoId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Poll processing status while processing
+  // Poll processing status — always poll every 8s (acts as heartbeat + status check)
   useEffect(() => {
-    if (!processingStatus) return;
-    if (processingStatus.processing_status === 'processing' || processingStatus.processing_status === 'queued') {
-      const interval = setInterval(async () => {
-        const status = await fetchProcessingStatus();
-        if (status && (status.processing_status === 'completed' || status.processing_status === 'failed')) {
-          clearInterval(interval);
-          // Refresh analyses
-          const res = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
-          setAnalyses(res.data);
-        }
-      }, 5000);
-      return () => clearInterval(interval);
-    }
-  }, [processingStatus, videoId, fetchProcessingStatus]);
+    const interval = setInterval(async () => {
+      const status = await fetchProcessingStatus();
+      // If processing just completed, refresh analyses
+      if (status && processingStatus && 
+          (processingStatus.processing_status === 'processing' || processingStatus.processing_status === 'queued') &&
+          (status.processing_status === 'completed' || status.processing_status === 'failed')) {
+        const res = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
+        setAnalyses(res.data);
+      }
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [fetchProcessingStatus, processingStatus, videoId]);
 
   const handleReprocess = async () => {
     try {
@@ -254,12 +269,17 @@ const VideoAnalysis = () => {
               </div>
               <div className="flex-1">
                 <p className="text-sm font-medium text-white">
-                  Processing your match video...
+                  {serverRestarted ? 'Server restarted — processing resumed automatically' : 'Processing your match video...'}
                 </p>
                 <p className="text-xs text-[#7AA2D4] mt-0.5">
                   {processingStatus.processing_current
                     ? `Running: ${processingLabel[processingStatus.processing_current] || processingStatus.processing_current}`
                     : 'Preparing video for AI analysis'}
+                  {processingStatus.completed_types && processingStatus.completed_types.length > 0 && (
+                    <span className="text-[#4ADE80] ml-2">
+                      — {processingStatus.completed_types.length}/3 done
+                    </span>
+                  )}
                 </p>
               </div>
               <div className="text-right">
@@ -270,9 +290,30 @@ const VideoAnalysis = () => {
               <div className="h-full bg-[#007AFF] rounded-full transition-all duration-500"
                 style={{ width: `${processingStatus.processing_progress || 0}%` }} />
             </div>
-            <p className="text-[10px] text-[#5A7AAA] mt-2">
-              We'll generate tactical analysis, player ratings, and match highlights automatically. This may take a few minutes.
-            </p>
+            {/* Show completed types */}
+            <div className="flex items-center gap-4 mt-3">
+              {['tactical', 'player_performance', 'highlights'].map(type => {
+                const isDone = processingStatus.completed_types?.includes(type);
+                const isCurrent = processingStatus.processing_current === type;
+                const isFailed = processingStatus.failed_types?.includes(type);
+                return (
+                  <div key={type} className="flex items-center gap-1.5 text-[10px]">
+                    {isDone ? (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" strokeWidth="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    ) : isCurrent ? (
+                      <div className="w-3 h-3 border border-[#007AFF] border-t-transparent rounded-full animate-spin" />
+                    ) : isFailed ? (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
+                    ) : (
+                      <div className="w-3 h-3 rounded-full border border-[#333]" />
+                    )}
+                    <span className={isDone ? 'text-[#4ADE80]' : isCurrent ? 'text-[#007AFF]' : isFailed ? 'text-[#EF4444]' : 'text-[#555]'}>
+                      {processingLabel[type]}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -284,12 +325,16 @@ const VideoAnalysis = () => {
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
               <div>
                 <p className="text-sm text-[#EF4444]">Processing encountered an issue</p>
-                <p className="text-xs text-[#888] mt-0.5">{processingStatus.processing_error || 'Some analyses may not have completed'}</p>
+                <p className="text-xs text-[#888] mt-0.5">
+                  {processingStatus.completed_types?.length > 0
+                    ? `${processingStatus.completed_types.length}/3 analyses completed. ${processingStatus.failed_types?.length || 0} failed.`
+                    : processingStatus.processing_error || 'Some analyses may not have completed'}
+                </p>
               </div>
             </div>
             <button data-testid="retry-processing-btn" onClick={handleReprocess}
               className="px-4 py-2 rounded-full bg-[#EF4444]/10 text-[#EF4444] text-xs font-medium hover:bg-[#EF4444]/20 transition-colors">
-              Retry Processing
+              {processingStatus.completed_types?.length > 0 ? 'Resume Failed' : 'Retry Processing'}
             </button>
           </div>
         </div>

@@ -36,6 +36,8 @@ APP_NAME = "soccer-analysis"
 storage_key = None
 JWT_SECRET = os.environ.get("JWT_SECRET")
 CHUNK_SIZE = 10 * 1024 * 1024  # 10MB per chunk
+SERVER_BOOT_ID = str(uuid.uuid4())  # Unique per server process — changes on restart
+SERVER_BOOT_TIME = datetime.now(timezone.utc).isoformat()
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -414,6 +416,17 @@ async def health_check():
 @app.get("/health")
 async def root_health_check():
     return {"status": "healthy", "service": "soccer-scout-api", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+# ===== Heartbeat =====
+
+@api_router.get("/heartbeat")
+async def heartbeat():
+    """Returns server boot ID — if it changes, the server restarted"""
+    return {
+        "boot_id": SERVER_BOOT_ID,
+        "boot_time": SERVER_BOOT_TIME,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
 
 # ===== Debug =====
 
@@ -852,9 +865,10 @@ async def get_video_metadata(video_id: str, current_user: dict = Depends(get_cur
 
 # ===== Auto-Processing (Hudl/Veo-like) =====
 
-async def run_auto_processing(video_id: str, user_id: str):
-    """Background task: automatically runs all 3 analysis types after upload"""
-    analysis_types = ["tactical", "player_performance", "highlights"]
+async def run_auto_processing(video_id: str, user_id: str, only_types: list = None):
+    """Background task: runs analysis types after upload. Saves each independently so partial completion survives restarts."""
+    all_types = ["tactical", "player_performance", "highlights"]
+    analysis_types = only_types if only_types else all_types
     
     try:
         await db.videos.update_one(
@@ -888,7 +902,7 @@ async def run_auto_processing(video_id: str, user_id: str):
             return
 
         for idx, analysis_type in enumerate(analysis_types):
-            progress = int((idx / len(analysis_types)) * 100)
+            progress = int(((idx) / len(analysis_types)) * 100)
             await db.videos.update_one(
                 {"id": video_id},
                 {"$set": {
@@ -905,7 +919,7 @@ async def run_auto_processing(video_id: str, user_id: str):
                     system_message="You are an expert soccer analyst. Analyze match videos and provide detailed tactical insights, player assessments, and highlight identification."
                 ).with_model("gemini", "gemini-3.1-pro-preview")
 
-                video_file = FileContentWithMimeType(file_path=tmp_path, mime_type=video["content_type"])
+                video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
 
                 prompts = {
                     "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis covering:\n\n1. **Formations** - What formations are each team using? Any formation changes during the match?\n2. **Pressing Patterns** - How do teams press? High press, mid-block, or low block?\n3. **Build-up Play** - How do teams build from the back? Through the middle or wide?\n4. **Defensive Organization** - Shape, line height, compactness\n5. **Key Tactical Moments** - Pivotal tactical decisions that influenced the game\n6. **Recommendations** - Tactical improvements for both teams",
@@ -972,45 +986,115 @@ async def run_auto_processing(video_id: str, user_id: str):
             os.unlink(tmp_path)
 
 async def prepare_video_sample(video: dict) -> str:
-    """Extract a sample from the video for AI analysis. For large videos, only take first ~200MB (enough for AI)."""
-    MAX_SAMPLE_BYTES = 200 * 1024 * 1024  # 200MB sample
+    """Extract a valid video sample for AI analysis.
+    Uses sparse file technique: writes available chunks at correct byte offsets,
+    allowing ffmpeg to find the moov atom and extract a valid clip."""
+    import subprocess
+    
     ext = video["original_filename"].split(".")[-1] if "." in video["original_filename"] else "mp4"
-
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}")
-    tmp_path = tmp.name
+    raw_path = tempfile.mktemp(suffix=f".{ext}", dir="/var/video_chunks")
+    clip_path = tempfile.mktemp(suffix=".mp4", dir="/var/video_chunks")
 
     try:
         if video.get("is_chunked"):
             chunk_paths = video.get("chunk_paths", {})
             chunk_backends = video.get("chunk_backends", {})
             total_chunks = video.get("total_chunks", len(chunk_paths))
-            bytes_written = 0
+            chunk_size = video.get("chunk_size", CHUNK_SIZE)
 
-            for i in range(total_chunks):
-                if bytes_written >= MAX_SAMPLE_BYTES:
-                    break
-                path = chunk_paths.get(str(i))
-                if not path:
-                    continue
-                backend = chunk_backends.get(str(i), "storage")
-                chunk_info = {"backend": backend, "path": path}
-                data = await read_chunk_data(video["id"], i, chunk_info)
-                tmp.write(data)
-                bytes_written += len(data)
-                del data
+            # Strategy: write first N chunks + last 3 chunks at correct offsets (sparse file)
+            # This lets ffmpeg find moov atom (at end) + read video data (at start)
+            first_n = min(15, total_chunks)  # ~150MB of video data
+            last_n = 3  # moov is typically in last 1-2 chunks
+            
+            logger.info(f"Creating sparse video: first {first_n} + last {last_n} chunks of {total_chunks}")
+            
+            with open(raw_path, 'wb') as f:
+                # Write first chunks sequentially
+                for i in range(first_n):
+                    path = chunk_paths.get(str(i))
+                    if not path:
+                        continue
+                    backend = chunk_backends.get(str(i), "storage")
+                    if backend == "filesystem" and not os.path.exists(path):
+                        continue
+                    chunk_info = {"backend": backend, "path": path}
+                    try:
+                        data = await read_chunk_data(video["id"], i, chunk_info)
+                        f.write(data)
+                        del data
+                    except Exception as e:
+                        logger.warning(f"  Skipping chunk {i}: {str(e)[:60]}")
+                        # Write zeros to maintain offset
+                        f.write(b'\x00' * chunk_size)
+                
+                # Seek to correct offset for last chunks
+                last_start_idx = max(first_n, total_chunks - last_n)
+                target_offset = last_start_idx * chunk_size
+                f.seek(target_offset)
+                
+                for i in range(last_start_idx, total_chunks):
+                    path = chunk_paths.get(str(i))
+                    if not path:
+                        continue
+                    backend = chunk_backends.get(str(i), "storage")
+                    if backend == "filesystem" and not os.path.exists(path):
+                        continue
+                    chunk_info = {"backend": backend, "path": path}
+                    try:
+                        data = await read_chunk_data(video["id"], i, chunk_info)
+                        f.write(data)
+                        del data
+                    except Exception as e:
+                        logger.warning(f"  Skipping chunk {i}: {str(e)[:60]}")
 
-            logger.info(f"Prepared {bytes_written/(1024*1024):.0f}MB sample from {total_chunks} chunks")
+            raw_size = os.path.getsize(raw_path)
+            logger.info(f"Created sparse video: {raw_size/(1024*1024*1024):.2f}GB")
         else:
             data, _ = await run_in_threadpool(get_object_sync, video["storage_path"])
-            tmp.write(data[:MAX_SAMPLE_BYTES])
+            with open(raw_path, 'wb') as f:
+                f.write(data)
             del data
 
-        tmp.close()
-        return tmp_path
-    except Exception:
-        tmp.close()
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        # Extract a 30-second clip with ffmpeg
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-i", raw_path,
+            "-t", "30",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "28",
+            "-c:a", "aac",
+            "-b:a", "64k",
+            "-movflags", "+faststart",
+            clip_path
+        ]
+
+        result = await run_in_threadpool(
+            subprocess.run, ffmpeg_cmd,
+            capture_output=True, text=True, timeout=300
+        )
+
+        # Delete sparse file immediately to free disk
+        if os.path.exists(raw_path):
+            os.unlink(raw_path)
+            logger.info("Deleted sparse video file")
+
+        if result.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
+            clip_size = os.path.getsize(clip_path)
+            logger.info(f"Created {clip_size/(1024*1024):.1f}MB video clip via ffmpeg")
+            return clip_path
+        else:
+            logger.error(f"ffmpeg clip failed: rc={result.returncode}, stderr={result.stderr[-300:]}")
+            raise Exception(f"Failed to create video clip")
+
+    except Exception as e:
+        for p in [raw_path, clip_path]:
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
         raise
 
 # ===== AI Analysis Endpoints =====
@@ -1024,30 +1108,61 @@ async def get_processing_status(video_id: str, current_user: dict = Depends(get_
     )
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
+    
+    # Check which analysis types are completed
+    completed_types = []
+    failed_types = []
+    analyses = await db.analyses.find(
+        {"video_id": video_id, "user_id": current_user["id"]},
+        {"_id": 0, "analysis_type": 1, "status": 1}
+    ).to_list(10)
+    for a in analyses:
+        if a.get("status") == "completed":
+            completed_types.append(a["analysis_type"])
+        elif a.get("status") == "failed":
+            failed_types.append(a["analysis_type"])
+    
     return {
         "processing_status": video.get("processing_status", "none"),
         "processing_progress": video.get("processing_progress", 0),
         "processing_current": video.get("processing_current"),
         "processing_error": video.get("processing_error"),
-        "processing_completed_at": video.get("processing_completed_at")
+        "processing_completed_at": video.get("processing_completed_at"),
+        "completed_types": completed_types,
+        "failed_types": failed_types,
+        "server_boot_id": SERVER_BOOT_ID
     }
 
 @api_router.post("/videos/{video_id}/reprocess")
 async def reprocess_video(video_id: str, current_user: dict = Depends(get_current_user)):
-    """Manually trigger reprocessing"""
+    """Manually trigger reprocessing — only runs analysis types not yet completed"""
     video = await db.videos.find_one({"id": video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0})
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     
-    # Delete old analyses
-    await db.analyses.delete_many({"video_id": video_id, "user_id": current_user["id"]})
+    # Find which types are already completed
+    completed = set()
+    analyses = await db.analyses.find(
+        {"video_id": video_id, "user_id": current_user["id"], "status": "completed"},
+        {"_id": 0, "analysis_type": 1}
+    ).to_list(10)
+    for a in analyses:
+        completed.add(a["analysis_type"])
+    
+    # Delete only failed analyses (keep completed ones)
+    await db.analyses.delete_many({"video_id": video_id, "user_id": current_user["id"], "status": "failed"})
+    
+    remaining = [t for t in ["tactical", "player_performance", "highlights"] if t not in completed]
+    
+    if not remaining:
+        return {"status": "already_complete", "completed_types": list(completed)}
     
     await db.videos.update_one(
         {"id": video_id},
         {"$set": {"processing_status": "queued", "processing_progress": 0, "processing_error": None}}
     )
-    asyncio.create_task(run_auto_processing(video_id, current_user["id"]))
-    return {"status": "reprocessing_started"}
+    asyncio.create_task(run_auto_processing(video_id, current_user["id"], only_types=remaining))
+    return {"status": "reprocessing_started", "types_to_process": remaining, "already_completed": list(completed)}
 
 @api_router.post("/analysis/generate")
 async def generate_analysis(input: AnalysisRequest, current_user: dict = Depends(get_current_user)):
@@ -1068,7 +1183,7 @@ async def generate_analysis(input: AnalysisRequest, current_user: dict = Depends
             system_message="You are an expert soccer analyst. Analyze match videos and provide detailed tactical insights."
         ).with_model("gemini", "gemini-3.1-pro-preview")
 
-        video_file = FileContentWithMimeType(file_path=tmp_path, mime_type=video["content_type"])
+        video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
 
         prompts = {
             "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis.",
@@ -1184,6 +1299,60 @@ async def download_clip_info(clip_id: str, current_user: dict = Depends(get_curr
 
 app.include_router(api_router)
 
+# ===== Auto-Resume on Startup =====
+
+async def resume_interrupted_processing():
+    """On server restart, find any videos stuck in 'processing' or 'queued' state and resume them"""
+    await asyncio.sleep(5)  # Wait for server to fully initialize
+    try:
+        stuck_videos = await db.videos.find(
+            {"processing_status": {"$in": ["processing", "queued"]}},
+            {"_id": 0, "id": 1, "user_id": 1}
+        ).to_list(100)
+
+        if not stuck_videos:
+            logger.info("No interrupted processing jobs to resume")
+            return
+
+        logger.info(f"Found {len(stuck_videos)} interrupted processing jobs — resuming")
+
+        for video in stuck_videos:
+            video_id = video["id"]
+            user_id = video["user_id"]
+
+            # Check which types are already completed
+            completed = set()
+            analyses = await db.analyses.find(
+                {"video_id": video_id, "status": "completed"},
+                {"_id": 0, "analysis_type": 1}
+            ).to_list(10)
+            for a in analyses:
+                completed.add(a["analysis_type"])
+
+            # Delete failed ones so they can be retried
+            await db.analyses.delete_many({"video_id": video_id, "status": "failed"})
+
+            remaining = [t for t in ["tactical", "player_performance", "highlights"] if t not in completed]
+
+            if remaining:
+                logger.info(f"Resuming processing for video {video_id}: {remaining} (already done: {list(completed)})")
+                asyncio.create_task(run_auto_processing(video_id, user_id, only_types=remaining))
+            else:
+                # All types completed, just mark as done
+                await db.videos.update_one(
+                    {"id": video_id},
+                    {"$set": {
+                        "processing_status": "completed",
+                        "processing_progress": 100,
+                        "processing_current": None,
+                        "processing_completed_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+                logger.info(f"Video {video_id} already fully processed, marked as completed")
+
+    except Exception as e:
+        logger.error(f"Failed to resume interrupted processing: {e}")
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -1202,6 +1371,10 @@ async def startup():
     # Ensure chunk storage directory exists
     os.makedirs(CHUNK_STORAGE_DIR, exist_ok=True)
     logger.info(f"Chunk storage dir: {CHUNK_STORAGE_DIR}")
+    logger.info(f"Server boot ID: {SERVER_BOOT_ID}")
+    
+    # Auto-resume interrupted processing from previous server instance
+    asyncio.create_task(resume_interrupted_processing())
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
