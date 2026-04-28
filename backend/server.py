@@ -1417,7 +1417,20 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
                 f.write(data)
             del data
 
-        # Build ffmpeg command: compress entire video to 360p
+        # Build ffmpeg command: compress entire video to low res for AI
+        # For videos > 60min, use very aggressive compression to stay under ~50MB for reliable API upload
+        video_size_gb = os.path.getsize(raw_path) / (1024*1024*1024)
+        if video_size_gb > 2:
+            # Very large/long video: 240p, 5fps, aggressive CRF
+            scale_filter = "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2"
+            fps = "5"
+            crf = "40"
+        else:
+            # Normal video: 360p, 12fps
+            scale_filter = "scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2"
+            fps = "12"
+            crf = "35"
+        
         ffmpeg_cmd = ["ffmpeg", "-y"]
         
         # Trim support
@@ -1429,11 +1442,11 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
             ffmpeg_cmd += ["-t", str(int(duration))]
         
         ffmpeg_cmd += [
-            "-vf", "scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2",
+            "-vf", scale_filter,
             "-c:v", "libx264",
             "-preset", "ultrafast",
-            "-crf", "35",
-            "-r", "12",
+            "-crf", crf,
+            "-r", fps,
             "-c:a", "aac",
             "-b:a", "32k",
             "-ac", "1",
@@ -1441,7 +1454,7 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
             clip_path
         ]
 
-        logger.info(f"Compressing video to 360p/12fps (trim={trim_start}-{trim_end})")
+        logger.info(f"Compressing video to {'240p/8fps' if video_size_gb > 2 else '360p/12fps'} (trim={trim_start}-{trim_end}, src={video_size_gb:.1f}GB)")
         result = await run_in_threadpool(
             subprocess.run, ffmpeg_cmd,
             capture_output=True, text=True, timeout=1800  # 30min timeout for long videos

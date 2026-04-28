@@ -102,7 +102,7 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ### P1 (Should Have)
 - ffmpeg startup script persistence (currently manual install; `/app/scripts/setup.sh` created but needs integration into container startup)
-- Video trimming/clipping & downloadable highlights packaging (actual video file stitching)
+- Higher quality timeline markers: current 180p compression loses too much detail for Gemini to detect goals/saves reliably — consider sending multiple 720p segments instead of full compressed video
 - Re-upload degraded videos (LFC vs Express 3%, LFC07BvsAYSO 8% data remaining) — filesystem chunks lost on container restart
 
 ### P2 (Nice to Have)
