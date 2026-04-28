@@ -95,6 +95,7 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 ### P1 (Should Have)
 - ffmpeg startup script persistence (currently manual install; `/app/scripts/setup.sh` created but needs integration into container startup)
 - Video trimming/clipping & downloadable highlights packaging (actual video file stitching)
+- Re-upload degraded videos (LFC vs Express 3%, LFC07BvsAYSO 8% data remaining) — filesystem chunks lost on container restart
 
 ### P2 (Nice to Have)
 - Refactor `server.py` into route modules (auth, matches, folders, players, analysis, videos)

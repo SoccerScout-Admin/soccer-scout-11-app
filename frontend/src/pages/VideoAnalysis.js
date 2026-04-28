@@ -363,6 +363,25 @@ const VideoAnalysis = () => {
       )}
 
       <main className="max-w-[1400px] mx-auto px-6 py-6">
+        {/* Data Integrity Warning */}
+        {videoMetadata && videoMetadata.data_integrity && videoMetadata.data_integrity !== 'full' && (
+          <div data-testid="data-integrity-warning" className="bg-[#1A1A0A] border border-[#FFB800]/30 rounded-lg px-6 py-4 mb-6">
+            <div className="flex items-center gap-3">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFB800" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <div>
+                <p className="text-sm font-medium text-[#FFB800]">
+                  {videoMetadata.data_integrity === 'unavailable' ? 'Video data unavailable' : 'Partial video data'}
+                </p>
+                <p className="text-xs text-[#888] mt-0.5">
+                  {videoMetadata.data_integrity === 'unavailable'
+                    ? 'All video chunks were lost during a server restart. Please re-upload the video.'
+                    : `Only ${videoMetadata.chunks_available} of ${videoMetadata.chunks_total} chunks available (${Math.round(videoMetadata.chunks_available / videoMetadata.chunks_total * 100)}%). Video may stop playing early. Re-upload for full playback.`}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left: Video + Controls */}
           <div className="lg:col-span-8 space-y-4">

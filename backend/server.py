@@ -1114,7 +1114,11 @@ async def stream_chunked_video(video: dict, range_header: str = None):
                     if chunk_start > end:
                         break
 
-                    data = await read_chunk_data(video_id, chunk_idx, chunk_info)
+                    try:
+                        data = await read_chunk_data(video_id, chunk_idx, chunk_info)
+                    except (FileNotFoundError, Exception) as e:
+                        logger.warning(f"Stream: chunk {chunk_idx} unavailable ({e}), stopping range stream")
+                        break
 
                     slice_start = max(0, start - chunk_start)
                     slice_end = min(len(data), end - chunk_start + 1)
@@ -1144,9 +1148,13 @@ async def stream_chunked_video(video: dict, range_header: str = None):
             if path:
                 backend = chunk_backends.get(str(i), "storage")
                 chunk_info = {"backend": backend, "path": path}
-                data = await read_chunk_data(video_id, i, chunk_info)
-                yield data
-                del data
+                try:
+                    data = await read_chunk_data(video_id, i, chunk_info)
+                    yield data
+                    del data
+                except (FileNotFoundError, Exception) as e:
+                    logger.warning(f"Stream: chunk {i} unavailable ({e}), stopping full stream")
+                    break
 
     return StreamingResponse(
         generate_full(),
@@ -1166,6 +1174,25 @@ async def get_video_metadata(video_id: str, current_user: dict = Depends(get_cur
         raise HTTPException(status_code=404, detail="Video not found")
     # Don't send chunk_paths in metadata (too large for large uploads)
     result = {k: v for k, v in video.items() if k not in ("chunk_paths", "chunk_sizes", "chunk_backends")}
+    
+    # Add data integrity check for chunked videos
+    if video.get("is_chunked"):
+        chunk_paths = video.get("chunk_paths", {})
+        chunk_backends = video.get("chunk_backends", {})
+        total = video.get("total_chunks", len(chunk_paths))
+        available = 0
+        for i in range(total):
+            path = chunk_paths.get(str(i))
+            if not path:
+                continue
+            backend = chunk_backends.get(str(i), "storage")
+            if backend == "filesystem" and not os.path.exists(path):
+                continue
+            available += 1
+        result["chunks_available"] = available
+        result["chunks_total"] = total
+        result["data_integrity"] = "full" if available == total else ("partial" if available > 0 else "unavailable")
+    
     return result
 
 # ===== Auto-Processing (Hudl/Veo-like) =====
@@ -1410,8 +1437,14 @@ async def prepare_video_sample(video: dict) -> str:
             logger.info(f"Created {clip_size/(1024*1024):.1f}MB video clip via ffmpeg")
             return clip_path
         else:
-            logger.error(f"ffmpeg clip failed: rc={result.returncode}, stderr={result.stderr[-300:]}")
-            raise Exception("Failed to create video clip")
+            stderr = result.stderr[-500:] if result.stderr else ""
+            if "moov atom not found" in stderr:
+                raise Exception("Video data incomplete — moov atom (file index) missing. The video needs to be re-uploaded.")
+            elif "Invalid data found" in stderr:
+                raise Exception("File is not a valid video format. Please re-upload a valid video file.")
+            else:
+                logger.error(f"ffmpeg clip failed: rc={result.returncode}, stderr={stderr}")
+                raise Exception("Failed to create video clip")
 
     except Exception:
         for p in [raw_path, clip_path]:
