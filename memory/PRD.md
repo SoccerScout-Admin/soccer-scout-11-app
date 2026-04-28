@@ -87,6 +87,14 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Green share indicator icon on shared folders in sidebar
 - Invalid/expired links show clean "Link Unavailable" error page
 
+### Video Analysis Upgrade: Full-Match + Trimming + Timeline + Downloads (Complete - Apr 28, 2026)
+- Full match compression: Entire video compressed to 360p/12fps (<500MB) for Gemini instead of 30-sec samples
+- AI Timeline Markers: Gemini identifies goals, shots, saves, fouls with timestamps → colored markers on video timeline (Hudl/Veo style)
+- Click any marker to jump to that moment; legend shows event type counts
+- Video Trimming: "Trim & Analyze" panel lets coaches select start/end time to analyze a specific section
+- Downloadable Clips: "Download MP4" button on each clip extracts actual video via ffmpeg
+- New "Timeline" tab showing all AI-detected events in chronological order
+
 ## Backlog
 
 ### P0 (Must Have)

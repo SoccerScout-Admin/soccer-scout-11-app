@@ -23,6 +23,12 @@ const VideoAnalysis = () => {
   const [showClipForm, setShowClipForm] = useState(false);
   const [clipFormData, setClipFormData] = useState({ title: '', start_time: 0, end_time: 0, clip_type: 'highlight', description: '' });
   const [currentTimestamp, setCurrentTimestamp] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [markers, setMarkers] = useState([]);
+  const [showTrimPanel, setShowTrimPanel] = useState(false);
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+  const [downloadingClip, setDownloadingClip] = useState(null);
   const [processingStatus, setProcessingStatus] = useState(null);
   const [serverBootId, setServerBootId] = useState(null);
   const [serverRestarted, setServerRestarted] = useState(false);
@@ -76,6 +82,11 @@ const VideoAnalysis = () => {
             setPlayers(playersRes.data);
           } catch (e) { console.error('Failed to fetch players:', e); }
         }
+        // Fetch timeline markers
+        try {
+          const markersRes = await axios.get(`${API}/markers/video/${videoId}`, { headers: getAuthHeader() });
+          setMarkers(markersRes.data);
+        } catch (e) { console.error('Failed to fetch markers:', e); }
       } catch (err) {
         console.error('Failed to load data:', err);
       }
@@ -94,6 +105,11 @@ const VideoAnalysis = () => {
           (status.processing_status === 'completed' || status.processing_status === 'failed')) {
         const res = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
         setAnalyses(res.data);
+        // Also refresh markers after processing completes
+        try {
+          const mkRes = await axios.get(`${API}/markers/video/${videoId}`, { headers: getAuthHeader() });
+          setMarkers(mkRes.data);
+        } catch (e) { /* ignore */ }
       }
     }, 8000);
     return () => clearInterval(interval);
@@ -129,6 +145,47 @@ const VideoAnalysis = () => {
       }
     } finally {
       setAnalyzing(false);
+    }
+  };
+
+  const handleTrimmedAnalysis = async (type) => {
+    setAnalyzing(true);
+    try {
+      await axios.post(
+        `${API}/analysis/generate-trimmed`,
+        { video_id: videoId, analysis_type: type, trim_start: trimStart || null, trim_end: trimEnd || null },
+        { headers: getAuthHeader(), timeout: 600000 }
+      );
+      const analysesRes = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
+      setAnalyses(analysesRes.data);
+      setShowTrimPanel(false);
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Trimmed analysis failed.');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const handleDownloadClip = async (clipId, clipTitle) => {
+    setDownloadingClip(clipId);
+    try {
+      const response = await axios.get(`${API}/clips/${clipId}/extract`, {
+        headers: getAuthHeader(),
+        responseType: 'blob',
+        timeout: 600000
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'video/mp4' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${clipTitle || 'clip'}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('Failed to download clip. ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setDownloadingClip(null);
     }
   };
 
@@ -236,7 +293,8 @@ const VideoAnalysis = () => {
   const processingLabel = {
     'tactical': 'Tactical Analysis',
     'player_performance': 'Player Ratings',
-    'highlights': 'Highlights Detection'
+    'highlights': 'Highlights Detection',
+    'timeline_markers': 'Timeline Markers'
   };
 
   if (!videoMetadata) {
@@ -297,7 +355,7 @@ const VideoAnalysis = () => {
                     : 'Preparing video for AI analysis'}
                   {processingStatus.completed_types && processingStatus.completed_types.length > 0 && (
                     <span className="text-[#4ADE80] ml-2">
-                      — {processingStatus.completed_types.length}/3 done
+                      — {processingStatus.completed_types.length}/4 done
                     </span>
                   )}
                 </p>
@@ -312,7 +370,7 @@ const VideoAnalysis = () => {
             </div>
             {/* Show completed types */}
             <div className="flex items-center gap-4 mt-3">
-              {['tactical', 'player_performance', 'highlights'].map(type => {
+              {['tactical', 'player_performance', 'highlights', 'timeline_markers'].map(type => {
                 const isDone = processingStatus.completed_types?.includes(type);
                 const isCurrent = processingStatus.processing_current === type;
                 const isFailed = processingStatus.failed_types?.includes(type);
@@ -349,7 +407,7 @@ const VideoAnalysis = () => {
                   {processingStatus.processing_error && (processingStatus.processing_error.toLowerCase().includes('budget') || processingStatus.processing_error.toLowerCase().includes('quota') || processingStatus.processing_error.toLowerCase().includes('balance'))
                     ? 'AI budget limit reached. Add balance in Profile > Universal Key to continue.'
                     : processingStatus.completed_types?.length > 0
-                    ? `${processingStatus.completed_types.length}/3 analyses completed. ${processingStatus.failed_types?.length || 0} failed.`
+                    ? `${processingStatus.completed_types.length}/4 analyses completed. ${processingStatus.failed_types?.length || 0} failed.`
                     : processingStatus.processing_error || 'Some analyses may not have completed'}
                 </p>
               </div>
@@ -385,14 +443,51 @@ const VideoAnalysis = () => {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left: Video + Controls */}
           <div className="lg:col-span-8 space-y-4">
-            <div className="bg-black rounded-lg overflow-hidden">
+            <div className="bg-black rounded-lg overflow-hidden relative">
               <video ref={videoRef} data-testid="video-player" controls
                 className="w-full aspect-video"
                 src={`${API}/videos/${videoId}?token=${localStorage.getItem('token')}`}
                 preload="auto"
                 onTimeUpdate={(e) => setCurrentTimestamp(e.target.currentTime)}
+                onLoadedMetadata={(e) => setVideoDuration(e.target.duration || 0)}
               />
+              {/* AI Timeline Markers Bar */}
+              {markers.length > 0 && videoDuration > 0 && (
+                <div data-testid="timeline-markers-bar" className="absolute bottom-[52px] left-0 right-0 h-5 pointer-events-none z-10 px-[12px]">
+                  {markers.map(m => {
+                    const pct = (m.time / videoDuration) * 100;
+                    if (pct < 0 || pct > 100) return null;
+                    const colors = { goal: '#FFD700', shot: '#FF6B35', save: '#4ADE80', foul: '#EF4444', card: '#EF4444', substitution: '#A855F7', tactical: '#007AFF', chance: '#FFB800' };
+                    const color = colors[m.type] || '#888';
+                    return (
+                      <button key={m.id} data-testid={`marker-${m.id}`}
+                        title={`${formatTime(m.time)} — ${m.label}`}
+                        onClick={() => seekTo(m.time)}
+                        style={{ left: `${pct}%`, backgroundColor: color }}
+                        className="absolute top-0 w-2.5 h-5 -translate-x-1/2 pointer-events-auto cursor-pointer hover:scale-y-125 transition-transform opacity-90 hover:opacity-100"
+                      />
+                    );
+                  })}
+                </div>
+              )}
             </div>
+
+            {/* Markers Legend */}
+            {markers.length > 0 && (
+              <div data-testid="markers-legend" className="flex items-center gap-3 flex-wrap bg-white/[0.03] rounded-lg px-3 py-2">
+                <span className="text-[10px] text-[#666] uppercase tracking-wider">AI Markers:</span>
+                {[['goal', '#FFD700', 'Goals'], ['shot', '#FF6B35', 'Shots'], ['save', '#4ADE80', 'Saves'], ['foul', '#EF4444', 'Fouls'], ['tactical', '#007AFF', 'Tactical'], ['chance', '#FFB800', 'Chances']].map(([type, color, label]) => {
+                  const count = markers.filter(m => m.type === type).length;
+                  if (count === 0) return null;
+                  return (
+                    <span key={type} className="flex items-center gap-1 text-[10px] text-[#AAA]">
+                      <span className="w-2 h-2 rounded-sm inline-block" style={{ backgroundColor: color }} />
+                      {label} ({count})
+                    </span>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Clip & Annotation Toolbar */}
             <div className="flex items-center gap-3 flex-wrap">
@@ -415,7 +510,63 @@ const VideoAnalysis = () => {
                   {label}
                 </button>
               ))}
+              <div className="ml-auto">
+                <button data-testid="trim-analyze-btn"
+                  onClick={() => { setShowTrimPanel(!showTrimPanel); setTrimStart(0); setTrimEnd(Math.floor(videoDuration)); }}
+                  className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                    showTrimPanel ? 'bg-[#A855F7] text-white' : 'bg-white/5 text-[#888] hover:text-white hover:bg-white/10'
+                  }`}>
+                  Trim &amp; Analyze
+                </button>
+              </div>
             </div>
+
+            {/* Trim Panel */}
+            {showTrimPanel && (
+              <div data-testid="trim-panel" className="bg-[#111] rounded-lg border border-[#A855F7]/30 p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold" style={{ fontFamily: 'Space Grotesk' }}>Analyze Video Section</h3>
+                  <button data-testid="close-trim-panel" onClick={() => setShowTrimPanel(false)} className="text-[#666] hover:text-white">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                  </button>
+                </div>
+                <p className="text-xs text-[#888] mb-3">Select a time range to focus AI analysis on a specific section (e.g., first half, second half, a specific play).</p>
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <div>
+                    <label className="block text-[10px] text-[#666] uppercase tracking-wider mb-1">Start Time</label>
+                    <div className="flex gap-2">
+                      <input data-testid="trim-start-input" type="number" step="1" min="0" max={videoDuration}
+                        value={trimStart} onChange={(e) => setTrimStart(Math.max(0, parseFloat(e.target.value) || 0))}
+                        className="flex-1 bg-white/5 rounded-lg text-white px-3 py-2 text-sm border border-white/10 focus:border-[#A855F7] focus:outline-none" />
+                      <button data-testid="trim-start-now-btn" onClick={() => setTrimStart(Math.floor(currentTimestamp))}
+                        className="px-3 py-2 rounded-lg bg-white/10 text-[#A855F7] text-xs font-medium">Now</button>
+                    </div>
+                    <span className="text-[10px] text-[#555]">{formatTime(trimStart)}</span>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-[#666] uppercase tracking-wider mb-1">End Time</label>
+                    <div className="flex gap-2">
+                      <input data-testid="trim-end-input" type="number" step="1" min="0" max={videoDuration}
+                        value={trimEnd} onChange={(e) => setTrimEnd(Math.min(videoDuration, parseFloat(e.target.value) || 0))}
+                        className="flex-1 bg-white/5 rounded-lg text-white px-3 py-2 text-sm border border-white/10 focus:border-[#A855F7] focus:outline-none" />
+                      <button data-testid="trim-end-now-btn" onClick={() => setTrimEnd(Math.floor(currentTimestamp))}
+                        className="px-3 py-2 rounded-lg bg-white/10 text-[#A855F7] text-xs font-medium">Now</button>
+                    </div>
+                    <span className="text-[10px] text-[#555]">{formatTime(trimEnd)}</span>
+                  </div>
+                </div>
+                <p className="text-xs text-[#A855F7] mb-3">Duration: {formatTime(Math.max(0, trimEnd - trimStart))}</p>
+                <div className="flex gap-2">
+                  {['tactical', 'player_performance', 'highlights'].map(type => (
+                    <button key={type} data-testid={`trim-analyze-${type}-btn`}
+                      onClick={() => handleTrimmedAnalysis(type)} disabled={analyzing || trimStart >= trimEnd}
+                      className="flex-1 px-3 py-2.5 rounded-lg bg-[#A855F7] hover:bg-[#9333EA] text-white text-xs font-medium transition-colors disabled:opacity-40">
+                      {analyzing ? 'Analyzing...' : processingLabel[type] || type}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Clip Form */}
             {showClipForm && (
@@ -537,7 +688,8 @@ const VideoAnalysis = () => {
                   ['overview', 'Overview'],
                   ['tactical', 'Tactical'],
                   ['player_performance', 'Players'],
-                  ['highlights', 'Highlights']
+                  ['highlights', 'Highlights'],
+                  ['timeline', 'Timeline']
                 ].map(([key, label]) => (
                   <button key={key} data-testid={`${key}-tab-btn`} onClick={() => setActiveTab(key)}
                     className={`px-5 py-3.5 text-xs font-semibold uppercase tracking-wider transition-colors relative ${
@@ -545,8 +697,11 @@ const VideoAnalysis = () => {
                     }`}>
                     {label}
                     {activeTab === key && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#007AFF]" />}
-                    {key !== 'overview' && getAnalysis(key) && getAnalysis(key).status === 'completed' && (
+                    {key !== 'overview' && key !== 'timeline' && getAnalysis(key) && getAnalysis(key).status === 'completed' && (
                       <span className="ml-1.5 w-1.5 h-1.5 rounded-full bg-[#4ADE80] inline-block" />
+                    )}
+                    {key === 'timeline' && markers.length > 0 && (
+                      <span className="ml-1.5 w-1.5 h-1.5 rounded-full bg-[#FFD700] inline-block" />
                     )}
                   </button>
                 ))}
@@ -607,6 +762,41 @@ const VideoAnalysis = () => {
                           Start AI Processing
                         </button>
                         <p className="text-xs text-[#555] mt-2">Generates tactical analysis, player ratings, and highlights automatically</p>
+                      </div>
+                    )}
+                  </div>
+                ) : activeTab === 'timeline' ? (
+                  <div data-testid="timeline-content">
+                    <h3 className="text-base font-semibold mb-4" style={{ fontFamily: 'Space Grotesk' }}>AI Timeline Markers</h3>
+                    {markers.length === 0 ? (
+                      <div className="text-center py-12">
+                        <p className="text-sm text-[#666] mb-2">No timeline markers yet.</p>
+                        <p className="text-xs text-[#555]">Markers are automatically generated during AI processing.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5 max-h-[500px] overflow-y-auto">
+                        {markers.sort((a, b) => a.time - b.time).map(m => {
+                          const colors = { goal: '#FFD700', shot: '#FF6B35', save: '#4ADE80', foul: '#EF4444', card: '#EF4444', substitution: '#A855F7', tactical: '#007AFF', chance: '#FFB800' };
+                          const color = colors[m.type] || '#888';
+                          return (
+                            <div key={m.id} data-testid={`timeline-event-${m.id}`}
+                              className="flex items-center gap-3 px-3 py-2 bg-white/[0.03] rounded hover:bg-white/[0.06] transition-colors cursor-pointer"
+                              onClick={() => seekTo(m.time)}>
+                              <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: color }} />
+                              <span className="text-xs font-mono text-[#007AFF] bg-[#007AFF]/10 px-1.5 py-0.5 rounded min-w-[50px] text-center">
+                                {formatTime(m.time)}
+                              </span>
+                              <span className="text-[10px] text-[#666] uppercase w-16 flex-shrink-0">{m.type}</span>
+                              <span className="text-xs text-[#CCC] flex-1">{m.label}</span>
+                              <span className="text-[10px] text-[#555]">{m.team}</span>
+                              <div className="flex gap-0.5">
+                                {Array.from({ length: m.importance }, (_, i) => (
+                                  <span key={i} className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -713,11 +903,23 @@ const VideoAnalysis = () => {
                           })}
                         </div>
                       )}
-                      <button data-testid={`play-clip-${clip.id}-btn`} onClick={() => playClip(clip)}
-                        className="flex items-center gap-1 mt-2 text-[10px] text-[#007AFF] font-medium hover:text-[#0066DD]">
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                        Play
-                      </button>
+                      <div className="flex items-center gap-3 mt-2">
+                        <button data-testid={`play-clip-${clip.id}-btn`} onClick={() => playClip(clip)}
+                          className="flex items-center gap-1 text-[10px] text-[#007AFF] font-medium hover:text-[#0066DD]">
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                          Play
+                        </button>
+                        <button data-testid={`download-clip-${clip.id}-btn`}
+                          onClick={() => handleDownloadClip(clip.id, clip.title)}
+                          disabled={downloadingClip === clip.id}
+                          className="flex items-center gap-1 text-[10px] text-[#4ADE80] font-medium hover:text-[#6AEE9A] disabled:opacity-50">
+                          {downloadingClip === clip.id ? (
+                            <><div className="w-2.5 h-2.5 border border-[#4ADE80] border-t-transparent rounded-full animate-spin" /> Extracting...</>
+                          ) : (
+                            <><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> Download MP4</>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

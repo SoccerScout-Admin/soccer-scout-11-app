@@ -1199,7 +1199,7 @@ async def get_video_metadata(video_id: str, current_user: dict = Depends(get_cur
 
 async def run_auto_processing(video_id: str, user_id: str, only_types: list = None):
     """Background task: runs analysis types after upload. Saves each independently so partial completion survives restarts."""
-    all_types = ["tactical", "player_performance", "highlights"]
+    all_types = ["tactical", "player_performance", "highlights", "timeline_markers"]
     analysis_types = only_types if only_types else all_types
     
     try:
@@ -1262,7 +1262,7 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
                 chat = LlmChat(
                     api_key=EMERGENT_KEY,
                     session_id=f"auto-{video_id}-{analysis_type}",
-                    system_message="You are an expert soccer analyst. You will receive video samples from multiple points throughout the match (beginning, middle portions, and end). Analyze the full match based on these samples and provide detailed tactical insights, player assessments, and highlight identification."
+                    system_message="You are an expert soccer analyst. You will receive the full match video (compressed). Analyze the entire match and provide detailed tactical insights, player assessments, highlight identification, and precise timestamp markers for key events."
                 ).with_model("gemini", "gemini-3.1-pro-preview")
 
                 video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
@@ -1270,7 +1270,8 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
                 prompts = {
                     "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis covering:\n\n1. **Formations** - What formations are each team using? Any formation changes during the match?\n2. **Pressing Patterns** - How do teams press? High press, mid-block, or low block?\n3. **Build-up Play** - How do teams build from the back? Through the middle or wide?\n4. **Defensive Organization** - Shape, line height, compactness\n5. **Key Tactical Moments** - Pivotal tactical decisions that influenced the game\n6. **Recommendations** - Tactical improvements for both teams{roster_context}",
                     "player_performance": f"Analyze individual player performances in this soccer match between {match['team_home']} and {match['team_away']}. For each notable player provide:\n\n1. **Standout Performers** - Who were the best players and why?\n2. **Key Contributions** - Goals, assists, key passes, tackles\n3. **Work Rate & Positioning** - Movement, runs, defensive contribution\n4. **Decision Making** - Quality of decisions in key moments\n5. **Areas for Improvement** - What each key player could do better\n6. **Player Ratings** - Rate key players out of 10 with justification{roster_context}",
-                    "highlights": f"Identify and describe ALL key moments and highlights from this soccer match between {match['team_home']} and {match['team_away']}. Include:\n\n1. **Goals & Assists** - Describe each goal in detail with timestamps if visible\n2. **Near Misses** - Close chances that didn't result in goals\n3. **Outstanding Saves** - Goalkeeper heroics\n4. **Tactical Shifts** - Moments where the game's momentum changed\n5. **Key Fouls & Cards** - Significant disciplinary moments\n6. **Game-Changing Plays** - Moments that altered the match outcome\n\nFor each moment, indicate the approximate time if visible and rate its significance (1-5 stars).{roster_context}"
+                    "highlights": f"Identify and describe ALL key moments and highlights from this soccer match between {match['team_home']} and {match['team_away']}. Include:\n\n1. **Goals & Assists** - Describe each goal in detail with timestamps if visible\n2. **Near Misses** - Close chances that didn't result in goals\n3. **Outstanding Saves** - Goalkeeper heroics\n4. **Tactical Shifts** - Moments where the game's momentum changed\n5. **Key Fouls & Cards** - Significant disciplinary moments\n6. **Game-Changing Plays** - Moments that altered the match outcome\n\nFor each moment, indicate the approximate time if visible and rate its significance (1-5 stars).{roster_context}",
+                    "timeline_markers": f"Watch this entire soccer match between {match['team_home']} and {match['team_away']} and identify EVERY key event with precise timestamps.\n\nReturn ONLY a JSON array of event objects. Each object must have:\n- \"time\": timestamp in seconds (number)\n- \"type\": one of \"goal\", \"shot\", \"save\", \"foul\", \"card\", \"substitution\", \"tactical\", \"chance\"\n- \"label\": short description (max 60 chars)\n- \"team\": which team (\"{match['team_home']}\" or \"{match['team_away']}\" or \"neutral\")\n- \"importance\": 1-5 (5 = most important, e.g. goals)\n\nExample:\n[{{\"time\": 125, \"type\": \"goal\", \"label\": \"Header from corner kick\", \"team\": \"{match['team_home']}\", \"importance\": 5}}, {{\"time\": 340, \"type\": \"save\", \"label\": \"Goalkeeper dive saves 1v1\", \"team\": \"{match['team_away']}\", \"importance\": 4}}]\n\nReturn ONLY the JSON array, no other text.{roster_context}"
                 }
                 prompt = prompts.get(analysis_type, prompts["tactical"])
 
@@ -1289,6 +1290,39 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
                 }
                 await db.analyses.insert_one(analysis_doc)
                 logger.info(f"Auto-processing {video_id}: {analysis_type} COMPLETED")
+
+                # If timeline_markers, parse JSON and store individual markers
+                if analysis_type == "timeline_markers" and response:
+                    try:
+                        import json as json_mod
+                        # Strip markdown code fences if present
+                        clean = response.strip()
+                        if clean.startswith("```"):
+                            clean = clean.split("\n", 1)[1] if "\n" in clean else clean[3:]
+                            if clean.endswith("```"):
+                                clean = clean[:-3]
+                            clean = clean.strip()
+                        markers = json_mod.loads(clean)
+                        if isinstance(markers, list):
+                            await db.markers.delete_many({"video_id": video_id, "user_id": user_id, "auto_generated": True})
+                            for m in markers:
+                                marker_doc = {
+                                    "id": str(uuid.uuid4()),
+                                    "video_id": video_id,
+                                    "match_id": video["match_id"],
+                                    "user_id": user_id,
+                                    "time": float(m.get("time", 0)),
+                                    "type": m.get("type", "chance"),
+                                    "label": str(m.get("label", ""))[:100],
+                                    "team": m.get("team", "neutral"),
+                                    "importance": min(5, max(1, int(m.get("importance", 3)))),
+                                    "auto_generated": True,
+                                    "created_at": datetime.now(timezone.utc).isoformat()
+                                }
+                                await db.markers.insert_one(marker_doc)
+                            logger.info(f"Stored {len(markers)} AI timeline markers for video {video_id}")
+                    except Exception as parse_err:
+                        logger.warning(f"Failed to parse timeline markers JSON: {parse_err}")
 
             except Exception as e:
                 logger.error(f"Auto-processing {video_id}: {analysis_type} FAILED: {e}")
@@ -1337,11 +1371,9 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
-async def prepare_video_sample(video: dict) -> str:
-    """Extract a representative video sample for AI analysis.
-    For long match videos, extracts multiple segments from across the match
-    (start, mid-points, end) to give AI a comprehensive view of the full game.
-    Target: ~10 minutes of footage compressed to <500MB for Gemini File API."""
+async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: float = None) -> str:
+    """Compress entire video (or trimmed portion) to 360p for AI analysis.
+    For Gemini File API: target <1.5GB, 360p resolution."""
     import subprocess
     
     ext = video["original_filename"].split(".")[-1] if "." in video["original_filename"] else "mp4"
@@ -1355,31 +1387,18 @@ async def prepare_video_sample(video: dict) -> str:
             total_chunks = video.get("total_chunks", len(chunk_paths))
             chunk_size = video.get("chunk_size", CHUNK_SIZE)
 
-            # Strategy: write enough chunks to cover the full video duration
-            # For a 4GB file with 10MB chunks = 400 chunks, we need data at multiple points
-            # Pull first 15 chunks + chunks at 25/50/75% + last 3 for moov atom
-            first_n = min(15, total_chunks)  # ~150MB start
-            last_n = 3  # moov is typically in last 1-2 chunks
-            
-            # Additional mid-video chunks for seeking to different match segments
-            mid_chunks = set()
-            for pct in [0.25, 0.50, 0.75]:
-                center = int(total_chunks * pct)
-                for offset in range(min(8, total_chunks)):  # 8 chunks (~80MB) per seek point
-                    idx = center + offset
-                    if first_n <= idx < total_chunks - last_n:
-                        mid_chunks.add(idx)
-            
-            logger.info(f"Creating sparse video: first {first_n} + {len(mid_chunks)} mid + last {last_n} chunks of {total_chunks}")
+            # Write ALL available chunks to assemble the full video
+            logger.info(f"Assembling full video from {total_chunks} chunks")
             
             with open(raw_path, 'wb') as f:
-                # Write first chunks sequentially
-                for i in range(first_n):
+                for i in range(total_chunks):
                     path = chunk_paths.get(str(i))
                     if not path:
+                        f.write(b'\x00' * chunk_size)
                         continue
                     backend = chunk_backends.get(str(i), "storage")
                     if backend == "filesystem" and not os.path.exists(path):
+                        f.write(b'\x00' * chunk_size)
                         continue
                     chunk_info = {"backend": backend, "path": path}
                     try:
@@ -1389,210 +1408,63 @@ async def prepare_video_sample(video: dict) -> str:
                     except Exception as e:
                         logger.warning(f"  Skipping chunk {i}: {str(e)[:60]}")
                         f.write(b'\x00' * chunk_size)
-                
-                # Write mid-video chunks at correct offsets for seeking
-                for i in sorted(mid_chunks):
-                    target_offset = i * chunk_size
-                    f.seek(target_offset)
-                    path = chunk_paths.get(str(i))
-                    if not path:
-                        continue
-                    backend = chunk_backends.get(str(i), "storage")
-                    if backend == "filesystem" and not os.path.exists(path):
-                        continue
-                    chunk_info = {"backend": backend, "path": path}
-                    try:
-                        data = await read_chunk_data(video["id"], i, chunk_info)
-                        f.write(data)
-                        del data
-                    except Exception as e:
-                        logger.warning(f"  Skipping mid chunk {i}: {str(e)[:60]}")
-                
-                # Seek to correct offset for last chunks
-                last_start_idx = max(first_n, total_chunks - last_n)
-                target_offset = last_start_idx * chunk_size
-                f.seek(target_offset)
-                
-                for i in range(last_start_idx, total_chunks):
-                    path = chunk_paths.get(str(i))
-                    if not path:
-                        continue
-                    backend = chunk_backends.get(str(i), "storage")
-                    if backend == "filesystem" and not os.path.exists(path):
-                        continue
-                    chunk_info = {"backend": backend, "path": path}
-                    try:
-                        data = await read_chunk_data(video["id"], i, chunk_info)
-                        f.write(data)
-                        del data
-                    except Exception as e:
-                        logger.warning(f"  Skipping chunk {i}: {str(e)[:60]}")
 
             raw_size = os.path.getsize(raw_path)
-            logger.info(f"Created sparse video: {raw_size/(1024*1024*1024):.2f}GB")
+            logger.info(f"Assembled full video: {raw_size/(1024*1024*1024):.2f}GB")
         else:
             data, _ = await run_in_threadpool(get_object_sync, video["storage_path"])
             with open(raw_path, 'wb') as f:
                 f.write(data)
             del data
 
-        # First, probe the video duration
-        probe_cmd = [
-            "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", raw_path
-        ]
-        probe_result = await run_in_threadpool(
-            subprocess.run, probe_cmd,
-            capture_output=True, text=True, timeout=60
-        )
+        # Build ffmpeg command: compress entire video to 360p
+        ffmpeg_cmd = ["ffmpeg", "-y"]
         
-        duration = 0
-        if probe_result.returncode == 0 and probe_result.stdout.strip():
-            try:
-                duration = float(probe_result.stdout.strip())
-            except ValueError:
-                pass
-        logger.info(f"Video duration: {duration:.0f}s ({duration/60:.1f}min)")
+        # Trim support
+        if trim_start is not None and trim_start > 0:
+            ffmpeg_cmd += ["-ss", str(int(trim_start))]
+        ffmpeg_cmd += ["-i", raw_path]
+        if trim_end is not None and trim_end > 0:
+            duration = trim_end - (trim_start or 0)
+            ffmpeg_cmd += ["-t", str(int(duration))]
+        
+        ffmpeg_cmd += [
+            "-vf", "scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "35",
+            "-r", "12",
+            "-c:a", "aac",
+            "-b:a", "32k",
+            "-ac", "1",
+            "-movflags", "+faststart",
+            clip_path
+        ]
 
-        if duration > 120:
-            # Long video: extract multiple segments from across the match
-            # Take 2-minute segments from start, 25%, 50%, 75%, and end
-            segment_duration = 120  # 2 minutes each
-            num_segments = 5
-            total_sample = segment_duration * num_segments  # ~10 minutes total
-            
-            # Calculate segment start points spread across the video
-            segment_starts = []
-            if duration > total_sample:
-                # Spread evenly: 0%, 25%, 50%, 75%, and near-end
-                for i in range(num_segments):
-                    pct = i / (num_segments - 1) if num_segments > 1 else 0
-                    start = pct * (duration - segment_duration)
-                    segment_starts.append(max(0, start))
-            else:
-                # Video shorter than total sample — just take the whole thing
-                segment_starts = [0]
-                segment_duration = min(duration, 600)
-            
-            logger.info(f"Extracting {len(segment_starts)} segments of {segment_duration}s each from {duration:.0f}s video")
-            
-            # Build ffmpeg filter to concatenate segments
-            segment_files = []
-            for idx, start in enumerate(segment_starts):
-                seg_path = tempfile.mktemp(suffix=f"_seg{idx}.mp4", dir="/var/video_chunks")
-                seg_cmd = [
-                    "ffmpeg", "-y",
-                    "-ss", str(int(start)),
-                    "-i", raw_path,
-                    "-t", str(segment_duration),
-                    "-c:v", "libx264",
-                    "-preset", "ultrafast",
-                    "-crf", "30",
-                    "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease",
-                    "-c:a", "aac",
-                    "-b:a", "48k",
-                    "-movflags", "+faststart",
-                    seg_path
-                ]
-                seg_result = await run_in_threadpool(
-                    subprocess.run, seg_cmd,
-                    capture_output=True, text=True, timeout=300
-                )
-                if seg_result.returncode == 0 and os.path.exists(seg_path) and os.path.getsize(seg_path) > 1000:
-                    segment_files.append(seg_path)
-                    logger.info(f"  Segment {idx+1}/{len(segment_starts)}: {start:.0f}s, {os.path.getsize(seg_path)/(1024*1024):.1f}MB")
-                else:
-                    logger.warning(f"  Segment {idx+1} failed at {start:.0f}s")
-                    if os.path.exists(seg_path):
-                        os.unlink(seg_path)
-            
-            # Delete sparse file to free disk
-            if os.path.exists(raw_path):
-                os.unlink(raw_path)
-                logger.info("Deleted sparse video file")
-            
-            if len(segment_files) == 0:
-                raise Exception("Failed to extract any video segments")
-            
-            if len(segment_files) == 1:
-                # Only one segment worked, use it directly
-                os.rename(segment_files[0], clip_path)
-            else:
-                # Concatenate segments
-                concat_list_path = tempfile.mktemp(suffix=".txt", dir="/var/video_chunks")
-                with open(concat_list_path, 'w') as f:
-                    for seg in segment_files:
-                        f.write(f"file '{seg}'\n")
-                
-                concat_cmd = [
-                    "ffmpeg", "-y",
-                    "-f", "concat", "-safe", "0",
-                    "-i", concat_list_path,
-                    "-c", "copy",
-                    "-movflags", "+faststart",
-                    clip_path
-                ]
-                concat_result = await run_in_threadpool(
-                    subprocess.run, concat_cmd,
-                    capture_output=True, text=True, timeout=300
-                )
-                
-                # Cleanup segment files
-                for seg in segment_files:
-                    if os.path.exists(seg):
-                        os.unlink(seg)
-                if os.path.exists(concat_list_path):
-                    os.unlink(concat_list_path)
-                
-                if concat_result.returncode != 0:
-                    logger.error(f"Concat failed: {concat_result.stderr[-300:]}")
-                    raise Exception("Failed to concatenate video segments")
-            
-            if os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
-                clip_size = os.path.getsize(clip_path)
-                logger.info(f"Created {clip_size/(1024*1024):.1f}MB multi-segment clip ({len(segment_files)} segments)")
-                return clip_path
-            else:
-                raise Exception("Failed to create video sample")
+        logger.info(f"Compressing video to 360p/12fps (trim={trim_start}-{trim_end})")
+        result = await run_in_threadpool(
+            subprocess.run, ffmpeg_cmd,
+            capture_output=True, text=True, timeout=1800  # 30min timeout for long videos
+        )
+
+        # Delete raw file to free disk
+        if os.path.exists(raw_path):
+            os.unlink(raw_path)
+            logger.info("Deleted raw video file")
+
+        if result.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
+            clip_size = os.path.getsize(clip_path)
+            logger.info(f"Created {clip_size/(1024*1024):.1f}MB compressed video for AI")
+            return clip_path
         else:
-            # Short video (<2min): extract entire thing or up to 2 minutes
-            extract_duration = min(duration, 120) if duration > 0 else 120
-            ffmpeg_cmd = [
-                "ffmpeg", "-y",
-                "-i", raw_path,
-                "-t", str(int(extract_duration)),
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-crf", "28",
-                "-c:a", "aac",
-                "-b:a", "64k",
-                "-movflags", "+faststart",
-                clip_path
-            ]
-
-            result = await run_in_threadpool(
-                subprocess.run, ffmpeg_cmd,
-                capture_output=True, text=True, timeout=300
-            )
-
-            # Delete sparse file immediately to free disk
-            if os.path.exists(raw_path):
-                os.unlink(raw_path)
-                logger.info("Deleted sparse video file")
-
-            if result.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
-                clip_size = os.path.getsize(clip_path)
-                logger.info(f"Created {clip_size/(1024*1024):.1f}MB video clip via ffmpeg")
-                return clip_path
+            stderr = result.stderr[-500:] if result.stderr else ""
+            if "moov atom not found" in stderr:
+                raise Exception("Video data incomplete — moov atom missing. Re-upload needed.")
+            elif "Invalid data found" in stderr:
+                raise Exception("Not a valid video format. Re-upload a valid video file.")
             else:
-                stderr = result.stderr[-500:] if result.stderr else ""
-                if "moov atom not found" in stderr:
-                    raise Exception("Video data incomplete — moov atom (file index) missing. The video needs to be re-uploaded.")
-                elif "Invalid data found" in stderr:
-                    raise Exception("File is not a valid video format. Please re-upload a valid video file.")
-                else:
-                    logger.error(f"ffmpeg clip failed: rc={result.returncode}, stderr={stderr}")
-                    raise Exception("Failed to create video clip")
+                logger.error(f"ffmpeg compress failed: rc={result.returncode}, stderr={stderr}")
+                raise Exception("Failed to compress video for analysis")
 
     except Exception:
         for p in [raw_path, clip_path]:
@@ -1658,7 +1530,7 @@ async def reprocess_video(video_id: str, current_user: dict = Depends(get_curren
     # Delete only failed analyses (keep completed ones)
     await db.analyses.delete_many({"video_id": video_id, "user_id": current_user["id"], "status": "failed"})
     
-    remaining = [t for t in ["tactical", "player_performance", "highlights"] if t not in completed]
+    remaining = [t for t in ["tactical", "player_performance", "highlights", "timeline_markers"] if t not in completed]
     
     if not remaining:
         return {"status": "already_complete", "completed_types": list(completed)}
@@ -1809,6 +1681,183 @@ async def download_clip_info(clip_id: str, current_user: dict = Depends(get_curr
         "download_instructions": "Use the start_time and end_time to extract the clip from the video"
     }
 
+# ===== Timeline Markers =====
+
+@api_router.get("/markers/video/{video_id}")
+async def get_markers(video_id: str, current_user: dict = Depends(get_current_user)):
+    markers = await db.markers.find({"video_id": video_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(500)
+    return markers
+
+# ===== Clip Video Download (actual MP4 extraction) =====
+
+@api_router.get("/clips/{clip_id}/extract")
+async def extract_clip_video(clip_id: str, current_user: dict = Depends(get_current_user)):
+    """Extract actual video segment for a clip using ffmpeg and return as streaming MP4"""
+    import subprocess
+    
+    clip = await db.clips.find_one({"id": clip_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    video = await db.videos.find_one({"id": clip["video_id"], "is_deleted": False}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    raw_path = None
+    out_path = tempfile.mktemp(suffix=".mp4", dir="/var/video_chunks")
+    
+    try:
+        # Assemble source video
+        if video.get("is_chunked"):
+            raw_path = tempfile.mktemp(suffix=".mp4", dir="/var/video_chunks")
+            chunk_paths = video.get("chunk_paths", {})
+            chunk_backends = video.get("chunk_backends", {})
+            total_chunks = video.get("total_chunks", len(chunk_paths))
+            chunk_size = video.get("chunk_size", CHUNK_SIZE)
+            
+            with open(raw_path, 'wb') as f:
+                for i in range(total_chunks):
+                    path = chunk_paths.get(str(i))
+                    if not path:
+                        f.write(b'\x00' * chunk_size)
+                        continue
+                    backend = chunk_backends.get(str(i), "storage")
+                    if backend == "filesystem" and not os.path.exists(path):
+                        f.write(b'\x00' * chunk_size)
+                        continue
+                    try:
+                        chunk_info = {"backend": backend, "path": path}
+                        data = await read_chunk_data(video["id"], i, chunk_info)
+                        f.write(data)
+                        del data
+                    except Exception:
+                        f.write(b'\x00' * chunk_size)
+        else:
+            raw_path = tempfile.mktemp(suffix=".mp4", dir="/var/video_chunks")
+            data, _ = await run_in_threadpool(get_object_sync, video["storage_path"])
+            with open(raw_path, 'wb') as f:
+                f.write(data)
+            del data
+        
+        # Extract clip with ffmpeg
+        duration = clip["end_time"] - clip["start_time"]
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(clip["start_time"]),
+            "-i", raw_path,
+            "-t", str(duration),
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            out_path
+        ]
+        result = await run_in_threadpool(subprocess.run, ffmpeg_cmd, capture_output=True, text=True, timeout=300)
+        
+        if raw_path and os.path.exists(raw_path):
+            os.unlink(raw_path)
+        
+        if result.returncode != 0 or not os.path.exists(out_path):
+            raise HTTPException(status_code=500, detail="Failed to extract clip")
+        
+        safe_title = "".join(c for c in clip["title"] if c.isalnum() or c in " -_").strip()[:50] or "clip"
+        
+        async def stream_and_cleanup():
+            try:
+                with open(out_path, 'rb') as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                if os.path.exists(out_path):
+                    os.unlink(out_path)
+        
+        return StreamingResponse(
+            stream_and_cleanup(),
+            media_type="video/mp4",
+            headers={"Content-Disposition": f'attachment; filename="{safe_title}.mp4"'}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        for p in [raw_path, out_path]:
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+        raise HTTPException(status_code=500, detail=f"Clip extraction failed: {str(e)[:200]}")
+
+# ===== Trimmed Analysis =====
+
+class TrimmedAnalysisRequest(BaseModel):
+    video_id: str
+    analysis_type: str
+    trim_start: Optional[float] = None
+    trim_end: Optional[float] = None
+
+@api_router.post("/analysis/generate-trimmed")
+async def generate_trimmed_analysis(input: TrimmedAnalysisRequest, current_user: dict = Depends(get_current_user)):
+    """Generate analysis on a trimmed section of video"""
+    video = await db.videos.find_one({"id": input.video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    match = await db.matches.find_one({"id": video["match_id"]}, {"_id": 0})
+
+    roster = await db.players.find({"match_id": video["match_id"]}, {"_id": 0}).to_list(100)
+    roster_context = ""
+    if roster:
+        roster_lines = [f"#{p.get('number', '?')} {p['name']} ({p.get('position', '')}) - {p.get('team', '')}" for p in roster]
+        roster_context = "\n\nKnown Players:\n" + "\n".join(roster_lines)
+
+    tmp_path = None
+    try:
+        tmp_path = await prepare_video_sample(video, trim_start=input.trim_start, trim_end=input.trim_end)
+
+        chat = LlmChat(
+            api_key=EMERGENT_KEY,
+            session_id=f"trim-{input.video_id}-{input.analysis_type}",
+            system_message="You are an expert soccer analyst. Analyze the provided video segment and provide detailed insights."
+        ).with_model("gemini", "gemini-3.1-pro-preview")
+
+        video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
+        trim_label = ""
+        if input.trim_start is not None or input.trim_end is not None:
+            s = int(input.trim_start or 0)
+            e = int(input.trim_end or 0)
+            trim_label = f" (analyzing from {s//60}:{s%60:02d} to {e//60}:{e%60:02d})"
+
+        prompts = {
+            "tactical": f"Analyze this soccer match segment{trim_label} between {match['team_home']} and {match['team_away']}. Provide tactical analysis.{roster_context}",
+            "player_performance": f"Analyze player performances in this segment{trim_label} between {match['team_home']} and {match['team_away']}.{roster_context}",
+            "highlights": f"Identify key moments in this segment{trim_label} between {match['team_home']} and {match['team_away']}.{roster_context}",
+        }
+        prompt = prompts.get(input.analysis_type, prompts["tactical"])
+        response = await chat.send_message(UserMessage(text=prompt, file_contents=[video_file]))
+
+        await db.analyses.delete_many({"video_id": input.video_id, "user_id": current_user["id"], "analysis_type": input.analysis_type})
+
+        analysis_doc = {
+            "id": str(uuid.uuid4()),
+            "video_id": input.video_id,
+            "match_id": video["match_id"],
+            "user_id": current_user["id"],
+            "analysis_type": input.analysis_type,
+            "content": response,
+            "status": "completed",
+            "trim_start": input.trim_start,
+            "trim_end": input.trim_end,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.analyses.insert_one(analysis_doc)
+        return {"analysis_id": analysis_doc["id"], "content": response, "status": "completed"}
+    except Exception as e:
+        logger.error(f"Trimmed analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)[:200]}")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
 
 app.include_router(api_router)
 
@@ -1845,7 +1894,7 @@ async def resume_interrupted_processing():
             # Delete failed ones so they can be retried
             await db.analyses.delete_many({"video_id": video_id, "status": "failed"})
 
-            remaining = [t for t in ["tactical", "player_performance", "highlights"] if t not in completed]
+            remaining = [t for t in ["tactical", "player_performance", "highlights", "timeline_markers"] if t not in completed]
 
             if remaining:
                 logger.info(f"Resuming processing for video {video_id}: {remaining} (already done: {list(completed)})")
