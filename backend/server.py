@@ -182,7 +182,7 @@ async def store_chunk(video_id: str, user_id: str, chunk_index: int, data: bytes
             storage_breaker.record_failure()
             logger.warning(f"Object Storage failed (breaker: {storage_breaker.consecutive_failures}), falling back to filesystem: {str(e)[:80]}")
     else:
-        logger.info(f"Circuit breaker OPEN - using filesystem directly")
+        logger.info("Circuit breaker OPEN - using filesystem directly")
 
     # Fallback: store on local filesystem (/var is on 84GB overlay, NOT the 9.8GB /app partition)
     video_dir = os.path.join(CHUNK_STORAGE_DIR, video_id)
@@ -1047,6 +1047,20 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
             logger.error(f"Auto-processing: match for video {video_id} not found")
             return
 
+        # Fetch roster data for richer AI prompts
+        roster = await db.players.find({"match_id": video["match_id"]}, {"_id": 0}).to_list(100)
+        roster_context = ""
+        if roster:
+            roster_lines = []
+            for p in roster:
+                line = f"#{p.get('number', '?')} {p['name']}"
+                if p.get('position'):
+                    line += f" ({p['position']})"
+                if p.get('team'):
+                    line += f" - {p['team']}"
+                roster_lines.append(line)
+            roster_context = "\n\n**Known Players on the Roster:**\n" + "\n".join(roster_lines) + "\n\nReference these players by name and number in your analysis when you can identify them."
+
         # Prepare video sample for AI analysis
         tmp_path = None
         try:
@@ -1083,9 +1097,9 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
                 video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
 
                 prompts = {
-                    "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis covering:\n\n1. **Formations** - What formations are each team using? Any formation changes during the match?\n2. **Pressing Patterns** - How do teams press? High press, mid-block, or low block?\n3. **Build-up Play** - How do teams build from the back? Through the middle or wide?\n4. **Defensive Organization** - Shape, line height, compactness\n5. **Key Tactical Moments** - Pivotal tactical decisions that influenced the game\n6. **Recommendations** - Tactical improvements for both teams",
-                    "player_performance": f"Analyze individual player performances in this soccer match between {match['team_home']} and {match['team_away']}. For each notable player provide:\n\n1. **Standout Performers** - Who were the best players and why?\n2. **Key Contributions** - Goals, assists, key passes, tackles\n3. **Work Rate & Positioning** - Movement, runs, defensive contribution\n4. **Decision Making** - Quality of decisions in key moments\n5. **Areas for Improvement** - What each key player could do better\n6. **Player Ratings** - Rate key players out of 10 with justification",
-                    "highlights": f"Identify and describe ALL key moments and highlights from this soccer match between {match['team_home']} and {match['team_away']}. Include:\n\n1. **Goals & Assists** - Describe each goal in detail with timestamps if visible\n2. **Near Misses** - Close chances that didn't result in goals\n3. **Outstanding Saves** - Goalkeeper heroics\n4. **Tactical Shifts** - Moments where the game's momentum changed\n5. **Key Fouls & Cards** - Significant disciplinary moments\n6. **Game-Changing Plays** - Moments that altered the match outcome\n\nFor each moment, indicate the approximate time if visible and rate its significance (1-5 stars)."
+                    "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis covering:\n\n1. **Formations** - What formations are each team using? Any formation changes during the match?\n2. **Pressing Patterns** - How do teams press? High press, mid-block, or low block?\n3. **Build-up Play** - How do teams build from the back? Through the middle or wide?\n4. **Defensive Organization** - Shape, line height, compactness\n5. **Key Tactical Moments** - Pivotal tactical decisions that influenced the game\n6. **Recommendations** - Tactical improvements for both teams{roster_context}",
+                    "player_performance": f"Analyze individual player performances in this soccer match between {match['team_home']} and {match['team_away']}. For each notable player provide:\n\n1. **Standout Performers** - Who were the best players and why?\n2. **Key Contributions** - Goals, assists, key passes, tackles\n3. **Work Rate & Positioning** - Movement, runs, defensive contribution\n4. **Decision Making** - Quality of decisions in key moments\n5. **Areas for Improvement** - What each key player could do better\n6. **Player Ratings** - Rate key players out of 10 with justification{roster_context}",
+                    "highlights": f"Identify and describe ALL key moments and highlights from this soccer match between {match['team_home']} and {match['team_away']}. Include:\n\n1. **Goals & Assists** - Describe each goal in detail with timestamps if visible\n2. **Near Misses** - Close chances that didn't result in goals\n3. **Outstanding Saves** - Goalkeeper heroics\n4. **Tactical Shifts** - Moments where the game's momentum changed\n5. **Key Fouls & Cards** - Significant disciplinary moments\n6. **Game-Changing Plays** - Moments that altered the match outcome\n\nFor each moment, indicate the approximate time if visible and rate its significance (1-5 stars).{roster_context}"
                 }
                 prompt = prompts.get(analysis_type, prompts["tactical"])
 
@@ -1247,9 +1261,9 @@ async def prepare_video_sample(video: dict) -> str:
             return clip_path
         else:
             logger.error(f"ffmpeg clip failed: rc={result.returncode}, stderr={result.stderr[-300:]}")
-            raise Exception(f"Failed to create video clip")
+            raise Exception("Failed to create video clip")
 
-    except Exception as e:
+    except Exception:
         for p in [raw_path, clip_path]:
             if p and os.path.exists(p):
                 try:
@@ -1334,6 +1348,13 @@ async def generate_analysis(input: AnalysisRequest, current_user: dict = Depends
 
     match = await db.matches.find_one({"id": video["match_id"]}, {"_id": 0})
 
+    # Fetch roster for richer prompts
+    roster = await db.players.find({"match_id": video["match_id"]}, {"_id": 0}).to_list(100)
+    roster_context = ""
+    if roster:
+        roster_lines = [f"#{p.get('number', '?')} {p['name']} ({p.get('position', '')}) - {p.get('team', '')}" for p in roster]
+        roster_context = "\n\nKnown Players:\n" + "\n".join(roster_lines)
+
     tmp_path = None
     try:
         tmp_path = await prepare_video_sample(video)
@@ -1347,9 +1368,9 @@ async def generate_analysis(input: AnalysisRequest, current_user: dict = Depends
         video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
 
         prompts = {
-            "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis.",
-            "player_performance": f"Analyze individual player performances in this match between {match['team_home']} and {match['team_away']}.",
-            "highlights": f"Identify key moments and highlights from this match between {match['team_home']} and {match['team_away']}."
+            "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis.{roster_context}",
+            "player_performance": f"Analyze individual player performances in this match between {match['team_home']} and {match['team_away']}.{roster_context}",
+            "highlights": f"Identify key moments and highlights from this match between {match['team_home']} and {match['team_away']}.{roster_context}"
         }
         prompt = prompts.get(input.analysis_type, prompts["tactical"])
         response = await chat.send_message(UserMessage(text=prompt, file_contents=[video_file]))

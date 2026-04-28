@@ -12,10 +12,13 @@ const VideoAnalysis = () => {
   const [analyses, setAnalyses] = useState([]);
   const [annotations, setAnnotations] = useState([]);
   const [clips, setClips] = useState([]);
+  const [players, setPlayers] = useState([]);
   const [activeTab, setActiveTab] = useState('overview');
   const [analyzing, setAnalyzing] = useState(false);
   const [annotationMode, setAnnotationMode] = useState(null);
   const [annotationText, setAnnotationText] = useState('');
+  const [selectedPlayerId, setSelectedPlayerId] = useState('');
+  const [selectedClipPlayerIds, setSelectedClipPlayerIds] = useState([]);
   const [showAnnotationForm, setShowAnnotationForm] = useState(false);
   const [showClipForm, setShowClipForm] = useState(false);
   const [clipFormData, setClipFormData] = useState({ title: '', start_time: 0, end_time: 0, clip_type: 'highlight', description: '' });
@@ -67,6 +70,11 @@ const VideoAnalysis = () => {
         if (metaRes.data.match_id) {
           const matchRes = await axios.get(`${API}/matches/${metaRes.data.match_id}`, { headers: getAuthHeader() });
           setMatch(matchRes.data);
+          // Fetch players for this match
+          try {
+            const playersRes = await axios.get(`${API}/players/match/${metaRes.data.match_id}`, { headers: getAuthHeader() });
+            setPlayers(playersRes.data);
+          } catch (e) { console.error('Failed to fetch players:', e); }
         }
       } catch (err) {
         console.error('Failed to load data:', err);
@@ -112,7 +120,13 @@ const VideoAnalysis = () => {
       setAnalyses(analysesRes.data);
     } catch (err) {
       console.error('Analysis failed:', err);
-      alert(err.response?.data?.detail || 'Analysis failed. Please try again.');
+      const errMsg = err.response?.data?.detail || err.message || 'Analysis failed.';
+      const isBudget = errMsg.toLowerCase().includes('budget') || errMsg.toLowerCase().includes('quota') || errMsg.toLowerCase().includes('balance') || errMsg.toLowerCase().includes('limit');
+      if (isBudget) {
+        alert('AI analysis budget limit reached. Please go to Profile > Universal Key > Add Balance to add more credits, or enable auto top-up.');
+      } else {
+        alert(errMsg);
+      }
     } finally {
       setAnalyzing(false);
     }
@@ -121,11 +135,14 @@ const VideoAnalysis = () => {
   const handleAddAnnotation = async () => {
     if (!annotationText.trim() || !annotationMode) return;
     try {
-      await axios.post(`${API}/annotations`, {
+      const payload = {
         video_id: videoId, timestamp: currentTimestamp,
         annotation_type: annotationMode, content: annotationText
-      }, { headers: getAuthHeader() });
+      };
+      if (selectedPlayerId) payload.player_id = selectedPlayerId;
+      await axios.post(`${API}/annotations`, payload, { headers: getAuthHeader() });
       setAnnotationText('');
+      setSelectedPlayerId('');
       setShowAnnotationForm(false);
       setAnnotationMode(null);
       const res = await axios.get(`${API}/annotations/video/${videoId}`, { headers: getAuthHeader() });
@@ -148,9 +165,12 @@ const VideoAnalysis = () => {
     if (!clipFormData.title.trim()) return alert('Please enter a clip title');
     if (clipFormData.start_time >= clipFormData.end_time) return alert('End time must be after start time');
     try {
-      await axios.post(`${API}/clips`, { video_id: videoId, ...clipFormData }, { headers: getAuthHeader() });
+      const payload = { video_id: videoId, ...clipFormData };
+      if (selectedClipPlayerIds.length > 0) payload.player_ids = selectedClipPlayerIds;
+      await axios.post(`${API}/clips`, payload, { headers: getAuthHeader() });
       setShowClipForm(false);
       setClipFormData({ title: '', start_time: 0, end_time: 0, clip_type: 'highlight', description: '' });
+      setSelectedClipPlayerIds([]);
       const res = await axios.get(`${API}/clips/video/${videoId}`, { headers: getAuthHeader() });
       setClips(res.data);
     } catch (err) {
@@ -326,7 +346,9 @@ const VideoAnalysis = () => {
               <div>
                 <p className="text-sm text-[#EF4444]">Processing encountered an issue</p>
                 <p className="text-xs text-[#888] mt-0.5">
-                  {processingStatus.completed_types?.length > 0
+                  {processingStatus.processing_error && (processingStatus.processing_error.toLowerCase().includes('budget') || processingStatus.processing_error.toLowerCase().includes('quota') || processingStatus.processing_error.toLowerCase().includes('balance'))
+                    ? 'AI budget limit reached. Add balance in Profile > Universal Key to continue.'
+                    : processingStatus.completed_types?.length > 0
                     ? `${processingStatus.completed_types.length}/3 analyses completed. ${processingStatus.failed_types?.length || 0} failed.`
                     : processingStatus.processing_error || 'Some analyses may not have completed'}
                 </p>
@@ -423,6 +445,27 @@ const VideoAnalysis = () => {
                   <textarea data-testid="clip-description-input" placeholder="Description (optional)" value={clipFormData.description}
                     onChange={(e) => setClipFormData({ ...clipFormData, description: e.target.value })}
                     className="w-full bg-white/5 rounded-lg text-white px-3 py-2.5 text-sm border border-white/10 focus:border-[#007AFF] focus:outline-none resize-none" rows="2" />
+                  {players.length > 0 && (
+                    <div>
+                      <label className="block text-[10px] text-[#666] uppercase tracking-wider mb-1">Tag Players (optional)</label>
+                      <div className="flex flex-wrap gap-1.5 bg-white/5 rounded-lg p-2 border border-white/10 max-h-24 overflow-y-auto">
+                        {players.map(p => {
+                          const isSelected = selectedClipPlayerIds.includes(p.id);
+                          return (
+                            <button key={p.id} type="button" data-testid={`clip-player-tag-${p.id}`}
+                              onClick={() => setSelectedClipPlayerIds(
+                                isSelected ? selectedClipPlayerIds.filter(id => id !== p.id) : [...selectedClipPlayerIds, p.id]
+                              )}
+                              className={`px-2 py-1 text-[10px] font-medium transition-colors ${
+                                isSelected ? 'bg-[#007AFF] text-white' : 'bg-white/5 text-[#888] hover:text-white hover:bg-white/10'
+                              }`}>
+                              #{p.number || '?'} {p.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   <button data-testid="save-clip-btn" onClick={handleCreateClip}
                     className="w-full bg-[#007AFF] hover:bg-[#0066DD] text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors">
                     Save Clip
@@ -448,6 +491,19 @@ const VideoAnalysis = () => {
                   onChange={(e) => setAnnotationText(e.target.value)}
                   className="w-full bg-white/5 rounded-lg text-white px-3 py-2.5 mb-3 text-sm border border-white/10 focus:border-[#007AFF] focus:outline-none resize-none" rows="3"
                   placeholder="Enter your annotation..." />
+                {players.length > 0 && (
+                  <div className="mb-3">
+                    <label className="block text-[10px] text-[#666] uppercase tracking-wider mb-1">Tag Player (optional)</label>
+                    <select data-testid="annotation-player-select" value={selectedPlayerId}
+                      onChange={(e) => setSelectedPlayerId(e.target.value)}
+                      className="w-full bg-white/5 rounded-lg text-white px-3 py-2 text-sm border border-white/10 focus:border-[#007AFF] focus:outline-none">
+                      <option value="">No player</option>
+                      {players.map(p => (
+                        <option key={p.id} value={p.id}>#{p.number || '?'} {p.name} ({p.team})</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <button data-testid="save-annotation-btn" onClick={handleAddAnnotation}
                   className="bg-[#007AFF] hover:bg-[#0066DD] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
                   Save Annotation
@@ -626,6 +682,18 @@ const VideoAnalysis = () => {
                         </button>
                       </div>
                       {clip.description && <p className="text-[10px] text-[#555] mt-1 line-clamp-2">{clip.description}</p>}
+                      {clip.player_ids && clip.player_ids.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {clip.player_ids.map(pid => {
+                            const player = players.find(p => p.id === pid);
+                            return player ? (
+                              <span key={pid} className="text-[9px] text-[#007AFF] bg-[#007AFF]/10 px-1 py-0.5 rounded">
+                                #{player.number || '?'} {player.name}
+                              </span>
+                            ) : null;
+                          })}
+                        </div>
+                      )}
                       <button data-testid={`play-clip-${clip.id}-btn`} onClick={() => playClip(clip)}
                         className="flex items-center gap-1 mt-2 text-[10px] text-[#007AFF] font-medium hover:text-[#0066DD]">
                         <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -665,6 +733,14 @@ const VideoAnalysis = () => {
                         </button>
                       </div>
                       <p className="text-xs text-[#CCC] mt-1.5">{ann.content}</p>
+                      {ann.player_id && (() => {
+                        const player = players.find(p => p.id === ann.player_id);
+                        return player ? (
+                          <span className="inline-flex items-center gap-1 mt-1 text-[10px] text-[#007AFF] bg-[#007AFF]/10 px-1.5 py-0.5 rounded">
+                            #{player.number || '?'} {player.name}
+                          </span>
+                        ) : null;
+                      })()}
                       <button data-testid={`seek-annotation-${ann.id}-btn`} onClick={() => seekTo(ann.timestamp)}
                         className="text-[10px] text-[#007AFF] font-medium mt-1.5 hover:text-[#0066DD]">
                         Jump to moment
