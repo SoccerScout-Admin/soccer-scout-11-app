@@ -1788,6 +1788,153 @@ async def extract_clip_video(clip_id: str, current_user: dict = Depends(get_curr
                     pass
         raise HTTPException(status_code=500, detail=f"Clip extraction failed: {str(e)[:200]}")
 
+# ===== Batch Clip Download (ZIP) =====
+
+class ClipZipRequest(BaseModel):
+    clip_ids: List[str]
+
+@api_router.post("/clips/download-zip")
+async def download_clips_zip(input: ClipZipRequest, current_user: dict = Depends(get_current_user)):
+    """Extract multiple clips and return as a ZIP file"""
+    import subprocess
+    import zipfile
+    
+    if not input.clip_ids:
+        raise HTTPException(status_code=400, detail="No clip IDs provided")
+    if len(input.clip_ids) > 20:
+        raise HTTPException(status_code=400, detail="Maximum 20 clips per download")
+    
+    clips = await db.clips.find(
+        {"id": {"$in": input.clip_ids}, "user_id": current_user["id"]}, {"_id": 0}
+    ).to_list(20)
+    
+    if not clips:
+        raise HTTPException(status_code=404, detail="No clips found")
+    
+    # Group by video to avoid reassembling the same video multiple times
+    video_clips = {}
+    for clip in clips:
+        vid = clip["video_id"]
+        if vid not in video_clips:
+            video_clips[vid] = []
+        video_clips[vid].append(clip)
+    
+    zip_path = tempfile.mktemp(suffix=".zip", dir="/var/video_chunks")
+    extracted_files = []
+    
+    try:
+        for video_id, clip_list in video_clips.items():
+            video = await db.videos.find_one({"id": video_id, "is_deleted": False}, {"_id": 0})
+            if not video:
+                continue
+            
+            # Assemble source video once per video
+            raw_path = tempfile.mktemp(suffix=".mp4", dir="/var/video_chunks")
+            if video.get("is_chunked"):
+                chunk_paths = video.get("chunk_paths", {})
+                chunk_backends = video.get("chunk_backends", {})
+                total_chunks = video.get("total_chunks", len(chunk_paths))
+                chunk_size = video.get("chunk_size", CHUNK_SIZE)
+                with open(raw_path, 'wb') as f:
+                    for i in range(total_chunks):
+                        path = chunk_paths.get(str(i))
+                        if not path:
+                            f.write(b'\x00' * chunk_size)
+                            continue
+                        backend = chunk_backends.get(str(i), "storage")
+                        if backend == "filesystem" and not os.path.exists(path):
+                            f.write(b'\x00' * chunk_size)
+                            continue
+                        try:
+                            chunk_info = {"backend": backend, "path": path}
+                            data = await read_chunk_data(video_id, i, chunk_info)
+                            f.write(data)
+                            del data
+                        except Exception:
+                            f.write(b'\x00' * chunk_size)
+            else:
+                data, _ = await run_in_threadpool(get_object_sync, video["storage_path"])
+                with open(raw_path, 'wb') as f:
+                    f.write(data)
+                del data
+            
+            # Extract each clip from this video
+            for clip in clip_list:
+                out_path = tempfile.mktemp(suffix=".mp4", dir="/var/video_chunks")
+                duration = clip["end_time"] - clip["start_time"]
+                safe_title = "".join(c for c in clip["title"] if c.isalnum() or c in " -_").strip()[:40] or "clip"
+                
+                ffmpeg_cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", str(clip["start_time"]),
+                    "-i", raw_path,
+                    "-t", str(duration),
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-movflags", "+faststart",
+                    out_path
+                ]
+                result = await run_in_threadpool(subprocess.run, ffmpeg_cmd, capture_output=True, text=True, timeout=300)
+                
+                if result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
+                    extracted_files.append((out_path, f"{safe_title}.mp4"))
+                else:
+                    if os.path.exists(out_path):
+                        os.unlink(out_path)
+            
+            # Cleanup raw video
+            if os.path.exists(raw_path):
+                os.unlink(raw_path)
+        
+        if not extracted_files:
+            raise HTTPException(status_code=500, detail="Failed to extract any clips")
+        
+        # Create ZIP
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED) as zf:
+            for file_path, filename in extracted_files:
+                zf.write(file_path, filename)
+        
+        # Cleanup extracted files
+        for file_path, _ in extracted_files:
+            if os.path.exists(file_path):
+                os.unlink(file_path)
+        
+        zip_size = os.path.getsize(zip_path)
+        logger.info(f"Created clip ZIP: {zip_size/(1024*1024):.1f}MB with {len(extracted_files)} clips")
+        
+        async def stream_zip():
+            try:
+                with open(zip_path, 'rb') as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                if os.path.exists(zip_path):
+                    os.unlink(zip_path)
+        
+        return StreamingResponse(
+            stream_zip(),
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="highlights.zip"'}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        for fp, _ in extracted_files:
+            if os.path.exists(fp):
+                try:
+                    os.unlink(fp)
+                except Exception:
+                    pass
+        if os.path.exists(zip_path):
+            try:
+                os.unlink(zip_path)
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"ZIP creation failed: {str(e)[:200]}")
+
 # ===== Trimmed Analysis =====
 
 class TrimmedAnalysisRequest(BaseModel):

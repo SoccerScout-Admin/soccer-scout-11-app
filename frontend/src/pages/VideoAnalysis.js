@@ -29,6 +29,8 @@ const VideoAnalysis = () => {
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
   const [downloadingClip, setDownloadingClip] = useState(null);
+  const [selectedClips, setSelectedClips] = useState([]);
+  const [downloadingZip, setDownloadingZip] = useState(false);
   const [processingStatus, setProcessingStatus] = useState(null);
   const [serverBootId, setServerBootId] = useState(null);
   const [serverRestarted, setServerRestarted] = useState(false);
@@ -187,6 +189,33 @@ const VideoAnalysis = () => {
     } finally {
       setDownloadingClip(null);
     }
+  };
+
+  const handleDownloadZip = async (clipIds) => {
+    setDownloadingZip(true);
+    try {
+      const response = await axios.post(`${API}/clips/download-zip`, { clip_ids: clipIds }, {
+        headers: getAuthHeader(),
+        responseType: 'blob',
+        timeout: 900000
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/zip' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'highlights.zip';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('Failed to download ZIP. ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setDownloadingZip(false);
+    }
+  };
+
+  const toggleClipSelection = (clipId) => {
+    setSelectedClips(prev => prev.includes(clipId) ? prev.filter(id => id !== clipId) : [...prev, clipId]);
   };
 
   const handleAddAnnotation = async () => {
@@ -862,10 +891,20 @@ const VideoAnalysis = () => {
                   Clips ({clips.length})
                 </h3>
                 {clips.length > 0 && (
-                  <button data-testid="download-highlights-btn" onClick={handleDownloadHighlights}
-                    className="text-[10px] text-[#4ADE80] font-medium hover:text-[#6AEE9A]">
-                    Download All
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {selectedClips.length > 0 && (
+                      <button data-testid="download-selected-zip-btn"
+                        onClick={() => handleDownloadZip(selectedClips)} disabled={downloadingZip}
+                        className="text-[10px] text-[#A855F7] font-medium hover:text-[#C084FC] disabled:opacity-50">
+                        {downloadingZip ? 'Zipping...' : `Download ${selectedClips.length} as ZIP`}
+                      </button>
+                    )}
+                    <button data-testid="download-all-zip-btn"
+                      onClick={() => handleDownloadZip(clips.map(c => c.id))} disabled={downloadingZip}
+                      className="text-[10px] text-[#4ADE80] font-medium hover:text-[#6AEE9A] disabled:opacity-50">
+                      {downloadingZip ? 'Zipping...' : 'Download All ZIP'}
+                    </button>
+                  </div>
                 )}
               </div>
               {clips.length === 0 ? (
@@ -877,8 +916,14 @@ const VideoAnalysis = () => {
                 <div className="space-y-2 max-h-[400px] overflow-y-auto">
                   {clips.map(clip => (
                     <div key={clip.id} data-testid={`clip-${clip.id}`}
-                      className="bg-white/[0.03] rounded-lg p-3 hover:bg-white/[0.06] transition-colors group">
-                      <div className="flex items-start justify-between">
+                      className={`rounded-lg p-3 hover:bg-white/[0.06] transition-colors group ${
+                        selectedClips.includes(clip.id) ? 'bg-[#A855F7]/10 border border-[#A855F7]/30' : 'bg-white/[0.03]'
+                      }`}>
+                      <div className="flex items-start gap-2">
+                        <input type="checkbox" data-testid={`select-clip-${clip.id}`}
+                          checked={selectedClips.includes(clip.id)}
+                          onChange={() => toggleClipSelection(clip.id)}
+                          className="mt-1 accent-[#A855F7] w-3.5 h-3.5 flex-shrink-0 cursor-pointer" />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-white truncate">{clip.title}</p>
                           <p className="text-[10px] text-[#666] mt-0.5">
