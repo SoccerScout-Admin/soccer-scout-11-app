@@ -243,6 +243,7 @@ class Match(BaseModel):
     team_away: str
     date: str
     competition: str = ""
+    folder_id: Optional[str] = None
     video_id: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -251,6 +252,7 @@ class MatchCreate(BaseModel):
     team_away: str
     date: str
     competition: str = ""
+    folder_id: Optional[str] = None
 
 class Video(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -297,6 +299,7 @@ class AnnotationCreate(BaseModel):
     annotation_type: str
     content: str
     position: Optional[dict] = None
+    player_id: Optional[str] = None
 
 class Clip(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -318,12 +321,59 @@ class ClipCreate(BaseModel):
     end_time: float
     clip_type: str = "highlight"
     description: str = ""
+    player_ids: List[str] = []
 
 class ChunkedUploadInit(BaseModel):
     match_id: str
     filename: str
     file_size: int
     content_type: str = "video/mp4"
+
+# ===== Folder Models =====
+
+class Folder(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    name: str
+    parent_id: Optional[str] = None
+    is_private: bool = False
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class FolderCreate(BaseModel):
+    name: str
+    parent_id: Optional[str] = None
+    is_private: bool = False
+
+class FolderUpdate(BaseModel):
+    name: Optional[str] = None
+    parent_id: Optional[str] = None
+    is_private: Optional[bool] = None
+
+# ===== Player/Roster Models =====
+
+class Player(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    match_id: str
+    name: str
+    number: Optional[int] = None
+    position: str = ""
+    team: str = ""
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class PlayerCreate(BaseModel):
+    match_id: str
+    name: str
+    number: Optional[int] = None
+    position: str = ""
+    team: str = ""
+
+class PlayerBulkImport(BaseModel):
+    match_id: str
+    csv_data: str
+    team: str = ""
 
 # ===== Auth =====
 
@@ -464,6 +514,117 @@ async def get_match(match_id: str, current_user: dict = Depends(get_current_user
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
     return match
+
+@api_router.patch("/matches/{match_id}")
+async def update_match(match_id: str, updates: dict, current_user: dict = Depends(get_current_user)):
+    match = await db.matches.find_one({"id": match_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    allowed = {"folder_id", "team_home", "team_away", "date", "competition"}
+    filtered = {k: v for k, v in updates.items() if k in allowed}
+    if filtered:
+        await db.matches.update_one({"id": match_id}, {"$set": filtered})
+    return {"status": "updated"}
+
+# ===== Folders =====
+
+@api_router.post("/folders")
+async def create_folder(input: FolderCreate, current_user: dict = Depends(get_current_user)):
+    if input.parent_id:
+        parent = await db.folders.find_one({"id": input.parent_id, "user_id": current_user["id"]}, {"_id": 0})
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent folder not found")
+    folder = Folder(user_id=current_user["id"], **input.model_dump())
+    await db.folders.insert_one(folder.model_dump())
+    return folder.model_dump()
+
+@api_router.get("/folders")
+async def get_folders(current_user: dict = Depends(get_current_user)):
+    folders = await db.folders.find({"user_id": current_user["id"]}, {"_id": 0}).to_list(500)
+    return folders
+
+@api_router.patch("/folders/{folder_id}")
+async def update_folder(folder_id: str, input: FolderUpdate, current_user: dict = Depends(get_current_user)):
+    folder = await db.folders.find_one({"id": folder_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    updates = {k: v for k, v in input.model_dump().items() if v is not None}
+    if updates:
+        await db.folders.update_one({"id": folder_id}, {"$set": updates})
+    return {"status": "updated"}
+
+@api_router.delete("/folders/{folder_id}")
+async def delete_folder(folder_id: str, current_user: dict = Depends(get_current_user)):
+    folder = await db.folders.find_one({"id": folder_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    # Move child folders to parent
+    await db.folders.update_many(
+        {"parent_id": folder_id, "user_id": current_user["id"]},
+        {"$set": {"parent_id": folder.get("parent_id")}}
+    )
+    # Move matches to parent folder
+    await db.matches.update_many(
+        {"folder_id": folder_id, "user_id": current_user["id"]},
+        {"$set": {"folder_id": folder.get("parent_id")}}
+    )
+    await db.folders.delete_one({"id": folder_id})
+    return {"status": "deleted"}
+
+# ===== Players / Rosters =====
+
+@api_router.post("/players")
+async def create_player(input: PlayerCreate, current_user: dict = Depends(get_current_user)):
+    player = Player(user_id=current_user["id"], **input.model_dump())
+    await db.players.insert_one(player.model_dump())
+    return player.model_dump()
+
+@api_router.post("/players/import-csv")
+async def import_players_csv(input: PlayerBulkImport, current_user: dict = Depends(get_current_user)):
+    """Import players from CSV data. Expected columns: name, number, position"""
+    import csv
+    import io
+    match = await db.matches.find_one({"id": input.match_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    
+    reader = csv.DictReader(io.StringIO(input.csv_data))
+    imported = []
+    for row in reader:
+        name = row.get("name", "").strip()
+        if not name:
+            continue
+        number = None
+        num_str = row.get("number", "").strip()
+        if num_str.isdigit():
+            number = int(num_str)
+        position = row.get("position", "").strip()
+        team = input.team or row.get("team", "").strip()
+        
+        player = Player(
+            user_id=current_user["id"],
+            match_id=input.match_id,
+            name=name,
+            number=number,
+            position=position,
+            team=team
+        )
+        await db.players.insert_one(player.model_dump())
+        imported.append(player.model_dump())
+    
+    return {"imported": len(imported), "players": imported}
+
+@api_router.get("/players/match/{match_id}")
+async def get_match_players(match_id: str, current_user: dict = Depends(get_current_user)):
+    players = await db.players.find({"match_id": match_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(100)
+    return players
+
+@api_router.delete("/players/{player_id}")
+async def delete_player(player_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.players.delete_one({"id": player_id, "user_id": current_user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return {"status": "deleted"}
 
 # ===== Standard Video Upload (for files < 1GB) =====
 
