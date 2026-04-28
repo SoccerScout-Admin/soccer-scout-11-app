@@ -1262,7 +1262,7 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
                 chat = LlmChat(
                     api_key=EMERGENT_KEY,
                     session_id=f"auto-{video_id}-{analysis_type}",
-                    system_message="You are an expert soccer analyst. Analyze match videos and provide detailed tactical insights, player assessments, and highlight identification."
+                    system_message="You are an expert soccer analyst. You will receive video samples from multiple points throughout the match (beginning, middle portions, and end). Analyze the full match based on these samples and provide detailed tactical insights, player assessments, and highlight identification."
                 ).with_model("gemini", "gemini-3.1-pro-preview")
 
                 video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
@@ -1338,9 +1338,10 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
             os.unlink(tmp_path)
 
 async def prepare_video_sample(video: dict) -> str:
-    """Extract a valid video sample for AI analysis.
-    Uses sparse file technique: writes available chunks at correct byte offsets,
-    allowing ffmpeg to find the moov atom and extract a valid clip."""
+    """Extract a representative video sample for AI analysis.
+    For long match videos, extracts multiple segments from across the match
+    (start, mid-points, end) to give AI a comprehensive view of the full game.
+    Target: ~10 minutes of footage compressed to <500MB for Gemini File API."""
     import subprocess
     
     ext = video["original_filename"].split(".")[-1] if "." in video["original_filename"] else "mp4"
@@ -1354,12 +1355,22 @@ async def prepare_video_sample(video: dict) -> str:
             total_chunks = video.get("total_chunks", len(chunk_paths))
             chunk_size = video.get("chunk_size", CHUNK_SIZE)
 
-            # Strategy: write first N chunks + last 3 chunks at correct offsets (sparse file)
-            # This lets ffmpeg find moov atom (at end) + read video data (at start)
-            first_n = min(15, total_chunks)  # ~150MB of video data
+            # Strategy: write enough chunks to cover the full video duration
+            # For a 4GB file with 10MB chunks = 400 chunks, we need data at multiple points
+            # Pull first 15 chunks + chunks at 25/50/75% + last 3 for moov atom
+            first_n = min(15, total_chunks)  # ~150MB start
             last_n = 3  # moov is typically in last 1-2 chunks
             
-            logger.info(f"Creating sparse video: first {first_n} + last {last_n} chunks of {total_chunks}")
+            # Additional mid-video chunks for seeking to different match segments
+            mid_chunks = set()
+            for pct in [0.25, 0.50, 0.75]:
+                center = int(total_chunks * pct)
+                for offset in range(min(8, total_chunks)):  # 8 chunks (~80MB) per seek point
+                    idx = center + offset
+                    if first_n <= idx < total_chunks - last_n:
+                        mid_chunks.add(idx)
+            
+            logger.info(f"Creating sparse video: first {first_n} + {len(mid_chunks)} mid + last {last_n} chunks of {total_chunks}")
             
             with open(raw_path, 'wb') as f:
                 # Write first chunks sequentially
@@ -1377,8 +1388,25 @@ async def prepare_video_sample(video: dict) -> str:
                         del data
                     except Exception as e:
                         logger.warning(f"  Skipping chunk {i}: {str(e)[:60]}")
-                        # Write zeros to maintain offset
                         f.write(b'\x00' * chunk_size)
+                
+                # Write mid-video chunks at correct offsets for seeking
+                for i in sorted(mid_chunks):
+                    target_offset = i * chunk_size
+                    f.seek(target_offset)
+                    path = chunk_paths.get(str(i))
+                    if not path:
+                        continue
+                    backend = chunk_backends.get(str(i), "storage")
+                    if backend == "filesystem" and not os.path.exists(path):
+                        continue
+                    chunk_info = {"backend": backend, "path": path}
+                    try:
+                        data = await read_chunk_data(video["id"], i, chunk_info)
+                        f.write(data)
+                        del data
+                    except Exception as e:
+                        logger.warning(f"  Skipping mid chunk {i}: {str(e)[:60]}")
                 
                 # Seek to correct offset for last chunks
                 last_start_idx = max(first_n, total_chunks - last_n)
@@ -1408,43 +1436,163 @@ async def prepare_video_sample(video: dict) -> str:
                 f.write(data)
             del data
 
-        # Extract a 30-second clip with ffmpeg
-        ffmpeg_cmd = [
-            "ffmpeg", "-y",
-            "-i", raw_path,
-            "-t", "30",
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", "28",
-            "-c:a", "aac",
-            "-b:a", "64k",
-            "-movflags", "+faststart",
-            clip_path
+        # First, probe the video duration
+        probe_cmd = [
+            "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", raw_path
         ]
-
-        result = await run_in_threadpool(
-            subprocess.run, ffmpeg_cmd,
-            capture_output=True, text=True, timeout=300
+        probe_result = await run_in_threadpool(
+            subprocess.run, probe_cmd,
+            capture_output=True, text=True, timeout=60
         )
+        
+        duration = 0
+        if probe_result.returncode == 0 and probe_result.stdout.strip():
+            try:
+                duration = float(probe_result.stdout.strip())
+            except ValueError:
+                pass
+        logger.info(f"Video duration: {duration:.0f}s ({duration/60:.1f}min)")
 
-        # Delete sparse file immediately to free disk
-        if os.path.exists(raw_path):
-            os.unlink(raw_path)
-            logger.info("Deleted sparse video file")
-
-        if result.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
-            clip_size = os.path.getsize(clip_path)
-            logger.info(f"Created {clip_size/(1024*1024):.1f}MB video clip via ffmpeg")
-            return clip_path
-        else:
-            stderr = result.stderr[-500:] if result.stderr else ""
-            if "moov atom not found" in stderr:
-                raise Exception("Video data incomplete — moov atom (file index) missing. The video needs to be re-uploaded.")
-            elif "Invalid data found" in stderr:
-                raise Exception("File is not a valid video format. Please re-upload a valid video file.")
+        if duration > 120:
+            # Long video: extract multiple segments from across the match
+            # Take 2-minute segments from start, 25%, 50%, 75%, and end
+            segment_duration = 120  # 2 minutes each
+            num_segments = 5
+            total_sample = segment_duration * num_segments  # ~10 minutes total
+            
+            # Calculate segment start points spread across the video
+            segment_starts = []
+            if duration > total_sample:
+                # Spread evenly: 0%, 25%, 50%, 75%, and near-end
+                for i in range(num_segments):
+                    pct = i / (num_segments - 1) if num_segments > 1 else 0
+                    start = pct * (duration - segment_duration)
+                    segment_starts.append(max(0, start))
             else:
-                logger.error(f"ffmpeg clip failed: rc={result.returncode}, stderr={stderr}")
-                raise Exception("Failed to create video clip")
+                # Video shorter than total sample — just take the whole thing
+                segment_starts = [0]
+                segment_duration = min(duration, 600)
+            
+            logger.info(f"Extracting {len(segment_starts)} segments of {segment_duration}s each from {duration:.0f}s video")
+            
+            # Build ffmpeg filter to concatenate segments
+            segment_files = []
+            for idx, start in enumerate(segment_starts):
+                seg_path = tempfile.mktemp(suffix=f"_seg{idx}.mp4", dir="/var/video_chunks")
+                seg_cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", str(int(start)),
+                    "-i", raw_path,
+                    "-t", str(segment_duration),
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-crf", "30",
+                    "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease",
+                    "-c:a", "aac",
+                    "-b:a", "48k",
+                    "-movflags", "+faststart",
+                    seg_path
+                ]
+                seg_result = await run_in_threadpool(
+                    subprocess.run, seg_cmd,
+                    capture_output=True, text=True, timeout=300
+                )
+                if seg_result.returncode == 0 and os.path.exists(seg_path) and os.path.getsize(seg_path) > 1000:
+                    segment_files.append(seg_path)
+                    logger.info(f"  Segment {idx+1}/{len(segment_starts)}: {start:.0f}s, {os.path.getsize(seg_path)/(1024*1024):.1f}MB")
+                else:
+                    logger.warning(f"  Segment {idx+1} failed at {start:.0f}s")
+                    if os.path.exists(seg_path):
+                        os.unlink(seg_path)
+            
+            # Delete sparse file to free disk
+            if os.path.exists(raw_path):
+                os.unlink(raw_path)
+                logger.info("Deleted sparse video file")
+            
+            if len(segment_files) == 0:
+                raise Exception("Failed to extract any video segments")
+            
+            if len(segment_files) == 1:
+                # Only one segment worked, use it directly
+                os.rename(segment_files[0], clip_path)
+            else:
+                # Concatenate segments
+                concat_list_path = tempfile.mktemp(suffix=".txt", dir="/var/video_chunks")
+                with open(concat_list_path, 'w') as f:
+                    for seg in segment_files:
+                        f.write(f"file '{seg}'\n")
+                
+                concat_cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "concat", "-safe", "0",
+                    "-i", concat_list_path,
+                    "-c", "copy",
+                    "-movflags", "+faststart",
+                    clip_path
+                ]
+                concat_result = await run_in_threadpool(
+                    subprocess.run, concat_cmd,
+                    capture_output=True, text=True, timeout=300
+                )
+                
+                # Cleanup segment files
+                for seg in segment_files:
+                    if os.path.exists(seg):
+                        os.unlink(seg)
+                if os.path.exists(concat_list_path):
+                    os.unlink(concat_list_path)
+                
+                if concat_result.returncode != 0:
+                    logger.error(f"Concat failed: {concat_result.stderr[-300:]}")
+                    raise Exception("Failed to concatenate video segments")
+            
+            if os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
+                clip_size = os.path.getsize(clip_path)
+                logger.info(f"Created {clip_size/(1024*1024):.1f}MB multi-segment clip ({len(segment_files)} segments)")
+                return clip_path
+            else:
+                raise Exception("Failed to create video sample")
+        else:
+            # Short video (<2min): extract entire thing or up to 2 minutes
+            extract_duration = min(duration, 120) if duration > 0 else 120
+            ffmpeg_cmd = [
+                "ffmpeg", "-y",
+                "-i", raw_path,
+                "-t", str(int(extract_duration)),
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", "28",
+                "-c:a", "aac",
+                "-b:a", "64k",
+                "-movflags", "+faststart",
+                clip_path
+            ]
+
+            result = await run_in_threadpool(
+                subprocess.run, ffmpeg_cmd,
+                capture_output=True, text=True, timeout=300
+            )
+
+            # Delete sparse file immediately to free disk
+            if os.path.exists(raw_path):
+                os.unlink(raw_path)
+                logger.info("Deleted sparse video file")
+
+            if result.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
+                clip_size = os.path.getsize(clip_path)
+                logger.info(f"Created {clip_size/(1024*1024):.1f}MB video clip via ffmpeg")
+                return clip_path
+            else:
+                stderr = result.stderr[-500:] if result.stderr else ""
+                if "moov atom not found" in stderr:
+                    raise Exception("Video data incomplete — moov atom (file index) missing. The video needs to be re-uploaded.")
+                elif "Invalid data found" in stderr:
+                    raise Exception("File is not a valid video format. Please re-upload a valid video file.")
+                else:
+                    logger.error(f"ffmpeg clip failed: rc={result.returncode}, stderr={stderr}")
+                    raise Exception("Failed to create video clip")
 
     except Exception:
         for p in [raw_path, clip_path]:
@@ -1545,7 +1693,7 @@ async def generate_analysis(input: AnalysisRequest, current_user: dict = Depends
         chat = LlmChat(
             api_key=EMERGENT_KEY,
             session_id=f"analysis-{input.video_id}",
-            system_message="You are an expert soccer analyst. Analyze match videos and provide detailed tactical insights."
+            system_message="You are an expert soccer analyst. You will receive video samples from multiple points throughout the match. Analyze the full match based on these samples and provide detailed tactical insights."
         ).with_model("gemini", "gemini-3.1-pro-preview")
 
         video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
