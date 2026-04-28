@@ -338,6 +338,7 @@ class Folder(BaseModel):
     name: str
     parent_id: Optional[str] = None
     is_private: bool = False
+    share_token: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 class FolderCreate(BaseModel):
@@ -570,6 +571,149 @@ async def delete_folder(folder_id: str, current_user: dict = Depends(get_current
     )
     await db.folders.delete_one({"id": folder_id})
     return {"status": "deleted"}
+
+# ===== Folder Sharing =====
+
+@api_router.post("/folders/{folder_id}/share")
+async def toggle_folder_share(folder_id: str, current_user: dict = Depends(get_current_user)):
+    """Generate or revoke a share token for a public folder"""
+    folder = await db.folders.find_one({"id": folder_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    if folder.get("is_private"):
+        raise HTTPException(status_code=400, detail="Cannot share a private folder. Set it to public first.")
+    
+    if folder.get("share_token"):
+        # Revoke sharing
+        await db.folders.update_one({"id": folder_id}, {"$set": {"share_token": None}})
+        return {"status": "unshared", "share_token": None}
+    else:
+        # Generate share token
+        token = str(uuid.uuid4())[:12]
+        await db.folders.update_one({"id": folder_id}, {"$set": {"share_token": token}})
+        return {"status": "shared", "share_token": token}
+
+@api_router.get("/shared/{share_token}")
+async def get_shared_folder(share_token: str):
+    """Public endpoint: view a shared folder and its matches (no auth required)"""
+    folder = await db.folders.find_one({"share_token": share_token, "is_private": False}, {"_id": 0})
+    if not folder:
+        raise HTTPException(status_code=404, detail="Shared folder not found or link expired")
+    
+    matches = await db.matches.find(
+        {"folder_id": folder["id"], "user_id": folder["user_id"]}, {"_id": 0}
+    ).to_list(500)
+    
+    # Enrich with processing status
+    for match in matches:
+        if match.get("video_id"):
+            video = await db.videos.find_one(
+                {"id": match["video_id"]},
+                {"_id": 0, "processing_status": 1, "processing_progress": 1}
+            )
+            if video:
+                match["processing_status"] = video.get("processing_status", "none")
+    
+    owner = await db.users.find_one({"id": folder["user_id"]}, {"_id": 0, "name": 1, "role": 1})
+    
+    return {
+        "folder": {"id": folder["id"], "name": folder["name"]},
+        "owner": {"name": owner.get("name", "Coach") if owner else "Coach", "role": owner.get("role", "") if owner else ""},
+        "matches": matches
+    }
+
+@api_router.get("/shared/{share_token}/match/{match_id}")
+async def get_shared_match_detail(share_token: str, match_id: str):
+    """Public endpoint: view a specific match's analyses, clips, annotations, and roster"""
+    folder = await db.folders.find_one({"share_token": share_token, "is_private": False}, {"_id": 0})
+    if not folder:
+        raise HTTPException(status_code=404, detail="Shared folder not found or link expired")
+    
+    match = await db.matches.find_one(
+        {"id": match_id, "folder_id": folder["id"], "user_id": folder["user_id"]}, {"_id": 0}
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found in this shared folder")
+    
+    result = {"match": match, "folder_name": folder["name"]}
+    
+    if match.get("video_id"):
+        video = await db.videos.find_one({"id": match["video_id"]}, {"_id": 0, "id": 1, "processing_status": 1, "original_filename": 1, "size": 1})
+        result["video"] = video
+        
+        analyses = await db.analyses.find(
+            {"video_id": match["video_id"], "user_id": folder["user_id"], "status": "completed"},
+            {"_id": 0}
+        ).to_list(10)
+        result["analyses"] = analyses
+        
+        clips = await db.clips.find(
+            {"video_id": match["video_id"], "user_id": folder["user_id"]},
+            {"_id": 0}
+        ).to_list(100)
+        result["clips"] = clips
+        
+        annotations = await db.annotations.find(
+            {"video_id": match["video_id"], "user_id": folder["user_id"]},
+            {"_id": 0}
+        ).to_list(500)
+        result["annotations"] = annotations
+    
+    players = await db.players.find(
+        {"match_id": match_id, "user_id": folder["user_id"]},
+        {"_id": 0}
+    ).to_list(100)
+    result["players"] = players
+    
+    return result
+
+@api_router.get("/shared/{share_token}/video/{video_id}")
+async def stream_shared_video(share_token: str, video_id: str, request: Request):
+    """Public endpoint: stream a video from a shared folder (no auth)"""
+    folder = await db.folders.find_one({"share_token": share_token, "is_private": False}, {"_id": 0})
+    if not folder:
+        raise HTTPException(status_code=404, detail="Invalid share link")
+    
+    video = await db.videos.find_one({"id": video_id, "user_id": folder["user_id"], "is_deleted": False}, {"_id": 0})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    # Verify match is in shared folder
+    match = await db.matches.find_one({"id": video["match_id"], "folder_id": folder["id"]}, {"_id": 0, "id": 1})
+    if not match:
+        raise HTTPException(status_code=403, detail="Video not in shared folder")
+    
+    # Reuse same streaming logic as authenticated endpoint
+    total_size = video.get("size", 0)
+    content_type = video.get("content_type", "video/mp4")
+    
+    if video.get("is_chunked"):
+        chunk_paths = video.get("chunk_paths", {})
+        chunk_backends = video.get("chunk_backends", {})
+        total_chunks = video.get("total_chunks", len(chunk_paths))
+        
+        async def generate_full():
+            for i in range(total_chunks):
+                path = chunk_paths.get(str(i))
+                if not path:
+                    continue
+                backend = chunk_backends.get(str(i), "storage")
+                chunk_info = {"backend": backend, "path": path}
+                try:
+                    data = await read_chunk_data(video_id, i, chunk_info)
+                    yield data
+                    del data
+                except Exception as e:
+                    logger.error(f"Shared stream chunk {i} error: {e}")
+                    break
+        
+        return StreamingResponse(
+            generate_full(), media_type=content_type,
+            headers={"Accept-Ranges": "bytes", "Content-Length": str(total_size)}
+        )
+    else:
+        data, _ = await run_in_threadpool(get_object_sync, video["storage_path"])
+        return Response(content=data, media_type=content_type, headers={"Content-Length": str(len(data))})
 
 # ===== Players / Rosters =====
 

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
-import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown } from '@phosphor-icons/react';
+import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check } from '@phosphor-icons/react';
 
 const Dashboard = () => {
   const [matches, setMatches] = useState([]);
@@ -10,6 +10,9 @@ const Dashboard = () => {
   const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showFolderModal, setShowFolderModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [sharingFolder, setSharingFolder] = useState(null);
+  const [copied, setCopied] = useState(false);
   const [editingFolder, setEditingFolder] = useState(null);
   const [folderMenuId, setFolderMenuId] = useState(null);
   const [expandedFolders, setExpandedFolders] = useState({});
@@ -86,6 +89,28 @@ const Dashboard = () => {
       await axios.patch(`${API}/matches/${matchId}`, { folder_id: folderId || null }, { headers: getAuthHeader() });
       fetchMatches();
     } catch (err) { console.error('Failed to move match:', err); }
+  };
+
+  const handleToggleShare = async (folder) => {
+    try {
+      const res = await axios.post(`${API}/folders/${folder.id}/share`, {}, { headers: getAuthHeader() });
+      // Update folder locally with new share_token
+      setFolders(prev => prev.map(f => f.id === folder.id ? { ...f, share_token: res.data.share_token } : f));
+      const updated = { ...folder, share_token: res.data.share_token };
+      setSharingFolder(updated);
+      if (res.data.share_token) {
+        setShowShareModal(true);
+      }
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Failed to toggle sharing');
+    }
+  };
+
+  const copyShareLink = () => {
+    const url = `${window.location.origin}/shared/${sharingFolder.share_token}`;
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleLogout = () => {
@@ -196,6 +221,7 @@ const Dashboard = () => {
                         <FolderSimple size={16} className="flex-shrink-0" />
                         <span className="truncate text-xs">{folder.name}</span>
                         {folder.is_private && <Lock size={10} className="text-[#EF4444] flex-shrink-0" />}
+                        {folder.share_token && <ShareNetwork size={10} className="text-[#4ADE80] flex-shrink-0" />}
                         <span className="text-[10px] opacity-50 ml-auto flex-shrink-0">{matchCount}</span>
                       </button>
                       <button data-testid={`folder-menu-${folder.id}-btn`}
@@ -211,6 +237,15 @@ const Dashboard = () => {
                             className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[#A3A3A3] hover:bg-white/5 hover:text-white">
                             <PencilSimple size={12} /> Rename
                           </button>
+                          {!folder.is_private && (
+                            <button data-testid={`share-folder-${folder.id}-btn`}
+                              onClick={() => { handleToggleShare(folder); setFolderMenuId(null); }}
+                              className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-white/5 ${
+                                folder.share_token ? 'text-[#4ADE80]' : 'text-[#A3A3A3] hover:text-white'
+                              }`}>
+                              <ShareNetwork size={12} /> {folder.share_token ? 'Sharing On' : 'Share'}
+                            </button>
+                          )}
                           <button data-testid={`delete-folder-${folder.id}-btn`}
                             onClick={() => { handleDeleteFolder(folder.id); setFolderMenuId(null); }}
                             className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[#EF4444] hover:bg-[#EF4444]/10">
@@ -405,6 +440,48 @@ const Dashboard = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Share Modal */}
+      {showShareModal && sharingFolder && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
+          <div className="bg-[#141414] border border-white/10 w-full max-w-md p-8">
+            <div className="flex items-center gap-3 mb-6">
+              <ShareNetwork size={28} className="text-[#4ADE80]" />
+              <h3 className="text-3xl font-bold" style={{ fontFamily: 'Bebas Neue' }}>Share Folder</h3>
+            </div>
+            {sharingFolder.share_token ? (
+              <div>
+                <p className="text-sm text-[#A3A3A3] mb-4">
+                  Anyone with this link can view <strong className="text-white">{sharingFolder.name}</strong> and its matches, analyses, clips, and annotations — no login required.
+                </p>
+                <div className="flex items-center gap-2 mb-6">
+                  <div className="flex-1 bg-[#0A0A0A] border border-white/10 text-[#007AFF] px-4 py-3 text-sm font-mono truncate select-all">
+                    {window.location.origin}/shared/{sharingFolder.share_token}
+                  </div>
+                  <button data-testid="copy-share-link-btn" onClick={copyShareLink}
+                    className={`px-4 py-3 font-bold tracking-wider uppercase transition-colors flex items-center gap-2 text-sm ${
+                      copied ? 'bg-[#4ADE80] text-black' : 'bg-[#007AFF] hover:bg-[#005bb5] text-white'
+                    }`}>
+                    {copied ? <><Check size={16} weight="bold" /> Copied</> : <><Copy size={16} /> Copy</>}
+                  </button>
+                </div>
+                <button data-testid="revoke-share-btn"
+                  onClick={() => { handleToggleShare(sharingFolder); setShowShareModal(false); }}
+                  className="w-full bg-transparent border border-[#EF4444]/30 text-[#EF4444] py-2 text-xs font-bold tracking-wider uppercase hover:bg-[#EF4444]/10 transition-colors">
+                  Revoke Share Link
+                </button>
+              </div>
+            ) : (
+              <p className="text-sm text-[#A3A3A3]">Sharing has been revoked for this folder.</p>
+            )}
+            <button data-testid="close-share-modal-btn"
+              onClick={() => setShowShareModal(false)}
+              className="w-full mt-4 bg-transparent border border-white/10 text-white py-3 font-bold tracking-wider uppercase hover:bg-[#1F1F1F] transition-colors">
+              Close
+            </button>
           </div>
         </div>
       )}

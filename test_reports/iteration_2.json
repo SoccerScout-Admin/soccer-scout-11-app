@@ -1,0 +1,56 @@
+{
+  "summary": "Tested shareable game-film links feature end-to-end. Backend (11/11 pytest cases pass): public /api/shared/{token}, /api/shared/{token}/match/{id}, /api/shared/{token}/video/{id}, and auth-protected /api/folders/{id}/share toggle (generate/revoke, 400 on private folder, 401 unauth, 404 unknown). Frontend: public SharedView at /shared/{token} loads without login, shows folder name + owner, match cards, match detail w/ video player, all 4 analysis tabs, full roster (Messi/Ronaldo/van Dijk), back navigation, and a clean 'LINK UNAVAILABLE' page on invalid tokens. Dashboard share flow: context menu Share button visible only on public folders, share modal opens with link, Copy + Revoke + Close buttons present, green share-indicator (ShareNetwork icon, #4ADE80) appears next to shared folder in sidebar, revoking removes public access (404). Two issues found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Dashboard - Share Modal",
+        "issue": "Copy share-link button throws uncaught runtime error in iframe/preview contexts: 'Failed to execute writeText on Clipboard: Write permission denied. NotAllowedError'. Webpack-dev-server overlay then captures all pointer events, blocking further interaction until dismissed. navigator.clipboard.writeText() requires a secure top-level context; need try/catch with fallback (e.g., document.execCommand('copy') on a hidden textarea, or simply catch and show 'Copy failed — select & Cmd/Ctrl+C').",
+        "selector": "[data-testid='copy-share-link-btn']",
+        "priority": "HIGH"
+      },
+      {
+        "component": "Dashboard - Folder context menu Share/Sharing-On",
+        "issue": "Clicking 'Sharing On' on an already-shared folder SILENTLY REVOKES the share token (no modal, no confirmation). Users lose their shareable link with one click and have no way to re-view it from the menu — they must re-share, which mints a NEW token and invalidates any previously distributed URL. Recommended: when folder.share_token exists, the menu item should OPEN the modal (which already contains the Revoke button) instead of toggling the API directly.",
+        "selector": "[data-testid='share-folder-{id}-btn']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "SharedView - error page",
+        "issues": ["Page text body is uppercased via CSS so checks like 'Link Unavailable' appear as 'LINK UNAVAILABLE' (cosmetic, just a note for next agent)."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_shared_folders.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/shared_folders.xml"
+  ],
+  "action_items": [
+    "Wrap navigator.clipboard.writeText in try/catch in Dashboard.js copyShareLink(); fallback to a hidden <textarea> + document.execCommand('copy'), or at least catch the exception so the webpack overlay doesn't block the UI. Show 'Copied!' state on success, 'Copy failed - select link manually' on failure.",
+    "Change handleToggleShare flow in Dashboard.js: when folder.share_token already exists, OPEN the share modal instead of POSTing to /share (which revokes). Revocation should only happen via the modal's explicit 'Revoke Share Link' button. This preserves shareable URLs and gives users visibility/confirmation."
+  ],
+  "critical_code_review_comments": [
+    "Dashboard.js handleToggleShare: backend endpoint is a TOGGLE (single POST flips state). The frontend treats it the same regardless of current state — no confirmation dialog before revoking. Either split backend into POST /share (create) + DELETE /share (revoke), or have the frontend gate revocation behind the modal.",
+    "Dashboard.js copyShareLink lacks any error handling for clipboard API failures (very common in iframes/non-secure contexts).",
+    "SharedView.js (~360 lines) handles both folder listing and match detail in one component with two big if/else branches — consider splitting into <SharedFolderListing/> and <SharedMatchDetail/> for maintainability.",
+    "Backend share token is uuid4()[:12] (12 chars). Adequate for obscurity but a determined attacker could enumerate; consider full uuid4 or secrets.token_urlsafe(16) for stronger unguessability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py (new)",
+    "/app/backend/tests/test_shared_folders.py (new)"
+  ],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "85% (12/14 flows pass; copy button bug + silent-revoke UX bug)"},
+  "test_credentials": "testcoach@demo.com / password123",
+  "seed_data_creation": "No persistent seed data created. The existing share token 7c7fa97e-e60 was REVOKED during testing (clicking 'Sharing On' toggled it off). Folder was re-shared and now has token 0c1c5e1a-b80 (state at end of test). If next iteration needs a known token, re-fetch via the share endpoint.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend tests live in /app/backend/tests/test_shared_folders.py (uses BASE_URL from REACT_APP_BACKEND_URL env). Run: pytest /app/backend/tests/ -v. Key UI testids: shared-match-card-{id}, shared-back-btn, shared-overview-tab, shared-tactical-tab, shared-player_performance-tab, shared-highlights-tab, shared-video-player, shared-go-home-btn, share-folder-{id}-btn (in folder context menu), copy-share-link-btn, revoke-share-btn, close-share-modal-btn. NOTE: there is NO data-testid on the green share indicator icon in the sidebar — it's identified by the ShareNetwork SVG with class text-[#4ADE80]. NOTE: Season 2026-27 share token at end-of-test was 0c1c5e1a-b80 (original 7c7fa97e-e60 has been revoked). Two bugs reported: clipboard copy NotAllowedError + silent revoke when clicking 'Sharing On'.",
+  "rca of the issue": "1) Copy button: navigator.clipboard.writeText() requires a Secure Context AND that the document has Clipboard-Write permission. In the preview iframe/sandbox, the permission is denied, raising NotAllowedError. Because the call is unhandled, React's error boundary surfaces the webpack-dev-server runtime error overlay which blocks the entire page. Fix: wrap in try/catch and provide a textarea+execCommand fallback. 2) Silent revoke: backend POST /folders/{id}/share is a single-endpoint toggle. Dashboard's handleToggleShare opens the modal only when res.data.share_token is truthy (i.e., on a fresh share). For an already-shared folder, the same click revokes (returns null) and the modal is suppressed. The Revoke flow should be moved exclusively into the modal."
+}

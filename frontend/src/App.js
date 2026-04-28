@@ -6,6 +6,7 @@ import AuthPage from './pages/AuthPage';
 import Dashboard from './pages/Dashboard';
 import MatchDetail from './pages/MatchDetail';
 import VideoAnalysis from './pages/VideoAnalysis';
+import SharedView from './pages/SharedView';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
@@ -65,6 +66,7 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="/shared/:shareToken" element={<SharedView />} />
         </Routes>
       </BrowserRouter>
     </div>
