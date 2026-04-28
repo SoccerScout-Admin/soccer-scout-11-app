@@ -261,7 +261,7 @@ const VideoAnalysis = () => {
               <h1 className="text-lg font-semibold" style={{ fontFamily: 'Space Grotesk' }}>
                 {match ? `${match.team_home} vs ${match.team_away}` : 'Video Analysis'}
               </h1>
-              {match?.competition && <p className="text-xs text-[#888]">{match.competition} — {new Date(match.date).toLocaleDateString()}</p>}
+              {match?.competition && <p className="text-xs text-[#888]">{match.competition} — {new Date(match.date + 'T00:00:00').toLocaleDateString()}</p>}
             </div>
           </div>
           <div className="flex items-center gap-3">

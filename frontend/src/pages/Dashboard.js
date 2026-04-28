@@ -351,7 +351,7 @@ const Dashboard = () => {
                   </h3>
                   <div className="flex items-center gap-2 text-sm text-[#A3A3A3]">
                     <CalendarBlank size={16} />
-                    <span>{new Date(match.date).toLocaleDateString()}</span>
+                    <span>{new Date(match.date + 'T00:00:00').toLocaleDateString()}</span>
                   </div>
                   {match.video_id && (
                     <div className="mt-4">

@@ -105,7 +105,7 @@ const SharedView = () => {
                 <h1 className="text-lg font-semibold" style={{ fontFamily: 'Space Grotesk' }}>
                   {match.team_home} vs {match.team_away}
                 </h1>
-                <p className="text-xs text-[#888]">{match.competition || 'Friendly'} — {new Date(match.date).toLocaleDateString()}</p>
+                <p className="text-xs text-[#888]">{match.competition || 'Friendly'} — {new Date(match.date + 'T00:00:00').toLocaleDateString()}</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -325,7 +325,7 @@ const SharedView = () => {
                 </h3>
                 <div className="flex items-center gap-2 text-sm text-[#A3A3A3]">
                   <CalendarBlank size={16} />
-                  <span>{new Date(match.date).toLocaleDateString()}</span>
+                  <span>{new Date(match.date + 'T00:00:00').toLocaleDateString()}</span>
                 </div>
                 {match.video_id && (
                   <div className="mt-4">

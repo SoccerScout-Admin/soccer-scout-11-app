@@ -228,7 +228,7 @@ const MatchDetail = () => {
               <h2 className="text-5xl font-bold mb-2" style={{ fontFamily: 'Bebas Neue' }}>
                 {match.team_home} vs {match.team_away}
               </h2>
-              <p className="text-[#A3A3A3]">{new Date(match.date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+              <p className="text-[#A3A3A3]">{new Date(match.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
             </div>
           </div>
 
