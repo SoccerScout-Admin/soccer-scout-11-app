@@ -1135,17 +1135,23 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
                 }
                 await db.analyses.insert_one(analysis_doc)
 
-        # Mark processing complete
+        # Check if any analyses succeeded
+        completed_analyses = await db.analyses.find(
+            {"video_id": video_id, "user_id": user_id, "status": "completed"},
+            {"_id": 0, "analysis_type": 1}
+        ).to_list(10)
+        
+        final_status = "completed" if len(completed_analyses) > 0 else "failed"
         await db.videos.update_one(
             {"id": video_id},
             {"$set": {
-                "processing_status": "completed",
+                "processing_status": final_status,
                 "processing_progress": 100,
                 "processing_current": None,
                 "processing_completed_at": datetime.now(timezone.utc).isoformat()
             }}
         )
-        logger.info(f"Auto-processing COMPLETE for video {video_id}")
+        logger.info(f"Auto-processing {'COMPLETE' if final_status == 'completed' else 'FAILED (all types)'} for video {video_id}")
 
     except Exception as e:
         logger.error(f"Auto-processing FAILED for video {video_id}: {e}")
