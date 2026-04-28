@@ -92,25 +92,65 @@ const Dashboard = () => {
   };
 
   const handleToggleShare = async (folder) => {
+    // If already shared, just open the modal to show link / allow revoke
+    if (folder.share_token) {
+      setSharingFolder(folder);
+      setShowShareModal(true);
+      return;
+    }
+    // Otherwise generate a new share token
     try {
       const res = await axios.post(`${API}/folders/${folder.id}/share`, {}, { headers: getAuthHeader() });
-      // Update folder locally with new share_token
       setFolders(prev => prev.map(f => f.id === folder.id ? { ...f, share_token: res.data.share_token } : f));
       const updated = { ...folder, share_token: res.data.share_token };
       setSharingFolder(updated);
-      if (res.data.share_token) {
-        setShowShareModal(true);
-      }
+      setShowShareModal(true);
     } catch (err) {
-      alert(err.response?.data?.detail || 'Failed to toggle sharing');
+      alert(err.response?.data?.detail || 'Failed to share folder');
+    }
+  };
+
+  const handleRevokeShare = async () => {
+    if (!sharingFolder) return;
+    try {
+      await axios.post(`${API}/folders/${sharingFolder.id}/share`, {}, { headers: getAuthHeader() });
+      setFolders(prev => prev.map(f => f.id === sharingFolder.id ? { ...f, share_token: null } : f));
+      setSharingFolder({ ...sharingFolder, share_token: null });
+      setShowShareModal(false);
+    } catch (err) {
+      alert('Failed to revoke share link');
     }
   };
 
   const copyShareLink = () => {
     const url = `${window.location.origin}/shared/${sharingFolder.share_token}`;
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      navigator.clipboard.writeText(url).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }).catch(() => {
+        fallbackCopy(url);
+      });
+    } catch {
+      fallbackCopy(url);
+    }
+  };
+
+  const fallbackCopy = (text) => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      alert('Copy failed — please select and copy the link manually.');
+    }
+    document.body.removeChild(ta);
   };
 
   const handleLogout = () => {
@@ -469,7 +509,7 @@ const Dashboard = () => {
                   </button>
                 </div>
                 <button data-testid="revoke-share-btn"
-                  onClick={() => { handleToggleShare(sharingFolder); setShowShareModal(false); }}
+                  onClick={handleRevokeShare}
                   className="w-full bg-transparent border border-[#EF4444]/30 text-[#EF4444] py-2 text-xs font-bold tracking-wider uppercase hover:bg-[#EF4444]/10 transition-colors">
                   Revoke Share Link
                 </button>

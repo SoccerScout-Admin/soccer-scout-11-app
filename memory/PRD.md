@@ -78,6 +78,15 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Processing-failed banner correctly displays for failed videos
 - Retry/resume processing for failed types
 
+### Shareable Game Film Links (Complete - Apr 28, 2026)
+- Public share links for folders (no login required for viewers)
+- Toggle sharing from folder context menu with share modal
+- Copy-to-clipboard with fallback for iframe/sandbox contexts
+- Revoke sharing explicitly from modal (prevents accidental revocation)
+- Public SharedView page: folder listing, match detail with video player, analysis tabs, clips, annotations, roster
+- Green share indicator icon on shared folders in sidebar
+- Invalid/expired links show clean "Link Unavailable" error page
+
 ## Backlog
 
 ### P0 (Must Have)
