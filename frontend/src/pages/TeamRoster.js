@@ -293,9 +293,11 @@ const TeamRoster = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                   {groupPlayers.map(player => (
                     <div key={player.id} data-testid={`roster-player-${player.id}`}
-                      className="bg-[#141414] border border-white/10 p-4 flex items-center gap-4 group hover:bg-[#1A1A1A] transition-colors">
+                      onClick={() => navigate(`/player/${player.id}`)}
+                      className="bg-[#141414] border border-white/10 p-4 flex items-center gap-4 group hover:bg-[#1A1A1A] hover:border-[#007AFF]/30 cursor-pointer transition-colors">
                       {/* Profile Pic */}
-                      <div className="w-14 h-14 flex-shrink-0 rounded-full bg-[#0A0A0A] border border-white/10 overflow-hidden relative flex items-center justify-center">
+                      <div onClick={(e) => e.stopPropagation()}
+                        className="w-14 h-14 flex-shrink-0 rounded-full bg-[#0A0A0A] border border-white/10 overflow-hidden relative flex items-center justify-center">
                         {player.profile_pic_url ? (
                           <img src={`${API.replace('/api', '')}${player.profile_pic_url}?v=${picVersions[player.id] || player.id}`} alt={player.name}
                             className="w-full h-full object-cover" />
@@ -325,7 +327,7 @@ const TeamRoster = () => {
                       </div>
                       {/* Delete */}
                       <button data-testid={`delete-player-${player.id}`}
-                        onClick={() => handleDeletePlayer(player.id)}
+                        onClick={(e) => { e.stopPropagation(); handleDeletePlayer(player.id); }}
                         className="p-2 text-[#444] hover:text-[#EF4444] hover:bg-[#EF4444]/10 transition-colors opacity-0 group-hover:opacity-100">
                         <Trash size={16} />
                       </button>

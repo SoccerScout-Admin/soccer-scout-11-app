@@ -105,6 +105,18 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
 - ffmpeg auto-installs at server startup if missing
 
+### Player Profile + Season Stats + Batch Clip-Reel Share (Complete - Apr 29, 2026)
+- **`/player/:id` page** (`PlayerProfile.js`): hero with avatar/jersey/position, career stats grid (total clips, total time, per-type counts: goals/saves/fouls/cards/shots/chances/highlights with color-coded icons), team history grouped by season (chips link directly to each team's roster), highlight reel grid sorted by recency.
+- New backend endpoint `GET /api/players/{id}/profile` aggregates from `clips` collection (counts by `clip_type`) + joins matches into clips for display context.
+- Players in `TeamRoster.js` now click-through to their profile page; pic-upload + delete buttons preserved via `stopPropagation`.
+- **Batch clip share (Clip Reels)**: new collection `clip_collections {id, title, clip_ids[], share_token, user_id}`.
+  - Backend: `POST /api/clip-collections`, `GET /api/clip-collections`, `DELETE`, public `GET /api/shared/clip-collection/{token}` returns ordered clips with auto-granted share tokens for streaming, plus match enrichment.
+  - OG card endpoint: `/api/og/clip-collection/{token}` + `/image.png` (reusing `render_folder_card` with custom `CLIP REEL` label).
+  - VideoAnalysis sidebar: "Share N as Reel" button (purple) appears alongside the existing ZIP download whenever clips are checkbox-selected. Modal lets user title the reel and copies the OG-friendly URL with green "Smart link" indicator.
+  - New public viewer `SharedClipCollectionView.js` at `/clips/:token`: video player + side playlist, copy-link CTA in header, branded footer, 404 fallback for revoked tokens.
+- Routes mounted via new `routes/player_profile.py` + extended `routes/og.py`.
+- Verified end-to-end via curl: profile aggregation ✓, collection create with title ✓, public payload ✓, OG html + 1200×630 PNG ✓, screenshot of the rendered profile page ✓.
+
 ### Multi-Team Players + Promote Roster (Complete - Apr 29, 2026)
 - **Data model**: `Player.team_id` (single, optional) → `team_ids: List[str]`. One-time migration converted all existing players' `team_id` strings into single-element arrays.
 - **Backend validation**: `_enforce_season_cap` blocks any insert/update that would put a player on more than 2 teams sharing the same `season` string.

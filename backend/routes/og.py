@@ -22,7 +22,6 @@ def _public_base(request: Request) -> str:
         return f"{fwd_proto}://{fwd_host}"
     return str(request.base_url).rstrip("/")
 
-
 def _og_html(title: str, description: str, og_image_url: str, spa_url: str) -> str:
     e_title = html_lib.escape(title)
     e_desc = html_lib.escape(description)
@@ -177,6 +176,68 @@ async def og_clip_image(share_token: str):
         coach,
         duration,
         clip.get("clip_type", "highlight"),
+    )
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+
+# ===== Clip Collection OG (batch share) =====
+
+@router.get("/og/clip-collection/{share_token}")
+async def og_clip_collection(share_token: str, request: Request):
+    coll = await db.clip_collections.find_one({"share_token": share_token}, {"_id": 0})
+    if not coll:
+        return HTMLResponse(
+            "<html><body><h1>Link Unavailable</h1></body></html>",
+            status_code=404,
+        )
+    owner = await db.users.find_one(
+        {"id": coll["user_id"]}, {"_id": 0, "name": 1}
+    )
+    coach = (owner or {}).get("name", "Coach")
+    n = len(coll.get("clip_ids") or [])
+
+    title = coll.get("title") or f"{n} Clips"
+    description = (
+        f"A reel of {n} game-film clip{'s' if n != 1 else ''} curated by {coach} on Soccer Scout."
+    )
+    spa_url = f"/clips/{share_token}"
+    image_url = f"{_public_base(request)}/api/og/clip-collection/{share_token}/image.png"
+    return HTMLResponse(_og_html(title, description, image_url, spa_url))
+
+
+@router.get("/og/clip-collection/{share_token}/image.png")
+async def og_clip_collection_image(share_token: str):
+    coll = await db.clip_collections.find_one({"share_token": share_token}, {"_id": 0})
+    if not coll:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    clips = await db.clips.find(
+        {"id": {"$in": coll.get("clip_ids") or []}, "user_id": coll["user_id"]},
+        {"_id": 0, "title": 1, "clip_type": 1, "start_time": 1, "end_time": 1},
+    ).to_list(200)
+
+    owner = await db.users.find_one(
+        {"id": coll["user_id"]}, {"_id": 0, "name": 1}
+    )
+    coach = (owner or {}).get("name", "")
+
+    # Reuse render_folder_card with type-prefixed labels for now.
+    labels = []
+    for c in clips[:3]:
+        labels.append(c.get("title") or c.get("clip_type", "Clip").upper())
+
+    png = await run_in_threadpool(
+        render_folder_card,
+        coll.get("title") or f"{len(clips)} Clips",
+        coach,
+        len(clips),
+        labels,
+        "CLIP REEL",
     )
     return Response(
         content=png,

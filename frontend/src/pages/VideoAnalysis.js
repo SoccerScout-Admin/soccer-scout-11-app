@@ -227,6 +227,45 @@ const VideoAnalysis = () => {
     setSelectedClips(prev => prev.includes(clipId) ? prev.filter(id => id !== clipId) : [...prev, clipId]);
   };
 
+  const [collectionShare, setCollectionShare] = useState(null);
+  const [collectionModalOpen, setCollectionModalOpen] = useState(false);
+  const [collectionTitle, setCollectionTitle] = useState('');
+  const [creatingCollection, setCreatingCollection] = useState(false);
+  const [collectionCopied, setCollectionCopied] = useState(false);
+
+  const handleCreateCollection = async () => {
+    if (selectedClips.length === 0) return;
+    setCreatingCollection(true);
+    try {
+      const res = await axios.post(`${API}/clip-collections`, {
+        clip_ids: selectedClips,
+        title: collectionTitle.trim() || `${selectedClips.length} Clips`,
+      }, { headers: getAuthHeader() });
+      setCollectionShare(res.data);
+    } catch (err) {
+      alert('Failed to create reel: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setCreatingCollection(false);
+    }
+  };
+
+  const collectionUrl = collectionShare
+    ? `${window.location.origin}/api/og/clip-collection/${collectionShare.share_token}`
+    : '';
+
+  const copyCollectionUrl = async () => {
+    if (!collectionUrl) return;
+    try {
+      await navigator.clipboard.writeText(collectionUrl);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = collectionUrl; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+    }
+    setCollectionCopied(true);
+    setTimeout(() => setCollectionCopied(false), 2000);
+  };
+
   const [sharingClip, setSharingClip] = useState(null);
   const [clipShareCopied, setClipShareCopied] = useState(false);
 
@@ -979,11 +1018,18 @@ const VideoAnalysis = () => {
                 {clips.length > 0 && (
                   <div className="flex items-center gap-2">
                     {selectedClips.length > 0 && (
-                      <button data-testid="download-selected-zip-btn"
-                        onClick={() => handleDownloadZip(selectedClips)} disabled={downloadingZip}
-                        className="text-[10px] text-[#A855F7] font-medium hover:text-[#C084FC] disabled:opacity-50">
-                        {downloadingZip ? 'Zipping...' : `Download ${selectedClips.length} as ZIP`}
-                      </button>
+                      <>
+                        <button data-testid="share-selected-reel-btn"
+                          onClick={() => { setCollectionTitle(''); setCollectionShare(null); setCollectionCopied(false); setCollectionModalOpen(true); }}
+                          className="text-[10px] text-[#A855F7] font-medium hover:text-[#C084FC]">
+                          Share {selectedClips.length} as Reel
+                        </button>
+                        <button data-testid="download-selected-zip-btn"
+                          onClick={() => handleDownloadZip(selectedClips)} disabled={downloadingZip}
+                          className="text-[10px] text-[#A855F7] font-medium hover:text-[#C084FC] disabled:opacity-50">
+                          {downloadingZip ? 'Zipping...' : `Download ${selectedClips.length} as ZIP`}
+                        </button>
+                      </>
                     )}
                     <button data-testid="download-all-zip-btn"
                       onClick={() => handleDownloadZip(clips.map(c => c.id))} disabled={downloadingZip}
@@ -1173,6 +1219,77 @@ const VideoAnalysis = () => {
               className="w-full bg-transparent border border-white/10 text-white py-2.5 text-xs font-bold tracking-wider uppercase hover:bg-[#1F1F1F] transition-colors rounded">
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Clip Reel (batch share) Modal */}
+      {collectionModalOpen && (
+        <div data-testid="reel-modal-overlay" onClick={() => !creatingCollection && setCollectionModalOpen(false)}
+          className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center px-4">
+          <div onClick={(e) => e.stopPropagation()}
+            className="bg-[#141414] border border-white/10 max-w-lg w-full p-6 rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#A855F7" strokeWidth="2"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="8" y1="6" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="18"/></svg>
+              <h3 className="text-2xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
+                {collectionShare ? 'Reel Ready' : 'Share Clip Reel'}
+              </h3>
+            </div>
+
+            {!collectionShare ? (
+              <>
+                <p className="text-sm text-[#A3A3A3] mb-4">
+                  Bundle <strong className="text-white">{selectedClips.length} selected clip{selectedClips.length === 1 ? '' : 's'}</strong> into
+                  one shareable reel page with a built-in playlist.
+                </p>
+                <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Reel Title</label>
+                <input data-testid="reel-title-input" type="text"
+                  value={collectionTitle}
+                  onChange={(e) => setCollectionTitle(e.target.value)}
+                  placeholder={`e.g., 1st Half Highlights, Ethan's Goals…`}
+                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 mb-5 focus:border-[#A855F7] focus:outline-none rounded" />
+                <div className="flex gap-3">
+                  <button data-testid="create-reel-btn" onClick={handleCreateCollection} disabled={creatingCollection}
+                    className="flex-1 bg-[#A855F7] hover:bg-[#9333EA] disabled:opacity-50 text-white py-3 font-bold tracking-wider uppercase text-xs transition-colors rounded">
+                    {creatingCollection ? 'Creating…' : 'Create Reel'}
+                  </button>
+                  <button type="button" onClick={() => setCollectionModalOpen(false)} disabled={creatingCollection}
+                    className="px-5 py-3 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] text-xs font-bold uppercase rounded">
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-[#A3A3A3] mb-4">
+                  Reel <strong className="text-white">"{collectionShare.title}"</strong> with {selectedClips.length} clip{selectedClips.length === 1 ? '' : 's'} is ready to share.
+                </p>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="flex-1 bg-[#0A0A0A] border border-white/10 text-[#A855F7] px-3 py-2.5 text-xs font-mono truncate select-all rounded">
+                    {collectionUrl}
+                  </div>
+                  <button data-testid="copy-reel-url-btn" onClick={copyCollectionUrl}
+                    className={`px-4 py-2.5 text-xs font-bold tracking-wider uppercase rounded transition-colors ${
+                      collectionCopied ? 'bg-[#10B981] text-black' : 'bg-[#A855F7] hover:bg-[#9333EA] text-white'
+                    }`}>
+                    {collectionCopied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <div className="text-[10px] text-[#10B981] tracking-[0.15em] uppercase font-bold mb-3 flex items-center gap-1.5">
+                  ✓ Smart link — unfurls with rich preview
+                </div>
+                <a data-testid="reel-preview-link"
+                  href={`${window.location.origin}/clips/${collectionShare.share_token}`}
+                  target="_blank" rel="noopener noreferrer"
+                  className="block text-xs text-[#A3A3A3] hover:text-white underline underline-offset-2 mb-5">
+                  Open reel in new tab →
+                </a>
+                <button onClick={() => setCollectionModalOpen(false)}
+                  className="w-full border border-white/10 text-white py-3 text-xs font-bold tracking-wider uppercase hover:bg-[#1F1F1F] rounded transition-colors">
+                  Done
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

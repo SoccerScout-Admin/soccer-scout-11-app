@@ -193,8 +193,9 @@ def render_folder_card(
     coach_name: str = "",
     match_count: int = 0,
     recent_matches: Optional[List[str]] = None,
+    label: str = "MATCH FILM FOLDER",
 ) -> bytes:
-    """Render OG card for a shared match-film folder."""
+    """Render OG card for a shared match-film folder (or clip-collection)."""
     img = Image.new("RGB", (W, H), BG_BOTTOM)
     _gradient_bg(img)
     draw = ImageDraw.Draw(img)
@@ -202,7 +203,7 @@ def render_folder_card(
     draw.rectangle([(0, 0), (8, H)], fill=ACCENT)
 
     label_font = _load_font(FONT_BOLD, 22)
-    draw.text((64, 56), "MATCH FILM FOLDER", font=label_font, fill=ACCENT)
+    draw.text((64, 56), label, font=label_font, fill=ACCENT)
 
     name_font = _fit_text(draw, folder_name, FONT_BOLD, W - 200, start_size=104, min_size=52)
     draw.text((64, 110), folder_name, font=name_font, fill=WHITE)

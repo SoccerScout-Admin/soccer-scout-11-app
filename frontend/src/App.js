@@ -11,6 +11,8 @@ import SharedClipView from './pages/SharedClipView';
 import ClubManager from './pages/ClubManager';
 import TeamRoster from './pages/TeamRoster';
 import SharedTeamView from './pages/SharedTeamView';
+import PlayerProfile from './pages/PlayerProfile';
+import SharedClipCollectionView from './pages/SharedClipCollectionView';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
@@ -73,6 +75,15 @@ function App() {
           <Route path="/shared/:shareToken" element={<SharedView />} />
           <Route path="/shared-team/:shareToken" element={<SharedTeamView />} />
           <Route path="/clip/:shareToken" element={<SharedClipView />} />
+          <Route path="/clips/:shareToken" element={<SharedClipCollectionView />} />
+          <Route
+            path="/player/:playerId"
+            element={
+              <ProtectedRoute>
+                <PlayerProfile />
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="/clubs"
             element={

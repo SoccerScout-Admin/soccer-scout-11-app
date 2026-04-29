@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 from routes.teams import router as teams_router
 from routes.og import router as og_router
 from routes.players import router as players_router
+from routes.player_profile import router as player_profile_router
 
 # ===== Storage: Connection Pooling + Retry for SSL resilience =====
 
@@ -2188,6 +2189,11 @@ app.include_router(_og_api)
 _players_api = APIRouter(prefix="/api")
 _players_api.include_router(players_router)
 app.include_router(_players_api)
+
+# Mount Player Profile + Clip-Collection (batch share) router
+_pp_api = APIRouter(prefix="/api")
+_pp_api.include_router(player_profile_router)
+app.include_router(_pp_api)
 
 # ===== Player Profile Pics =====
 # (Moved to routes/players.py — this section intentionally left empty)
