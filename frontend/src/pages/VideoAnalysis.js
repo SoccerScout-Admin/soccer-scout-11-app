@@ -233,6 +233,39 @@ const VideoAnalysis = () => {
   const [creatingCollection, setCreatingCollection] = useState(false);
   const [collectionCopied, setCollectionCopied] = useState(false);
 
+  const [taggingClip, setTaggingClip] = useState(null);
+  const [tagSearch, setTagSearch] = useState('');
+  const [tagSelection, setTagSelection] = useState([]);
+  const [savingTags, setSavingTags] = useState(false);
+
+  const openTagModal = (clip) => {
+    setTaggingClip(clip);
+    setTagSelection(clip.player_ids || []);
+    setTagSearch('');
+  };
+
+  const toggleTag = (playerId) => {
+    setTagSelection(prev =>
+      prev.includes(playerId) ? prev.filter(id => id !== playerId) : [...prev, playerId]
+    );
+  };
+
+  const saveClipTags = async () => {
+    if (!taggingClip) return;
+    setSavingTags(true);
+    try {
+      await axios.patch(`${API}/clips/${taggingClip.id}`, { player_ids: tagSelection }, { headers: getAuthHeader() });
+      setClips(prev => prev.map(c =>
+        c.id === taggingClip.id ? { ...c, player_ids: tagSelection } : c
+      ));
+      setTaggingClip(null);
+    } catch (err) {
+      alert('Failed to save tags: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setSavingTags(false);
+    }
+  };
+
   const handleCreateCollection = async () => {
     if (selectedClips.length === 0) return;
     setCreatingCollection(true);
@@ -1096,6 +1129,12 @@ const VideoAnalysis = () => {
                             <><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> Download MP4</>
                           )}
                         </button>
+                        <button data-testid={`tag-clip-${clip.id}-btn`}
+                          onClick={() => openTagModal(clip)}
+                          className="flex items-center gap-1 text-[10px] text-[#FBBF24] font-medium hover:text-[#FCD34D]">
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+                          {clip.player_ids?.length > 0 ? `Tags (${clip.player_ids.length})` : 'Tag'}
+                        </button>
                         <button data-testid={`share-clip-${clip.id}-btn`}
                           onClick={() => handleShareClip(clip)}
                           className="flex items-center gap-1 text-[10px] text-[#A855F7] font-medium hover:text-[#C084FC]">
@@ -1290,6 +1329,86 @@ const VideoAnalysis = () => {
                 </button>
               </>
             )}
+          </div>
+        </div>
+      )}
+      {/* Tag Players Modal */}
+      {taggingClip && (
+        <div data-testid="tag-modal-overlay" onClick={() => !savingTags && setTaggingClip(null)}
+          className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center px-4">
+          <div onClick={(e) => e.stopPropagation()}
+            className="bg-[#141414] border border-white/10 max-w-lg w-full max-h-[80vh] flex flex-col rounded-lg">
+            <div className="p-5 border-b border-white/10">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>Tag Players</h3>
+                  <p className="text-xs text-[#A3A3A3] mt-0.5 truncate">{taggingClip.title}</p>
+                </div>
+                <button data-testid="close-tag-modal" onClick={() => setTaggingClip(null)}
+                  className="p-1 text-[#666] hover:text-white">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+              <input data-testid="tag-search-input" type="text"
+                value={tagSearch}
+                onChange={(e) => setTagSearch(e.target.value)}
+                placeholder="Search by name or jersey number..."
+                className="w-full mt-3 bg-[#0A0A0A] border border-white/10 text-white px-3 py-2 text-sm focus:outline-none focus:border-[#FBBF24] rounded" />
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 space-y-1">
+              {players.length === 0 ? (
+                <p className="text-center text-sm text-[#666] py-8">No players in roster yet. Add players from the match detail page.</p>
+              ) : (
+                players
+                  .filter(p => {
+                    const q = tagSearch.toLowerCase();
+                    if (!q) return true;
+                    return (p.name || '').toLowerCase().includes(q) || String(p.number ?? '').includes(q);
+                  })
+                  .map(p => {
+                    const selected = tagSelection.includes(p.id);
+                    return (
+                      <button key={p.id} data-testid={`tag-player-${p.id}`}
+                        onClick={() => toggleTag(p.id)}
+                        className={`w-full flex items-center gap-3 p-3 transition-colors text-left rounded ${
+                          selected ? 'bg-[#FBBF24]/10 border border-[#FBBF24]/40' : 'bg-[#0A0A0A] border border-white/10 hover:bg-[#1A1A1A]'
+                        }`}>
+                        <div className={`w-5 h-5 flex-shrink-0 rounded border flex items-center justify-center ${
+                          selected ? 'bg-[#FBBF24] border-[#FBBF24]' : 'border-white/30'
+                        }`}>
+                          {selected && (
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                          )}
+                        </div>
+                        <span className="text-xl font-bold text-[#007AFF] flex-shrink-0 min-w-[28px] text-center" style={{ fontFamily: 'Bebas Neue' }}>
+                          {p.number ?? '—'}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-semibold text-white truncate">{p.name}</div>
+                          <div className="text-[10px] text-[#666] tracking-wider">{p.position || 'No position'}</div>
+                        </div>
+                      </button>
+                    );
+                  })
+              )}
+            </div>
+
+            <div className="p-4 border-t border-white/10 flex items-center justify-between gap-3">
+              <span className="text-xs text-[#A3A3A3]">
+                {tagSelection.length} player{tagSelection.length === 1 ? '' : 's'} selected
+              </span>
+              <div className="flex gap-2">
+                <button onClick={() => setTaggingClip(null)} disabled={savingTags}
+                  className="px-4 py-2 border border-white/10 text-[#A3A3A3] hover:text-white text-xs font-bold uppercase rounded">
+                  Cancel
+                </button>
+                <button data-testid="save-tags-btn" onClick={saveClipTags} disabled={savingTags}
+                  className="px-5 py-2 bg-[#FBBF24] hover:bg-[#FCD34D] disabled:opacity-50 text-black text-xs font-bold tracking-wider uppercase rounded">
+                  {savingTags ? 'Saving…' : 'Save Tags'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

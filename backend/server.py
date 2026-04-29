@@ -1818,6 +1818,26 @@ async def delete_clip(clip_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Clip not found")
     return {"message": "Clip deleted"}
 
+
+class ClipUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    clip_type: Optional[str] = None
+    player_ids: Optional[List[str]] = None
+
+
+@api_router.patch("/clips/{clip_id}")
+async def update_clip(clip_id: str, body: ClipUpdate, current_user: dict = Depends(get_current_user)):
+    """Edit clip metadata (used primarily for player tagging after creation)."""
+    clip = await db.clips.find_one({"id": clip_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+    if not updates:
+        return {"status": "noop"}
+    await db.clips.update_one({"id": clip_id}, {"$set": updates})
+    return {"status": "updated", **updates}
+
 # ===== Highlights =====
 
 @api_router.get("/highlights/video/{video_id}")

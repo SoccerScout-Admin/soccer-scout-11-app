@@ -1,0 +1,39 @@
+{
+  "summary": "Backend-only regression sweep for the soccer-analysis platform. Wrote and ran 23 pytest cases in /app/backend/tests/test_regression_sweep.py covering every endpoint in the review request. RESULT: 23/23 passing (100%). Endpoints covered: PATCH /api/clips/{id} (tag players) + /api/players/{id}/profile aggregation (teams + by_type stats + match enrichment); share toggle + public sanitized payload for /api/players/{id}/share, /api/teams/{id}/share, /api/clip-collections/{token}; multi-team 2-per-season cap (400 with season + team names in detail); POST /api/teams/{id}/promote (clone team + append new_team_id to each player's team_ids); GET /api/teams/{id}/eligible-players (correct at_cap flag for players already on 2 teams in the season); DELETE /api/players/{id}/teams/{tid} keeps the player record; OG HTML + 1200x630 PNG for folder / clip / team / clip-collection / player (all 404 on bad token; og:image URL uses the public ingress host, not internal). Sanitization verified: no user_id, team_ids, or profile_pic_path leak in any public payload.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_regression_sweep.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/regression_sweep.xml"
+  ],
+  "action_items": [
+    "Previous iteration's /app/backend/tests/test_shared_folders.py hardcodes EXISTING_SHARE_TOKEN='7c7fa97e-e60' which has since been revoked (the next token was 0c1c5e1a-b80 per iteration_2 notes). 3 of its 11 cases now fail with stale-seed 404s. Recommend refactoring that file to generate its own folder+share_token inside a fixture instead of relying on persistent seed data.",
+    "Consider increasing share_token length (currently uuid4()[:12] ~ 12 chars) to secrets.token_urlsafe(16) for stronger unguessability - carried over from iter_2 review."
+  ],
+  "critical_code_review_comments": [
+    "routes/player_profile.py: _build_profile_payload performs an N-write loop (one updateOne per un-shared clip, up to 50) every time a public viewer hits /api/shared/player/{token}. Consider bulkWrite or a single upsert-many so a crawler burst doesn't hammer Mongo. Same pattern is replicated in get_shared_clip_collection.",
+    "routes/teams.py get_shared_team returns team.id back to the public, which is fine, but omits owner.role protection logic (owner dict just has name/role projected but role isn't stripped before returning). Minor: consider returning only owner.name in the payload.",
+    "routes/og.py _public_base defaults request.base_url when fwd_host is missing, which in local dev could be http://0.0.0.0:8001 - fine in K8s because ingress always sets x-forwarded-host, but worth an explicit fallback to REACT_APP_BACKEND_URL env to avoid broken og:image URLs in any edge deploy.",
+    "routes/players.py _enforce_season_cap runs on every /players POST and /teams/{id}/promote indirectly via add_player_to_team but NOT during promote itself. If a coach promotes an already-full player (e.g., they're on 2 teams in new_season somehow), promote silently appends. Low risk given season gating but worth defensive check.",
+    "server.py PATCH /clips/{id} (ClipUpdate) doesn't validate that referenced player_ids actually exist / belong to the user. Invalid/foreign ids would silently stick to the clip.",
+    "routes/player_profile.py ClipCollectionCreate has no size cap; a coach could POST 10000 clip_ids which then runs a 10000-element $in query. Consider max_length on Field."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_regression_sweep.py (new - 23 test cases)"
+  ],
+  "success_rate": {"backend": "100% (23/23 on regression sweep; 8/11 on legacy test_shared_folders.py due to stale seed token)", "frontend": "skipped per request"},
+  "test_credentials": "testcoach@demo.com / password123 (loaded from /app/memory/test_credentials.md)",
+  "seed_data_creation": "All tests self-clean. Temporary TEST_* teams/players/collections are created and deleted in fixtures. Share toggles on the seed player (3ebccca5) and team (ff06eeba) are reverted in teardown so their original share state is preserved. A share_token may have been minted on sample clip 9e264deb if it didn't previously have one (benign; share is a boolean toggle - no data leaked without the explicit /api/clip/{token} URL).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression sweep lives at /app/backend/tests/test_regression_sweep.py. Run: `python -m pytest backend/tests/test_regression_sweep.py -v --junitxml=test_reports/pytest/regression_sweep.xml` from /app. It is idempotent - re-runs safely clean up after themselves. IMPORTANT: /app/backend/tests/test_shared_folders.py from iteration_2 has 3 brittle cases that rely on a revoked share_token (7c7fa97e-e60). Either update that token or refactor the file to mint its own fixture folder. No new seed data needed for future iterations.",
+  "rca of the issue": "N/A - no defects found. All 13 feature/endpoint items from the review request passed their regression checks on first run after one cosmetic test-assertion fix (initial test tried to verify X-Forwarded-Host pass-through by sending a custom value; K8s ingress overrides that header, so the test was updated to simply verify og:image uses the ingress public host rather than an internal/localhost one - which is the real user-facing behavior)."
+}
