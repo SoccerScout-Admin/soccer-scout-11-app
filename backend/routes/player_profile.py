@@ -152,7 +152,7 @@ async def get_shared_player(share_token: str):
 
 class ClipCollectionCreate(BaseModel):
     title: Optional[str] = None
-    clip_ids: List[str] = Field(min_length=1)
+    clip_ids: List[str] = Field(min_length=1, max_length=200)
 
 
 @router.post("/clip-collections")

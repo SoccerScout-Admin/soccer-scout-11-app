@@ -105,6 +105,13 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
 - ffmpeg auto-installs at server startup if missing
 
+### Clip Player Tagging UI + Backend Hardening (Complete - Apr 29, 2026)
+- New `PATCH /api/clips/{id}` endpoint accepts partial updates (title/description/clip_type/player_ids). When `player_ids` is set, validates every id belongs to the current user (returns 400 with helpful message if not).
+- VideoAnalysis sidebar: each clip got a yellow "Tag" / "Tags (N)" button next to Play/Download/Share. Opens a modal with a search box (by name or jersey #) listing the entire roster as toggleable cards (yellow checkbox + jersey + name + position). "Save Tags" persists via PATCH; PlayerProfile and SharedPlayerProfile now show real stats and highlight reels populated by these tags.
+- `ClipCollectionCreate.clip_ids` capped at `max_length=200` to prevent abuse.
+- **Regression sweep run** via testing agent: 23/23 endpoints passed including PATCH/profile aggregation/all 5 share variants (folder/team/player/clip/clip-collection) + their OG html + 1200×630 PNGs, multi-team season cap, promote, eligible-players, public payload sanitization. Sweep saved at `/app/backend/tests/test_regression_sweep.py` (idempotent — re-runs safely).
+- Stale `test_shared_folders.py` token from previous fork updated to current value (`0c1c5e1a-b80`).
+
 ### Public Player Dossier (Complete - Apr 29, 2026)
 - **Schema**: `Player.share_token: Optional[str]` added.
 - **Backend**: `POST /api/players/{id}/share` toggles a 12-char share token. Public `GET /api/shared/player/{token}` returns sanitized payload (only id/name/number/position/profile_pic_url/team — `user_id`, `match_id`, `team_ids`, etc. stripped) plus owner coach name, teams (joined to actual team docs), aggregated stats by clip type, and the highlight reel of clips. Each highlight clip is auto-granted a share_token so the existing public stream endpoint serves the video.

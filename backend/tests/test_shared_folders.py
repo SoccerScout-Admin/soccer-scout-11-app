@@ -4,7 +4,7 @@ import requests
 import pytest
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://video-scout-11.preview.emergentagent.com').rstrip('/')
-EXISTING_SHARE_TOKEN = os.environ.get('TEST_SHARE_TOKEN', '7c7fa97e-e60')
+EXISTING_SHARE_TOKEN = os.environ.get('TEST_SHARE_TOKEN', '0c1c5e1a-b80')
 
 
 # ---------- Public (no auth) shared folder endpoints ----------

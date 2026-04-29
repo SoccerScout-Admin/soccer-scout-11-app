@@ -1833,6 +1833,15 @@ async def update_clip(clip_id: str, body: ClipUpdate, current_user: dict = Depen
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+    # If player_ids are being set, validate they all exist and belong to this user
+    if "player_ids" in updates and updates["player_ids"]:
+        owned = await db.players.count_documents(
+            {"id": {"$in": updates["player_ids"]}, "user_id": current_user["id"]}
+        )
+        if owned != len(updates["player_ids"]):
+            raise HTTPException(
+                status_code=400, detail="One or more player_ids are unknown or not yours"
+            )
     if not updates:
         return {"status": "noop"}
     await db.clips.update_one({"id": clip_id}, {"$set": updates})
