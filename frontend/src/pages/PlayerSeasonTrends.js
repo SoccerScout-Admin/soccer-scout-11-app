@@ -288,6 +288,47 @@ const PlayerSeasonTrends = () => {
               </div>
             </section>
 
+            {/* Next-Level Checklist */}
+            {data.report.next_level_checklist?.milestones?.length > 0 && (
+              <section data-testid="next-level-card"
+                className="bg-gradient-to-br from-[#0F1F1A] to-[#141414] border border-[#10B981]/30 p-6">
+                <div className="flex items-center gap-2 mb-2">
+                  <Target size={18} weight="bold" className="text-[#10B981]" />
+                  <h2 className="text-xs font-bold tracking-[0.2em] uppercase text-[#10B981]">
+                    Path to {data.report.next_level_checklist.next_level}
+                  </h2>
+                </div>
+                <p className="text-xs text-[#A3A3A3] mb-5">
+                  Specific milestones this player must hit to reach the next recruitment tier — ordered from easiest to hardest.
+                </p>
+                <div className="space-y-3">
+                  {data.report.next_level_checklist.milestones.map((m, i) => (
+                    <div key={i} data-testid={`milestone-${i}`}
+                      className="bg-[#0A0A0A] border border-white/10 p-4 flex items-start gap-4">
+                      <div className="w-8 h-8 rounded-full bg-[#10B981]/15 border border-[#10B981]/30 flex items-center justify-center flex-shrink-0">
+                        <span className="text-sm font-bold text-[#10B981]" style={{ fontFamily: 'Bebas Neue' }}>{i + 1}</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h3 className="text-sm font-semibold text-white">{m.milestone}</h3>
+                        {m.why_it_matters && (
+                          <p className="text-[11px] text-[#A3A3A3] mt-1.5">
+                            <span className="text-[#60A5FA] font-bold tracking-wider uppercase mr-1.5">Why</span>
+                            {m.why_it_matters}
+                          </p>
+                        )}
+                        {m.how_to_train && (
+                          <p className="text-[11px] text-[#A3A3A3] mt-1">
+                            <span className="text-[#FBBF24] font-bold tracking-wider uppercase mr-1.5">Drill</span>
+                            {m.how_to_train}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
             {/* Recommended Drills */}
             {data.report.recommended_drills?.length > 0 && (
               <section data-testid="drills-card">

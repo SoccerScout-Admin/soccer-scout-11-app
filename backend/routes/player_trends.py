@@ -274,6 +274,13 @@ Produce a JSON object only (no markdown), with these EXACT keys:
     "where_they_excel": ["<2-3 bullets on standout recruiter traits>"],
     "development_priorities": ["<3 specific, actionable areas this player must improve to reach the next recruitment level>"]
   }},
+  "next_level_checklist": {{
+    "next_level": "<the immediate next tier above estimated_level>",
+    "milestones": [
+      {{"milestone": "<specific, measurable thing the player must demonstrate>", "why_it_matters": "<why scouts at the next level care>", "how_to_train": "<concrete drill or focus area>"}},
+      ... 3-5 milestones ordered from easiest to hardest
+    ]
+  }},
   "recommended_drills": ["<3-4 specific training drills tailored to development priorities>"]
 }}
 

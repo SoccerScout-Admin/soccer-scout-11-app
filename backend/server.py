@@ -58,6 +58,7 @@ from routes.analysis import router as analysis_router
 from routes.insights import router as insights_router
 from routes.season_trends import router as season_trends_router
 from routes.player_trends import router as player_trends_router
+from routes.coach_network import router as coach_network_router
 
 # ===== Storage: Connection Pooling + Retry for SSL resilience =====
 
@@ -2217,7 +2218,7 @@ _pp_api.include_router(player_profile_router)
 app.include_router(_pp_api)
 
 # Mount Folders, Matches, Annotations, Analysis, Insights (CRUD-style routers)
-for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router):
+for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router):
     _api = APIRouter(prefix="/api")
     _api.include_router(r)
     app.include_router(_api)
