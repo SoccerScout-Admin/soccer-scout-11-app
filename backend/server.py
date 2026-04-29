@@ -1141,6 +1141,73 @@ async def stream_chunked_video(video: dict, range_header: str = None):
 
 # ===== Video Metadata =====
 
+@api_router.delete("/videos/{video_id}")
+async def delete_video(video_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a video so the coach can re-upload to the same match.
+
+    Soft-deletes the video record (is_deleted=true), unlinks it from the match,
+    deletes associated clips/analyses/timeline_markers, removes any incomplete
+    chunked-upload session, and best-effort cleans the chunks from storage and
+    local disk so the next upload starts fresh.
+    """
+    video = await db.videos.find_one(
+        {"id": video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0}
+    )
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # 1) Mark deleted (preserve audit trail)
+    await db.videos.update_one(
+        {"id": video_id},
+        {"$set": {"is_deleted": True, "deleted_at": datetime.now(timezone.utc).isoformat()}},
+    )
+
+    # 2) Unlink from match if this was the match's active video
+    await db.matches.update_one(
+        {"id": video["match_id"], "video_id": video_id},
+        {"$unset": {"video_id": "", "duration": "", "processing_status": ""}},
+    )
+
+    # 3) Cascade-delete derived data
+    await db.clips.delete_many({"video_id": video_id, "user_id": current_user["id"]})
+    await db.analyses.delete_many({"video_id": video_id, "user_id": current_user["id"]})
+    await db.timeline_markers.delete_many({"video_id": video_id, "user_id": current_user["id"]})
+
+    # 4) Best-effort: clean storage chunks (object storage + on-disk fallback)
+    if video.get("is_chunked"):
+        chunk_paths = video.get("chunk_paths", {}) or {}
+        chunk_backends = video.get("chunk_backends", {}) or {}
+        for idx_str, path in chunk_paths.items():
+            backend = chunk_backends.get(idx_str, "storage")
+            try:
+                if backend == "filesystem":
+                    if path and os.path.exists(path):
+                        os.remove(path)
+                else:
+                    await run_in_threadpool(delete_object_sync, path)
+            except Exception:
+                pass
+        # Drop the orphaned upload session record so the next init is fresh
+        upload_id = video.get("storage_path", "").replace("chunked:", "")
+        if upload_id:
+            await db.chunked_uploads.delete_many({"upload_id": upload_id})
+        # Also wipe the per-video chunk dir if any
+        try:
+            video_dir = os.path.join(CHUNK_STORAGE_DIR, video_id)
+            if os.path.isdir(video_dir):
+                import shutil
+                shutil.rmtree(video_dir, ignore_errors=True)
+        except Exception:
+            pass
+    elif video.get("storage_path"):
+        try:
+            await run_in_threadpool(delete_object_sync, video["storage_path"])
+        except Exception:
+            pass
+
+    return {"status": "deleted", "video_id": video_id, "match_id": video["match_id"]}
+
+
 @api_router.get("/videos/{video_id}/metadata")
 async def get_video_metadata(video_id: str, current_user: dict = Depends(get_current_user)):
     video = await db.videos.find_one({"id": video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0})
@@ -1148,7 +1215,6 @@ async def get_video_metadata(video_id: str, current_user: dict = Depends(get_cur
         raise HTTPException(status_code=404, detail="Video not found")
     # Don't send chunk_paths in metadata (too large for large uploads)
     result = {k: v for k, v in video.items() if k not in ("chunk_paths", "chunk_sizes", "chunk_backends")}
-    
     # Add data integrity check for chunked videos
     if video.get("is_chunked"):
         chunk_paths = video.get("chunk_paths", {})

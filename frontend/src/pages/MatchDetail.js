@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, UploadSimple, VideoCamera, Spinner, Users, Plus, Trash, FileText } from '@phosphor-icons/react';
+import { ArrowLeft, UploadSimple, VideoCamera, Spinner, Users, Plus, Trash, FileText, Warning, ArrowsClockwise } from '@phosphor-icons/react';
 
 const MatchDetail = () => {
   const { matchId } = useParams();
@@ -19,12 +19,46 @@ const MatchDetail = () => {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState('');
+  const [videoMeta, setVideoMeta] = useState(null);
+  const [confirmReupload, setConfirmReupload] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     fetchMatch();
     fetchPlayers();
     fetchTeams();
   }, [matchId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch video processing status when match has a video
+  useEffect(() => {
+    if (!match?.video_id) { setVideoMeta(null); return; }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await axios.get(`${API}/videos/${match.video_id}/processing-status`, { headers: getAuthHeader() });
+        if (!cancelled) setVideoMeta(res.data);
+      } catch { /* video may not exist yet */ }
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [match?.video_id]);
+
+  const handleDeleteVideo = async () => {
+    if (!match?.video_id) return;
+    setDeleting(true);
+    try {
+      await axios.delete(`${API}/videos/${match.video_id}`, { headers: getAuthHeader() });
+      setConfirmReupload(false);
+      setVideoMeta(null);
+      // Refresh match so UI returns to upload state
+      await fetchMatch();
+    } catch (err) {
+      alert('Failed to delete video: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const fetchMatch = async () => {
     try {
@@ -268,18 +302,74 @@ const MatchDetail = () => {
               )}
             </div>
           ) : (
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-3" data-testid="video-status-bar">
               <div className="flex items-center gap-2 text-[#39FF14]">
                 <VideoCamera size={24} />
                 <span className="font-bold tracking-wider uppercase">Video Uploaded</span>
               </div>
+              {videoMeta?.processing_status && videoMeta.processing_status !== 'none' && (
+                <span data-testid="processing-status-chip"
+                  className={`text-[10px] tracking-[0.2em] uppercase font-bold px-3 py-1 ${
+                    videoMeta.processing_status === 'completed' ? 'bg-[#10B981]/15 text-[#10B981]' :
+                    videoMeta.processing_status === 'failed' ? 'bg-[#EF4444]/15 text-[#EF4444]' :
+                    'bg-[#FBBF24]/15 text-[#FBBF24]'
+                  }`}>
+                  {videoMeta.processing_status === 'completed' ? 'AI ready' :
+                   videoMeta.processing_status === 'failed' ? 'Processing failed' :
+                   `Processing… ${videoMeta.processing_progress || 0}%`}
+                </span>
+              )}
               <button data-testid="view-analysis-btn" onClick={() => navigate(`/video/${match.video_id}`)}
                 className="bg-[#007AFF] hover:bg-[#005bb5] text-white px-6 py-3 font-bold tracking-wider uppercase transition-colors">
                 View Analysis
               </button>
+              <button data-testid="reupload-video-btn" onClick={() => setConfirmReupload(true)}
+                className="flex items-center gap-2 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] px-4 py-3 font-bold tracking-wider uppercase text-xs transition-colors"
+                title="Delete this video and upload a new one. Clips and AI analysis will be removed.">
+                <ArrowsClockwise size={14} weight="bold" /> Replace Video
+              </button>
             </div>
           )}
         </div>
+
+        {/* Confirm Re-upload Modal */}
+        {confirmReupload && (
+          <div data-testid="confirm-reupload-overlay" onClick={() => !deleting && setConfirmReupload(false)}
+            className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center px-4">
+            <div onClick={(e) => e.stopPropagation()}
+              className="bg-[#141414] border border-[#EF4444]/30 max-w-md w-full p-6">
+              <div className="flex items-start gap-3 mb-3">
+                <Warning size={28} className="text-[#EF4444] flex-shrink-0" weight="fill" />
+                <div className="flex-1">
+                  <h3 className="text-xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
+                    Replace Match Video?
+                  </h3>
+                  <p className="text-sm text-[#A3A3A3] mt-2 leading-relaxed">
+                    The current video and everything derived from it will be permanently removed:
+                  </p>
+                  <ul className="text-xs text-[#A3A3A3] mt-2 space-y-1 list-disc pl-5">
+                    <li>The video file and any chunked upload data</li>
+                    <li>All clips created from this video</li>
+                    <li>AI timeline markers and analyses</li>
+                  </ul>
+                  <p className="text-sm text-white mt-3 font-medium">
+                    The match itself, your roster, and folder placement stay intact. You'll be able to upload a fresh video right away.
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-3 mt-5">
+                <button data-testid="confirm-reupload-btn" onClick={handleDeleteVideo} disabled={deleting}
+                  className="flex-1 bg-[#EF4444] hover:bg-[#DC2626] disabled:opacity-50 text-white py-3 font-bold tracking-wider uppercase text-xs transition-colors flex items-center justify-center gap-2">
+                  {deleting ? 'Deleting…' : <><Trash size={14} weight="bold" /> Delete Video</>}
+                </button>
+                <button onClick={() => setConfirmReupload(false)} disabled={deleting}
+                  className="px-5 py-3 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] text-xs font-bold uppercase">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Player Roster Section */}
         <div className="bg-[#141414] border border-white/10 p-8" data-testid="roster-section">

@@ -105,8 +105,18 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
 - ffmpeg auto-installs at server startup if missing
 
+### Replace / Re-upload Match Video (Complete - Apr 29, 2026)
+- New `DELETE /api/videos/{id}` endpoint: soft-deletes the video (sets `is_deleted=true`, records `deleted_at`), unlinks `match.video_id` + `match.duration` + `match.processing_status`, hard-deletes derived `clips` / `analyses` / `timeline_markers`, and best-effort cleans both object-storage chunks and on-disk `/var/video_chunks/{video_id}` directories so the next upload starts fresh. Also drops orphaned `chunked_uploads` session records.
+- MatchDetail.js now polls `/api/videos/{id}/processing-status` every 5s when a video is attached and shows a colored status chip (`AI ready` / `Processing… N%` / `Processing failed`).
+- New "Replace Video" button next to "View Analysis" → confirmation modal listing exactly what will be removed (video file, clips, AI markers/analyses) vs preserved (match, roster, folder, share links). After delete, MatchDetail seamlessly returns to its upload state without forcing a page reload.
+- Cascade verified end-to-end: seeded a fake video + clip + analysis + marker, called DELETE, confirmed all derived rows gone and match unlinked.
+
 ### Clip Player Tagging UI + Backend Hardening (Complete - Apr 29, 2026)
 - New `PATCH /api/clips/{id}` endpoint accepts partial updates (title/description/clip_type/player_ids). When `player_ids` is set, validates every id belongs to the current user (returns 400 with helpful message if not).
+- VideoAnalysis sidebar: each clip got a yellow "Tag" / "Tags (N)" button next to Play/Download/Share. Opens a modal with a search box (by name or jersey #) listing the entire roster as toggleable cards (yellow checkbox + jersey + name + position). "Save Tags" persists via PATCH; PlayerProfile and SharedPlayerProfile now show real stats and highlight reels populated by these tags.
+- `ClipCollectionCreate.clip_ids` capped at `max_length=200` to prevent abuse.
+- **Regression sweep run** via testing agent: 23/23 endpoints passed including PATCH/profile aggregation/all 5 share variants (folder/team/player/clip/clip-collection) + their OG html + 1200×630 PNGs, multi-team season cap, promote, eligible-players, public payload sanitization. Sweep saved at `/app/backend/tests/test_regression_sweep.py` (idempotent — re-runs safely).
+- Stale `test_shared_folders.py` token from previous fork updated to current value (`0c1c5e1a-b80`). When `player_ids` is set, validates every id belongs to the current user (returns 400 with helpful message if not).
 - VideoAnalysis sidebar: each clip got a yellow "Tag" / "Tags (N)" button next to Play/Download/Share. Opens a modal with a search box (by name or jersey #) listing the entire roster as toggleable cards (yellow checkbox + jersey + name + position). "Save Tags" persists via PATCH; PlayerProfile and SharedPlayerProfile now show real stats and highlight reels populated by these tags.
 - `ClipCollectionCreate.clip_ids` capped at `max_length=200` to prevent abuse.
 - **Regression sweep run** via testing agent: 23/23 endpoints passed including PATCH/profile aggregation/all 5 share variants (folder/team/player/clip/clip-collection) + their OG html + 1200×630 PNGs, multi-team season cap, promote, eligible-players, public payload sanitization. Sweep saved at `/app/backend/tests/test_regression_sweep.py` (idempotent — re-runs safely).
