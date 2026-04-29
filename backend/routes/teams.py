@@ -10,6 +10,7 @@ from db import db, APP_NAME
 from models import Team
 from routes.auth import get_current_user
 from services.storage import put_object_sync, get_object_sync
+from services.og_card import render_team_card
 
 router = APIRouter()
 
@@ -175,17 +176,13 @@ async def og_team_preview(share_token: str, request: Request):
     )
 
     club_name = ""
-    image_url = ""
     if team.get("club"):
         club = await db.clubs.find_one(
             {"id": team["club"], "user_id": team["user_id"]},
-            {"_id": 0, "name": 1, "logo_url": 1},
+            {"_id": 0, "name": 1},
         )
         if club:
             club_name = club.get("name", "")
-            if club.get("logo_url"):
-                base = str(request.base_url).rstrip("/")
-                image_url = base + club["logo_url"]
 
     title = f"{team['name']} — {team['season']}"
     if club_name:
@@ -194,18 +191,24 @@ async def og_team_preview(share_token: str, request: Request):
 
     # Frontend SPA route the user is redirected to
     spa_url = f"/shared-team/{share_token}"
+    # Use the public-facing host (X-Forwarded-Host) when behind ingress so the
+    # generated og:image URL is reachable by WhatsApp/Slack/Twitter crawlers,
+    # not the internal cluster URL that request.base_url returns.
+    fwd_host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    fwd_proto = request.headers.get("x-forwarded-proto", "https")
+    public_base = f"{fwd_proto}://{fwd_host}" if fwd_host else str(request.base_url).rstrip("/")
+    og_image_url = f"{public_base}/api/og/team/{share_token}/image.png"
 
     e_title = html_lib.escape(title)
     e_desc = html_lib.escape(description)
-    e_img = html_lib.escape(image_url)
+    e_img = html_lib.escape(og_image_url)
     e_spa = html_lib.escape(spa_url)
 
-    image_tags = ""
-    if image_url:
-        image_tags = f"""
+    image_tags = f"""
     <meta property="og:image" content="{e_img}" />
-    <meta property="og:image:width" content="512" />
-    <meta property="og:image:height" content="512" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:type" content="image/png" />
     <meta name="twitter:image" content="{e_img}" />"""
 
     body = f"""<!DOCTYPE html>
@@ -232,6 +235,69 @@ async def og_team_preview(share_token: str, request: Request):
 </body>
 </html>"""
     return HTMLResponse(body)
+
+
+@router.get("/og/team/{share_token}/image.png")
+async def og_team_image(share_token: str):
+    """Render a dynamic 1200x630 OG card PNG for the shared team."""
+    team = await db.teams.find_one({"share_token": share_token}, {"_id": 0})
+    if not team:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Player count + first few avatars
+    cursor = db.players.find(
+        {"team_id": team["id"], "user_id": team["user_id"]},
+        {"_id": 0, "profile_pic_path": 1, "number": 1, "name": 1, "position": 1},
+    ).sort("number", 1)
+    all_players = await cursor.to_list(50)
+    player_count = len(all_players)
+
+    # Fetch up to 6 player avatar bytes from object storage
+    avatar_blobs = []
+    for p in all_players:
+        if len(avatar_blobs) >= 6:
+            break
+        path = p.get("profile_pic_path")
+        if not path:
+            continue
+        try:
+            data, _ = await run_in_threadpool(get_object_sync, path)
+            avatar_blobs.append(data)
+        except Exception:
+            continue
+
+    # Club info / logo bytes
+    club_name = ""
+    club_logo_bytes = None
+    if team.get("club"):
+        club = await db.clubs.find_one(
+            {"id": team["club"], "user_id": team["user_id"]},
+            {"_id": 0, "name": 1, "logo_path": 1},
+        )
+        if club:
+            club_name = club.get("name", "")
+            if club.get("logo_path"):
+                try:
+                    club_logo_bytes, _ = await run_in_threadpool(
+                        get_object_sync, club["logo_path"]
+                    )
+                except Exception:
+                    pass
+
+    png = await run_in_threadpool(
+        render_team_card,
+        team["name"],
+        team["season"],
+        club_name,
+        player_count,
+        club_logo_bytes,
+        avatar_blobs,
+    )
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
 
 
 def _js_string(s: str) -> str:
