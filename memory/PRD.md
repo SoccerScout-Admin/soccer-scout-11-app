@@ -45,6 +45,21 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### Coach Annotation Templates (Complete - Apr 29, 2026)
+- New `routes/annotation_templates.py` (113 lines) — 4 endpoints scoped per-user + per annotation_type:
+  - `GET /api/annotation-templates[?annotation_type=note|tactical|key_moment]` — sorted by usage_count desc + created_at asc; lazy-seeds 10 default phrases on first call (3 note + 4 tactical + 3 key_moment).
+  - `POST /api/annotation-templates` — duplicate-detection (returns existing id with `duplicate: true` for same user + type + text).
+  - `POST /api/annotation-templates/{id}/use` — increments usage_count so most-used phrases float to the top.
+  - `DELETE /api/annotation-templates/{id}`.
+  - Cross-user isolation enforced; user_id stripped from responses.
+- New `pages/components/AnnotationForm.js` (142 lines) replaces inline form in VideoAnalysis.js — adds chip row above textarea (top 6 templates filtered by current annotationMode), one-click apply (fires /use), purple "Save as template" button next to Save Annotation that hides when text matches an existing template, optimistic re-sort.
+- 18 pytest cases in `/app/backend/tests/test_annotation_templates.py` covering seed, filter, sort, auth, create+duplicate, use+reorder, delete, isolation. **18/18 passing.**
+
+### Coach Network Contextual Surfacing (Complete - Apr 29, 2026)
+- **MatchInsights.js**: fetches `/api/coach-network/benchmarks`; renders `network-chip-strength-{i}` / `network-chip-weakness-{i}` purple chips ("N COACHES ALSO") next to each match strength/weakness when fuzzy match (≥2 shared meaningful words length≥4, with stop-word filter for noise like "team/play/goal/minute") hits a `common_strengths_across_coaches` / `common_weaknesses_across_coaches` entry. Chips correctly hide when network not ready (k<3 coaches).
+- **PlayerSeasonTrends.js**: fetches benchmarks; renders `platform-percentile-chip` ("X% of platform-rated players land at <level> (n/total)") below scout score rationale when player's `estimated_level` appears in `recruit_level_distribution` with ≥3 total ratings. Extracted into `<NetworkPercentileChip>` for symmetry with `<NetworkChip>` in MatchInsights.
+- Verified end-to-end: seeded 3 fake coaches with shared "Foul management"/"Strong goalkeeping" themes → chips rendered correctly; seeded 3 player trends at "Youth Competitive" → percentile chip showed "100% of platform-rated players land at Youth Competitive (4/4)". Test data cleaned up post-verification.
+
 ### VideoAnalysis Decomposition — Final 4 Blocks Extracted (Complete - Apr 29, 2026)
 - **`VideoAnalysisHeader.js`** (131 lines) — sticky header with match title/competition/date + back button + Download Package CTA + GB chip + processing banner (spinner, progress bar, 4-type status icons) + processing-failed banner with retry/resume CTA. Pure presentational.
 - **`TrimPanel.js`** (58 lines) — start/end time inputs with "Now" snap-to-currentTimestamp buttons + 3 analyze CTAs (tactical/player_performance/highlights). `videoDuration || Infinity` guard so users can type values before metadata loads (was a latent bug in inline JSX).
@@ -329,14 +344,14 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - None currently blocking
 
 ### P1 (Should Have)
-- Re-upload degraded videos (LFC vs Express 3%, LFC07BvsAYSO 8% data remaining) — filesystem chunks lost on container restart
+- Re-upload degraded videos (LFC vs Express 3%, LFC07BvsAYSO 8% data remaining) — filesystem chunks lost on container restart, requires user action
 
-### P2 (Nice to Have)
-- Season stats dashboard per player (aggregate stats across matches)
-- Batch share multiple clips at once (checkbox selection in VideoAnalysis.js → single shareable link)
-- Refactor remaining `server.py` (matches, folders, analysis, videos) into route modules — Videos read endpoints DONE; reprocess + AI-generate stay coupled to `run_auto_processing`
-- Decompose `VideoAnalysis.js` — DONE (1266 → 821 lines, -35%; 7 child components extracted: VideoPlayerWithMarkers, AnalysisTabs, VideoAnalysisHeader, TrimPanel, ClipsSidebar, AnnotationsSidebar, plus pre-existing TagPlayersModal/ShareClipModal/ShareReelModal)
+### Future / Backlog
 - Full extraction of AI auto-processing pipeline (`run_auto_processing`, `prepare_video_sample`, FFmpeg multi-segment compression) from `server.py` into `services/processing.py` — DEFERRED due to high regression risk on the core AI-pipeline / chunked-upload coupling
+- Dedicated "Manage Templates" modal once a coach exceeds 6 saved templates (current overflow shows "N saved" hint)
+- Bulk-share clips picker on Dashboard (already covered in VideoAnalysis sidebar; cross-match version is nice-to-have)
+- Season stats dashboard per player (aggregate stats across teams/seasons)
+- Surface position-breakdown comparison on TeamRoster (network %s vs your team %s)
 
 ## Test Credentials
 - Email: testcoach@demo.com

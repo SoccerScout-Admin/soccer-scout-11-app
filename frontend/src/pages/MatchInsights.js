@@ -4,11 +4,19 @@ import axios from 'axios';
 import { API, getAuthHeader } from '../App';
 import { ArrowLeft, Sparkle, ArrowsClockwise, TrendUp, TrendDown, Trophy, Lightbulb, Clock, Warning, Globe } from '@phosphor-icons/react';
 
-// Loose fuzzy match — checks if both phrases share ≥2 meaningful words (length>=4).
+// Common soccer-domain stop-words that would inflate fuzzy matches across very different statements.
+const STOP_WORDS = new Set([
+  'team', 'teams', 'play', 'plays', 'played', 'playing', 'game', 'games', 'goal', 'goals',
+  'minute', 'minutes', 'match', 'matches', 'with', 'from', 'this', 'that', 'their', 'there',
+  'were', 'where', 'which', 'what', 'when', 'into', 'about', 'half', 'time', 'around',
+]);
+
+// Loose fuzzy match — checks if both phrases share ≥2 meaningful words (length>=4, non-stop-words).
 const fuzzyMatchPattern = (text, pattern) => {
   const norm = (s) => (s || '').toLowerCase().replace(/[^a-z\s]/g, ' ');
-  const a = norm(text).split(/\s+/).filter((w) => w.length >= 4);
-  const b = norm(pattern).split(/\s+/).filter((w) => w.length >= 4);
+  const filterMeaningful = (arr) => arr.filter((w) => w.length >= 4 && !STOP_WORDS.has(w));
+  const a = filterMeaningful(norm(text).split(/\s+/));
+  const b = filterMeaningful(norm(pattern).split(/\s+/));
   if (a.length === 0 || b.length === 0) return false;
   const overlap = a.filter((w) => b.includes(w)).length;
   return overlap >= 2;

@@ -4,6 +4,21 @@ import axios from 'axios';
 import { API, getAuthHeader } from '../App';
 import { ArrowLeft, Sparkle, ArrowsClockwise, UserCircle, TrendUp, Target, GraduationCap, Lightbulb, Star, Globe } from '@phosphor-icons/react';
 
+const NetworkPercentileChip = ({ level, distribution }) => {
+  if (!level || !distribution) return null;
+  const totalRated = distribution.reduce((sum, r) => sum + r.count, 0);
+  const myCount = distribution.find((r) => r.level === level)?.count || 0;
+  if (totalRated < 3 || myCount === 0) return null;
+  const pct = Math.round((myCount / totalRated) * 100);
+  return (
+    <div data-testid="platform-percentile-chip"
+      className="mt-3 flex items-center gap-1.5 text-[10px] text-[#A855F7] bg-[#A855F7]/10 border border-[#A855F7]/30 px-2 py-1.5 rounded">
+      <Globe size={11} weight="bold" />
+      <span>{pct}% of platform-rated players land at <strong>{level}</strong> ({myCount}/{totalRated})</span>
+    </div>
+  );
+};
+
 const LEVEL_COLORS = {
   'Pro Academy': '#A855F7',
   'College D1': '#60A5FA',
@@ -249,20 +264,10 @@ const PlayerSeasonTrends = () => {
                     {data.report.recruiter_view.scout_score}<span className="text-base text-[#666]"> / 10</span>
                   </div>
                   <p className="text-[11px] text-[#A3A3A3] mt-2 leading-relaxed">{data.report.recruiter_view.scout_score_rationale}</p>
-                  {networkBenchmarks?.recruit_level_distribution && (() => {
-                    const myLevel = data.report.recruiter_view.estimated_level;
-                    const totalRated = networkBenchmarks.recruit_level_distribution.reduce((sum, r) => sum + r.count, 0);
-                    const myCount = networkBenchmarks.recruit_level_distribution.find((r) => r.level === myLevel)?.count || 0;
-                    if (totalRated < 3 || myCount === 0) return null;
-                    const pct = Math.round((myCount / totalRated) * 100);
-                    return (
-                      <div data-testid="platform-percentile-chip"
-                        className="mt-3 flex items-center gap-1.5 text-[10px] text-[#A855F7] bg-[#A855F7]/10 border border-[#A855F7]/30 px-2 py-1.5 rounded">
-                        <Globe size={11} weight="bold" />
-                        <span>{pct}% of platform-rated players land at <strong>{myLevel}</strong> ({myCount}/{totalRated})</span>
-                      </div>
-                    );
-                  })()}
+                  <NetworkPercentileChip
+                    level={data.report.recruiter_view.estimated_level}
+                    distribution={networkBenchmarks?.recruit_level_distribution}
+                  />
                 </div>
 
                 <div className="md:col-span-2 bg-[#0A0A0A] border border-white/10 p-5">
