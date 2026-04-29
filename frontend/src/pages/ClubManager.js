@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, Plus, Shield, Users, Trash, PencilSimple, Upload, CalendarBlank, CaretDown, CaretRight, ArrowsClockwise } from '@phosphor-icons/react';
+import { ArrowLeft, Plus, Shield, Users, Trash, PencilSimple, Upload, CalendarBlank, CaretDown, CaretRight, ArrowsClockwise, ShareNetwork, Copy, Check, X } from '@phosphor-icons/react';
 
 const ClubManager = () => {
   const navigate = useNavigate();
@@ -18,6 +18,8 @@ const ClubManager = () => {
   const [promoteTarget, setPromoteTarget] = useState(null); // {team} or null
   const [promoteForm, setPromoteForm] = useState({ new_season: '', new_team_name: '', keep_old: true });
   const [promoting, setPromoting] = useState(false);
+  const [shareClub, setShareClub] = useState(null); // club obj when modal open
+  const [shareCopied, setShareCopied] = useState(false);
 
   useEffect(() => { fetchClubs(); fetchTeams(); }, []);
 
@@ -110,6 +112,37 @@ const ClubManager = () => {
   };
 
   const toggleClub = (id) => setCollapsedClubs(prev => ({ ...prev, [id]: !prev[id] }));
+
+  const handleToggleClubShare = async () => {
+    if (!shareClub) return;
+    try {
+      const res = await axios.post(`${API}/clubs/${shareClub.id}/share`, {}, { headers: getAuthHeader() });
+      setShareClub({ ...shareClub, share_token: res.data.share_token });
+      // also refresh clubs list so the button reflects state
+      fetchClubs();
+    } catch (err) {
+      alert('Share toggle failed: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  const shareUrl = shareClub?.share_token
+    ? `${window.location.origin}/api/og/club/${shareClub.share_token}`
+    : '';
+
+  const previewUrl = shareClub?.share_token
+    ? `${window.location.origin}/shared-club/${shareClub.share_token}`
+    : '';
+
+  const handleCopyClubShare = async () => {
+    if (!shareUrl) return;
+    try { await navigator.clipboard.writeText(shareUrl); }
+    catch {
+      const ta = document.createElement('textarea');
+      ta.value = shareUrl; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+    }
+    setShareCopied(true);
+    setTimeout(() => setShareCopied(false), 2000);
+  };
 
   const openTeamForm = (clubId) => {
     setTeamFormClubId(clubId);
@@ -318,6 +351,13 @@ const ClubManager = () => {
                     className="flex items-center gap-1.5 text-[10px] tracking-[0.15em] uppercase font-bold px-3 py-2 bg-[#007AFF]/10 text-[#007AFF] hover:bg-[#007AFF]/20 transition-colors">
                     <Plus size={12} weight="bold" /> Team
                   </button>
+                  <button data-testid={`share-club-${club.id}-btn`}
+                    onClick={() => { setShareClub(club); setShareCopied(false); }}
+                    className={`flex items-center gap-1.5 text-[10px] tracking-[0.15em] uppercase font-bold px-3 py-2 transition-colors ${
+                      club.share_token ? 'bg-[#10B981]/15 text-[#10B981] hover:bg-[#10B981]/25' : 'bg-white/5 text-[#A3A3A3] hover:bg-white/10'
+                    }`}>
+                    <ShareNetwork size={12} weight="bold" /> {club.share_token ? 'Shared' : 'Share'}
+                  </button>
                   <button data-testid={`edit-club-${club.id}-btn`}
                     onClick={() => { setEditingClub(club); setClubName(club.name); setShowClubForm(true); }}
                     className="p-2 text-[#A3A3A3] hover:text-white hover:bg-white/10 transition-colors">
@@ -376,6 +416,69 @@ const ClubManager = () => {
           </button>
         )}
       </main>
+
+      {/* Club Share Modal */}
+      {shareClub && (
+        <div data-testid="club-share-overlay" onClick={() => setShareClub(null)}
+          className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center px-4">
+          <div onClick={(e) => e.stopPropagation()}
+            className="bg-[#141414] border border-white/10 max-w-lg w-full p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
+                  Public Club Page
+                </h3>
+                <p className="text-xs text-[#A3A3A3] mt-1">
+                  Share <strong className="text-white">{shareClub.name}</strong> with parents, scouts, and the wider community.
+                </p>
+              </div>
+              <button data-testid="close-club-share-modal" onClick={() => setShareClub(null)}
+                className="p-1 text-[#666] hover:text-white">
+                <X size={20} />
+              </button>
+            </div>
+
+            {shareClub.share_token ? (
+              <>
+                <div className="bg-[#0A0A0A] border border-white/10 p-3 flex items-center gap-2 mb-3">
+                  <input data-testid="club-share-url" readOnly value={shareUrl}
+                    className="flex-1 bg-transparent text-xs text-[#A3A3A3] outline-none truncate" />
+                  <button data-testid="copy-club-share-btn" onClick={handleCopyClubShare}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-[#007AFF] hover:bg-[#005bb5] text-white tracking-wider uppercase font-bold">
+                    {shareCopied ? <><Check size={12} weight="bold" /> Copied</> : <><Copy size={12} weight="bold" /> Copy</>}
+                  </button>
+                </div>
+                <div className="text-[10px] text-[#10B981] tracking-[0.15em] uppercase font-bold mb-3 flex items-center gap-1.5">
+                  <Check size={11} weight="bold" /> Smart link — unfurls with crest in WhatsApp, Slack, Twitter
+                </div>
+                <a href={previewUrl} target="_blank" rel="noopener noreferrer"
+                  className="block text-xs text-[#A3A3A3] hover:text-white underline underline-offset-2 mb-4">
+                  Open public club page in new tab →
+                </a>
+                <p className="text-[11px] text-[#666] mb-4">
+                  Anyone with this link sees the club crest, all teams, and counts. Each team's roster is only visible if you've separately enabled its public team page.
+                </p>
+                <button data-testid="revoke-club-share-btn" onClick={handleToggleClubShare}
+                  className="w-full text-xs py-3 border border-[#EF4444]/30 text-[#EF4444] hover:bg-[#EF4444]/10 tracking-wider uppercase font-bold transition-colors">
+                  Revoke Public Link
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="bg-[#0A0A0A] border border-white/10 p-4 mb-4">
+                  <p className="text-sm text-[#A3A3A3] leading-relaxed">
+                    Generate a public link with your club's crest and a directory of every team and season. Perfect for your club website or recruitment outreach.
+                  </p>
+                </div>
+                <button data-testid="enable-club-share-btn" onClick={handleToggleClubShare}
+                  className="w-full text-xs py-3 bg-[#007AFF] hover:bg-[#005bb5] text-white tracking-wider uppercase font-bold transition-colors flex items-center justify-center gap-2">
+                  <ShareNetwork size={14} weight="bold" /> Generate Public Link
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Promote Modal */}
       {promoteTarget && (

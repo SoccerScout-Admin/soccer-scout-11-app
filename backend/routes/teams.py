@@ -389,3 +389,53 @@ async def view_club_logo(club_id: str):
         return Response(content=data, media_type=content_type)
     except Exception:
         raise HTTPException(status_code=404, detail="Logo not found")
+
+
+
+# ===== Club Sharing =====
+
+@router.post("/clubs/{club_id}/share")
+async def toggle_club_share(club_id: str, current_user: dict = Depends(get_current_user)):
+    """Toggle a public share token for an entire club (all teams + crest)."""
+    club = await db.clubs.find_one(
+        {"id": club_id, "user_id": current_user["id"]}, {"_id": 0}
+    )
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found")
+    if club.get("share_token"):
+        await db.clubs.update_one({"id": club_id}, {"$set": {"share_token": None}})
+        return {"status": "unshared", "share_token": None}
+    token = str(uuid.uuid4())[:12]
+    await db.clubs.update_one({"id": club_id}, {"$set": {"share_token": token}})
+    return {"status": "shared", "share_token": token}
+
+
+@router.get("/shared/club/{share_token}")
+async def get_shared_club(share_token: str):
+    """Public: club crest + all its teams (with player counts) for a club home page."""
+    club = await db.clubs.find_one({"share_token": share_token}, {"_id": 0})
+    if not club:
+        raise HTTPException(status_code=404, detail="Shared club not found")
+
+    teams = await db.teams.find(
+        {"club": club["id"], "user_id": club["user_id"]},
+        {"_id": 0, "id": 1, "name": 1, "season": 1, "share_token": 1},
+    ).sort("season", -1).to_list(200)
+
+    # Enrich with player counts
+    for t in teams:
+        t["player_count"] = await db.players.count_documents(
+            {"team_ids": t["id"], "user_id": club["user_id"]}
+        )
+
+    owner = await db.users.find_one({"id": club["user_id"]}, {"_id": 0, "name": 1})
+
+    return {
+        "club": {
+            "id": club["id"],
+            "name": club["name"],
+            "logo_url": club.get("logo_url"),
+        },
+        "owner": {"name": (owner or {}).get("name", "Coach")},
+        "teams": teams,
+    }

@@ -96,3 +96,90 @@ async def list_deleted_videos(
         },
         {"_id": 0, "chunk_paths": 0, "chunk_sizes": 0, "chunk_backends": 0},
     ).sort("deleted_at", -1).to_list(20)
+
+
+# ===== Bulk match operations =====
+
+
+class BulkMatchAction(BaseModel):
+    match_ids: List[str] = Field(min_length=1, max_length=200)
+    folder_id: Optional[str] = None  # for "move" action
+    competition: Optional[str] = None  # for "set_competition" action
+
+
+@router.post("/matches/bulk/move")
+async def bulk_move_matches(
+    body: BulkMatchAction, current_user: dict = Depends(get_current_user)
+):
+    """Move selected matches into a folder (or to root if folder_id is null)."""
+    if body.folder_id:
+        folder = await db.folders.find_one(
+            {"id": body.folder_id, "user_id": current_user["id"]}, {"_id": 0}
+        )
+        if not folder:
+            raise HTTPException(status_code=404, detail="Target folder not found")
+    res = await db.matches.update_many(
+        {"id": {"$in": body.match_ids}, "user_id": current_user["id"]},
+        {"$set": {"folder_id": body.folder_id}},
+    )
+    return {"status": "moved", "count": res.modified_count}
+
+
+@router.post("/matches/bulk/competition")
+async def bulk_set_competition(
+    body: BulkMatchAction, current_user: dict = Depends(get_current_user)
+):
+    """Set the same competition value across multiple matches."""
+    if body.competition is None:
+        raise HTTPException(status_code=400, detail="competition is required")
+    res = await db.matches.update_many(
+        {"id": {"$in": body.match_ids}, "user_id": current_user["id"]},
+        {"$set": {"competition": body.competition}},
+    )
+    return {"status": "updated", "count": res.modified_count}
+
+
+@router.post("/matches/bulk/delete")
+async def bulk_delete_matches(
+    body: BulkMatchAction, current_user: dict = Depends(get_current_user)
+):
+    """Delete multiple matches and cascade-delete their derived data.
+
+    For each match, also: hard-delete clips/analyses/markers tied to the match's
+    video, and unlink any folder references. The video file itself is left
+    soft-deleted (not purged) so the same 24h restore window applies.
+    """
+    matches = await db.matches.find(
+        {"id": {"$in": body.match_ids}, "user_id": current_user["id"]},
+        {"_id": 0, "id": 1, "video_id": 1},
+    ).to_list(500)
+
+    video_ids = [m["video_id"] for m in matches if m.get("video_id")]
+    deleted_count = 0
+    for m in matches:
+        # Cascade derived data
+        if m.get("video_id"):
+            await db.clips.delete_many(
+                {"video_id": m["video_id"], "user_id": current_user["id"]}
+            )
+            await db.analyses.delete_many(
+                {"video_id": m["video_id"], "user_id": current_user["id"]}
+            )
+            await db.timeline_markers.delete_many(
+                {"video_id": m["video_id"], "user_id": current_user["id"]}
+            )
+        await db.matches.delete_one({"id": m["id"]})
+        deleted_count += 1
+
+    # Soft-delete associated videos so the 24h restore window still applies if
+    # the user changes their mind. Permanent purge happens via the sweeper.
+    if video_ids:
+        await db.videos.update_many(
+            {"id": {"$in": video_ids}, "user_id": current_user["id"]},
+            {"$set": {
+                "is_deleted": True,
+                "deleted_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+
+    return {"status": "deleted", "count": deleted_count}

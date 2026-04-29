@@ -105,6 +105,27 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
 - ffmpeg auto-installs at server startup if missing
 
+### Backlog Items Cleared (Complete - Apr 29, 2026)
+
+**1. Background sweeper for soft-deleted videos**
+- New `deleted_video_sweeper()` async task launched at startup; runs hourly; permanently deletes videos with `is_deleted=true` AND `deleted_at < now-24h`. Storage chunks were already cleaned at delete time, so this just tidies the metadata records.
+
+**2. Per-club share page**
+- `POST /api/clubs/{id}/share` toggle, public `GET /api/shared/club/{token}` returning club crest + name + all teams (with player counts and per-team share tokens for chained navigation).
+- OG card endpoints `/api/og/club/{token}` + `.png` (reuses the team-card layout with crest on the right).
+- New `/shared-club/:token` route → `SharedClubView.js` with hero (crest + name + N teams + M players + director credit), team cards that link to `/shared-team/:token` when a team's roster is also publicly shared.
+- ClubManager: added a 3rd action ("Share") on the club hover row, modal mirrors the team-share UX with copy-OG-URL + revoke flow.
+
+**3. Bulk match operations**
+- Backend: `POST /matches/bulk/move` (move many → folder or root), `/matches/bulk/competition` (set same competition string), `/matches/bulk/delete` (cascade-delete clips/analyses/markers + soft-delete associated videos so the 24h restore window applies).
+- Dashboard: yellow "Select" toggle activates selection mode → checkbox overlays on each match card → sticky bulk action bar with Move-to-folder dropdown, "Set Competition" prompt, "Delete" button. "Done" exits the mode.
+
+**4. AI jersey-number detection (auto-tag)**
+- New `POST /api/clips/{id}/ai-suggest-tags`: extracts a single 854px-wide JPEG frame at the clip's mid-point with FFmpeg (`-ss <ts> -frames:v 1 -vf scale=854:-1`), sends it to Gemini 2.5 Flash via `LlmChat` + `FileContentWithMimeType` with a strict-JSON prompt asking for visible jersey numbers, parses `{"jersey_numbers": [...]}`, then matches each number to roster players (`team_ids` aware).
+- VideoAnalysis tag modal: new gradient "AI Suggest Players" button at the top — runs the detection, pre-selects matched players, and shows an inline status: `AI detected jersey #7, #10 — 2 matched to roster`. Coach can then de-select before saving — keeps human-in-the-loop.
+
+**All four verified**: 23/23 regression sweep still passes after the additions. Screenshots confirm bulk-mode UI + public club page render correctly.
+
 ### server.py Refactor + Restore-Deleted-Video (Complete - Apr 29, 2026)
 
 **Restore deleted videos (24h grace window)**

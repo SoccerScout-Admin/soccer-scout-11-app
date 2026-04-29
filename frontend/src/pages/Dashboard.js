@@ -19,6 +19,52 @@ const Dashboard = () => {
   const [formData, setFormData] = useState({ team_home: '', team_away: '', date: '', competition: '' });
   const [folderFormData, setFolderFormData] = useState({ name: '', parent_id: null, is_private: false });
   const [loading, setLoading] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedMatchIds, setSelectedMatchIds] = useState([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  const toggleMatchSelection = (id) => {
+    setSelectedMatchIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const exitSelectionMode = () => { setSelectionMode(false); setSelectedMatchIds([]); };
+
+  const bulkMove = async (folder_id) => {
+    if (selectedMatchIds.length === 0) return;
+    setBulkBusy(true);
+    try {
+      await axios.post(`${API}/matches/bulk/move`, { match_ids: selectedMatchIds, folder_id }, { headers: getAuthHeader() });
+      await fetchMatches();
+      exitSelectionMode();
+    } catch (err) {
+      alert('Bulk move failed: ' + (err.response?.data?.detail || err.message));
+    } finally { setBulkBusy(false); }
+  };
+
+  const bulkSetCompetition = async () => {
+    const comp = window.prompt('Set competition for ' + selectedMatchIds.length + ' selected match' + (selectedMatchIds.length === 1 ? '' : 'es') + ':', '');
+    if (comp === null) return;
+    setBulkBusy(true);
+    try {
+      await axios.post(`${API}/matches/bulk/competition`, { match_ids: selectedMatchIds, competition: comp }, { headers: getAuthHeader() });
+      await fetchMatches();
+      exitSelectionMode();
+    } catch (err) {
+      alert('Bulk update failed: ' + (err.response?.data?.detail || err.message));
+    } finally { setBulkBusy(false); }
+  };
+
+  const bulkDelete = async () => {
+    if (!window.confirm(`Delete ${selectedMatchIds.length} match${selectedMatchIds.length === 1 ? '' : 'es'}? Their videos enter the 24h restore window. Clips and AI analyses are removed permanently.`)) return;
+    setBulkBusy(true);
+    try {
+      await axios.post(`${API}/matches/bulk/delete`, { match_ids: selectedMatchIds }, { headers: getAuthHeader() });
+      await fetchMatches();
+      exitSelectionMode();
+    } catch (err) {
+      alert('Bulk delete failed: ' + (err.response?.data?.detail || err.message));
+    } finally { setBulkBusy(false); }
+  };
   const navigate = useNavigate();
   const user = getCurrentUser();
 
@@ -320,7 +366,45 @@ const Dashboard = () => {
               className="bg-[#007AFF] hover:bg-[#005bb5] text-white px-6 py-3 font-bold tracking-wider uppercase transition-colors flex items-center gap-2">
               <Plus size={24} weight="bold" /> New Match
             </button>
+            <button data-testid="toggle-selection-mode-btn"
+              onClick={() => selectionMode ? exitSelectionMode() : setSelectionMode(true)}
+              className={`px-4 py-3 font-bold tracking-wider uppercase text-xs transition-colors border ${
+                selectionMode ? 'border-[#FBBF24] text-[#FBBF24] bg-[#FBBF24]/10' : 'border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F]'
+              }`}>
+              {selectionMode ? 'Done' : 'Select'}
+            </button>
           </div>
+
+          {/* Bulk action bar */}
+          {selectionMode && (
+            <div data-testid="bulk-action-bar"
+              className="sticky top-0 z-30 bg-[#FBBF24]/15 border border-[#FBBF24]/30 px-4 py-3 flex items-center gap-3 mb-4 -mx-4 md:mx-0 backdrop-blur">
+              <span className="text-sm font-bold tracking-wider uppercase text-[#FBBF24]">
+                {selectedMatchIds.length} selected
+              </span>
+              <div className="ml-auto flex flex-wrap gap-2">
+                <select data-testid="bulk-move-select"
+                  disabled={selectedMatchIds.length === 0 || bulkBusy}
+                  onChange={(e) => { if (e.target.value !== '__none__') bulkMove(e.target.value === '' ? null : e.target.value); e.target.value = '__none__'; }}
+                  defaultValue="__none__"
+                  className="bg-[#0A0A0A] border border-white/10 text-xs text-[#A3A3A3] px-3 py-2 focus:outline-none">
+                  <option value="__none__" disabled>Move to folder…</option>
+                  <option value="">No folder (root)</option>
+                  {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                </select>
+                <button data-testid="bulk-set-competition-btn" onClick={bulkSetCompetition}
+                  disabled={selectedMatchIds.length === 0 || bulkBusy}
+                  className="text-xs px-3 py-2 bg-[#007AFF]/15 text-[#007AFF] hover:bg-[#007AFF]/25 disabled:opacity-50 font-bold tracking-wider uppercase">
+                  Set Competition
+                </button>
+                <button data-testid="bulk-delete-btn" onClick={bulkDelete}
+                  disabled={selectedMatchIds.length === 0 || bulkBusy}
+                  className="text-xs px-3 py-2 bg-[#EF4444]/15 text-[#EF4444] hover:bg-[#EF4444]/25 disabled:opacity-50 font-bold tracking-wider uppercase">
+                  Delete
+                </button>
+              </div>
+            </div>
+          )}
 
           {displayMatches.length === 0 ? (
             <div className="text-center py-20">
@@ -332,9 +416,21 @@ const Dashboard = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {displayMatches.map((match) => (
                 <div key={match.id} data-testid={`match-card-${match.id}`}
-                  className="bg-[#141414] border border-white/10 p-6 hover:bg-[#1F1F1F] transition-colors cursor-pointer group relative"
-                  onClick={() => navigate(`/match/${match.id}`)}>
-                  {folders.length > 0 && (
+                  className={`bg-[#141414] border p-6 hover:bg-[#1F1F1F] transition-colors cursor-pointer group relative ${
+                    selectionMode && selectedMatchIds.includes(match.id) ? 'border-[#FBBF24]' : 'border-white/10'
+                  }`}
+                  onClick={() => selectionMode ? toggleMatchSelection(match.id) : navigate(`/match/${match.id}`)}>
+                  {selectionMode && (
+                    <div data-testid={`select-${match.id}`}
+                      className={`absolute top-3 left-3 w-6 h-6 rounded border-2 flex items-center justify-center ${
+                        selectedMatchIds.includes(match.id) ? 'bg-[#FBBF24] border-[#FBBF24]' : 'bg-transparent border-white/30'
+                      }`}>
+                      {selectedMatchIds.includes(match.id) && (
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                      )}
+                    </div>
+                  )}
+                  {!selectionMode && folders.length > 0 && (
                     <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity"
                       onClick={(e) => e.stopPropagation()}>
                       <select data-testid={`move-match-${match.id}-select`}

@@ -349,3 +349,64 @@ async def og_player_image(share_token: str):
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=300"},
     )
+
+
+
+# ===== Club OG (public club home page) =====
+
+@router.get("/og/club/{share_token}")
+async def og_club(share_token: str, request: Request):
+    club = await db.clubs.find_one({"share_token": share_token}, {"_id": 0})
+    if not club:
+        return HTMLResponse("<html><body><h1>Link Unavailable</h1></body></html>", status_code=404)
+    team_count = await db.teams.count_documents(
+        {"club": club["id"], "user_id": club["user_id"]}
+    )
+    owner = await db.users.find_one({"id": club["user_id"]}, {"_id": 0, "name": 1})
+    coach = (owner or {}).get("name", "Coach")
+    title = club["name"]
+    description = (
+        f"{team_count} team{'s' if team_count != 1 else ''} across the seasons. "
+        f"Public club home shared by {coach} on Soccer Scout."
+    )
+    spa_url = f"/shared-club/{share_token}"
+    image_url = f"{_public_base(request)}/api/og/club/{share_token}/image.png"
+    return HTMLResponse(_og_html(title, description, image_url, spa_url))
+
+
+@router.get("/og/club/{share_token}/image.png")
+async def og_club_image(share_token: str):
+    from services.og_card import render_team_card  # club uses the team-card layout
+    club = await db.clubs.find_one({"share_token": share_token}, {"_id": 0})
+    if not club:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    team_count = await db.teams.count_documents(
+        {"club": club["id"], "user_id": club["user_id"]}
+    )
+    player_count = await db.players.count_documents(
+        {"user_id": club["user_id"]}
+    )
+
+    logo_bytes = None
+    if club.get("logo_path"):
+        try:
+            logo_bytes, _ = await run_in_threadpool(get_object_sync, club["logo_path"])
+        except Exception:
+            pass
+
+    # Reuse team-card layout: name, "club" → label as season slot, etc.
+    png = await run_in_threadpool(
+        render_team_card,
+        club["name"],
+        f"{team_count} Team{'s' if team_count != 1 else ''}",
+        "",
+        player_count,
+        logo_bytes,
+        [],
+    )
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=300"},
+    )

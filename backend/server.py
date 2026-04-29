@@ -1791,6 +1791,159 @@ async def download_clip_info(clip_id: str, current_user: dict = Depends(get_curr
 
 # ===== Clip Video Download (actual MP4 extraction) =====
 
+@api_router.post("/clips/{clip_id}/ai-suggest-tags")
+async def ai_suggest_clip_tags(clip_id: str, current_user: dict = Depends(get_current_user)):
+    """Extract a frame from the clip and ask Gemini Vision which jersey numbers
+    are visible in it. Match those numbers to roster players and return suggestions.
+
+    Returns: {"suggestions": [{"player_id": "...", "name": "...", "number": 7, "confidence": "high"}], "raw": [7, 10]}
+    """
+    import subprocess
+    import json as _json
+
+    clip = await db.clips.find_one({"id": clip_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    video = await db.videos.find_one(
+        {"id": clip["video_id"], "is_deleted": False}, {"_id": 0}
+    )
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    # Roster for the match (and any team-affiliated players for this user)
+    match_id = clip.get("match_id") or video.get("match_id")
+    roster_query = {"user_id": current_user["id"]}
+    if match_id:
+        roster_query = {
+            "user_id": current_user["id"],
+            "$or": [{"match_id": match_id}, {"match_id": None}],
+        }
+    roster = await db.players.find(
+        roster_query, {"_id": 0, "id": 1, "name": 1, "number": 1, "position": 1}
+    ).to_list(200)
+    roster_by_number: dict[int, list[dict]] = {}
+    for p in roster:
+        if p.get("number") is not None:
+            roster_by_number.setdefault(p["number"], []).append(p)
+
+    # Frame timestamp = clip mid-point for best chance of a clear shot
+    frame_ts = clip["start_time"] + max(0.0, (clip["end_time"] - clip["start_time"]) / 2)
+
+    raw_path = None
+    frame_path = tempfile.mktemp(suffix=".jpg", dir="/var/video_chunks")
+
+    try:
+        # Assemble source video (same pattern as clip extraction)
+        if video.get("is_chunked"):
+            chunk_paths = video.get("chunk_paths", {}) or {}
+            chunk_backends = video.get("chunk_backends", {}) or {}
+            chunk_size = video.get("chunk_size", 50 * 1024 * 1024)
+            total_chunks = video.get("total_chunks", 0)
+            raw_path = tempfile.mktemp(suffix=".mp4", dir="/var/video_chunks")
+            with open(raw_path, "wb") as f:
+                for i in range(total_chunks):
+                    path = chunk_paths.get(str(i))
+                    if not path:
+                        f.write(b"\x00" * chunk_size)
+                        continue
+                    backend = chunk_backends.get(str(i), "storage")
+                    if backend == "filesystem" and not os.path.exists(path):
+                        f.write(b"\x00" * chunk_size)
+                        continue
+                    try:
+                        chunk_info = {"backend": backend, "path": path}
+                        data = await read_chunk_data(video["id"], i, chunk_info)
+                        f.write(data)
+                        del data
+                    except Exception:
+                        f.write(b"\x00" * chunk_size)
+        else:
+            raw_path = tempfile.mktemp(suffix=".mp4", dir="/var/video_chunks")
+            data, _ = await run_in_threadpool(get_object_sync, video["storage_path"])
+            with open(raw_path, "wb") as f:
+                f.write(data)
+            del data
+
+        # Extract a single frame at frame_ts, scaled down so Gemini sees it cheaply
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(frame_ts),
+            "-i", raw_path,
+            "-frames:v", "1",
+            "-vf", "scale=854:-1",  # ~480p width
+            "-q:v", "3",
+            frame_path,
+        ]
+        result = await run_in_threadpool(
+            subprocess.run, ffmpeg_cmd, capture_output=True, text=True, timeout=120
+        )
+        if result.returncode != 0 or not os.path.exists(frame_path):
+            raise HTTPException(status_code=500, detail="Failed to extract frame for AI analysis")
+
+        # Send frame to Gemini Vision
+        if not EMERGENT_KEY:
+            raise HTTPException(status_code=500, detail="LLM key not configured")
+
+        prompt = (
+            "You are analyzing a single frame from a soccer match. "
+            "Identify all clearly visible jersey numbers worn by players actively involved in the play "
+            "(not background/unfocused players). "
+            "Reply with a JSON object only, like: {\"jersey_numbers\": [7, 10, 23]}. "
+            "If no number is clearly readable, return {\"jersey_numbers\": []}. "
+            "Do not include any other text."
+        )
+        chat = LlmChat(
+            api_key=EMERGENT_KEY,
+            session_id=f"ai-tag-{clip_id}",
+            system_message="You are a sports vision assistant. Always reply with valid JSON.",
+        ).with_model("gemini", "gemini-2.5-flash")
+
+        image_attachment = FileContentWithMimeType(file_path=frame_path, mime_type="image/jpeg")
+        response = await chat.send_message(UserMessage(text=prompt, file_contents=[image_attachment]))
+
+        # Parse Gemini's JSON
+        raw_text = response if isinstance(response, str) else str(response)
+        # Strip ```json fences if present
+        cleaned = raw_text.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.strip("`").lstrip("json").strip()
+        try:
+            parsed = _json.loads(cleaned)
+            jersey_numbers = parsed.get("jersey_numbers", []) or []
+        except Exception:
+            jersey_numbers = []
+
+        # Map numbers -> roster players
+        suggestions = []
+        for n in jersey_numbers:
+            try:
+                n_int = int(n)
+            except (TypeError, ValueError):
+                continue
+            for p in roster_by_number.get(n_int, []):
+                suggestions.append({
+                    "player_id": p["id"],
+                    "name": p["name"],
+                    "number": n_int,
+                    "position": p.get("position", ""),
+                    "confidence": "medium",  # Gemini doesn't quantify; UI lets coach confirm
+                })
+
+        return {
+            "suggestions": suggestions,
+            "raw_numbers": [int(n) for n in jersey_numbers if str(n).isdigit()],
+            "frame_time": frame_ts,
+        }
+
+    finally:
+        for p in (raw_path, frame_path):
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+
+
 @api_router.get("/clips/{clip_id}/extract")
 async def extract_clip_video(clip_id: str, current_user: dict = Depends(get_current_user)):
     """Extract actual video segment for a clip using ffmpeg and return as streaming MP4"""
@@ -2286,6 +2439,29 @@ async def startup():
     
     # Auto-resume interrupted processing from previous server instance
     asyncio.create_task(resume_interrupted_processing())
+    # Periodic sweeper for permanently purging soft-deleted videos
+    asyncio.create_task(deleted_video_sweeper())
+
+
+async def deleted_video_sweeper():
+    """Hard-delete videos that have been soft-deleted for more than 24h.
+
+    Runs every hour. Removes the video record entirely (the cascade-delete of
+    clips/analyses/markers and storage cleanup happened at delete time).
+    """
+    while True:
+        try:
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            result = await db.videos.delete_many(
+                {"is_deleted": True, "deleted_at": {"$lt": cutoff}}
+            )
+            if result.deleted_count > 0:
+                logger.info(
+                    f"[sweeper] Permanently purged {result.deleted_count} soft-deleted videos"
+                )
+        except Exception as e:
+            logger.error(f"[sweeper] error: {e}")
+        await asyncio.sleep(3600)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

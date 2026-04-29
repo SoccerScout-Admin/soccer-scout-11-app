@@ -237,11 +237,30 @@ const VideoAnalysis = () => {
   const [tagSearch, setTagSearch] = useState('');
   const [tagSelection, setTagSelection] = useState([]);
   const [savingTags, setSavingTags] = useState(false);
+  const [aiSuggesting, setAiSuggesting] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState(null);
 
   const openTagModal = (clip) => {
     setTaggingClip(clip);
     setTagSelection(clip.player_ids || []);
     setTagSearch('');
+    setAiSuggestions(null);
+  };
+
+  const handleAiSuggest = async () => {
+    if (!taggingClip) return;
+    setAiSuggesting(true);
+    try {
+      const res = await axios.post(`${API}/clips/${taggingClip.id}/ai-suggest-tags`, {}, { headers: getAuthHeader() });
+      setAiSuggestions(res.data);
+      // Pre-select any matched players (coach can de-select before saving)
+      const ids = Array.from(new Set([...tagSelection, ...res.data.suggestions.map(s => s.player_id)]));
+      setTagSelection(ids);
+    } catch (err) {
+      alert('AI tagging failed: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setAiSuggesting(false);
+    }
   };
 
   const toggleTag = (playerId) => {
@@ -1354,6 +1373,31 @@ const VideoAnalysis = () => {
                 onChange={(e) => setTagSearch(e.target.value)}
                 placeholder="Search by name or jersey number..."
                 className="w-full mt-3 bg-[#0A0A0A] border border-white/10 text-white px-3 py-2 text-sm focus:outline-none focus:border-[#FBBF24] rounded" />
+              <button data-testid="ai-suggest-btn" onClick={handleAiSuggest} disabled={aiSuggesting}
+                className="mt-3 w-full text-xs py-2.5 bg-gradient-to-r from-[#A855F7] to-[#FBBF24] hover:opacity-90 disabled:opacity-50 text-black font-bold tracking-wider uppercase rounded flex items-center justify-center gap-2 transition-opacity">
+                {aiSuggesting ? (
+                  <>
+                    <div className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                    Analyzing frame…
+                  </>
+                ) : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L9.91 8.26L2 9.27L7.91 14.14L6.18 22L12 18.27L17.82 22L16.09 14.14L22 9.27L14.09 8.26L12 2Z"/></svg>
+                    AI Suggest Players
+                  </>
+                )}
+              </button>
+              {aiSuggestions && (
+                <div data-testid="ai-suggestions-result"
+                  className="mt-2 text-[10px] tracking-wider text-[#FBBF24] bg-[#FBBF24]/10 px-2 py-1.5 border border-[#FBBF24]/20">
+                  {aiSuggestions.suggestions.length > 0
+                    ? <>AI detected jersey #{aiSuggestions.raw_numbers.join(', #')} — {aiSuggestions.suggestions.length} matched to roster (pre-selected below).</>
+                    : aiSuggestions.raw_numbers.length > 0
+                      ? <>AI saw jersey #{aiSuggestions.raw_numbers.join(', #')} but no roster match.</>
+                      : <>AI couldn't read any jersey numbers from this clip's frame.</>
+                  }
+                </div>
+              )}
             </div>
 
             <div className="flex-1 overflow-y-auto p-3 space-y-1">
