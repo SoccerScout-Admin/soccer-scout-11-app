@@ -79,6 +79,11 @@ const TeamRoster = () => {
   };
 
   const shareUrl = useMemo(() =>
+    team?.share_token ? `${window.location.origin}/api/og/team/${team.share_token}` : '',
+    [team?.share_token]
+  );
+
+  const previewUrl = useMemo(() =>
     team?.share_token ? `${window.location.origin}/shared-team/${team.share_token}` : '',
     [team?.share_token]
   );
@@ -312,7 +317,7 @@ const TeamRoster = () => {
 
             {team.share_token ? (
               <>
-                <div className="bg-[#0A0A0A] border border-white/10 p-3 flex items-center gap-2 mb-4">
+                <div className="bg-[#0A0A0A] border border-white/10 p-3 flex items-center gap-2 mb-3">
                   <input data-testid="share-url-input" readOnly value={shareUrl}
                     className="flex-1 bg-transparent text-xs text-[#A3A3A3] outline-none truncate" />
                   <button data-testid="copy-share-btn" onClick={handleCopyShare}
@@ -320,6 +325,13 @@ const TeamRoster = () => {
                     {copied ? <><Check size={12} weight="bold" /> Copied</> : <><Copy size={12} weight="bold" /> Copy</>}
                   </button>
                 </div>
+                <div className="text-[10px] text-[#10B981] tracking-[0.15em] uppercase font-bold mb-3 flex items-center gap-1.5">
+                  <Check size={11} weight="bold" /> Smart link — unfurls with team name & crest in WhatsApp, Slack, Twitter
+                </div>
+                <a data-testid="preview-link" href={previewUrl} target="_blank" rel="noopener noreferrer"
+                  className="block text-xs text-[#A3A3A3] hover:text-white underline underline-offset-2 mb-4">
+                  Open public page in new tab →
+                </a>
                 <p className="text-[11px] text-[#666] mb-4">
                   Anyone with this link can see the squad photos, jersey numbers, positions, and any public
                   match film folders you've shared from this account.

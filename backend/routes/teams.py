@@ -1,8 +1,9 @@
 """Team and Club management routes"""
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
-from fastapi.responses import Response
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Request
+from fastapi.responses import Response, HTMLResponse
 from typing import Optional
 from starlette.concurrency import run_in_threadpool
+import html as html_lib
 import uuid
 from datetime import datetime, timezone
 from db import db, APP_NAME
@@ -153,6 +154,90 @@ async def get_shared_team(share_token: str):
         "players": players,
         "shared_matches": shared_matches,
     }
+
+
+@router.get("/og/team/{share_token}")
+async def og_team_preview(share_token: str, request: Request):
+    """Server-rendered OG/Twitter card for a shared team page.
+
+    Crawlers (WhatsApp, Slack, Twitter, LinkedIn, Discord, FB) read the static
+    HTML for unfurl previews. Real browsers JS-redirect to the React route.
+    """
+    team = await db.teams.find_one({"share_token": share_token}, {"_id": 0})
+    if not team:
+        return HTMLResponse(
+            "<html><body><h1>Link Unavailable</h1></body></html>",
+            status_code=404,
+        )
+
+    player_count = await db.players.count_documents(
+        {"team_id": team["id"], "user_id": team["user_id"]}
+    )
+
+    club_name = ""
+    image_url = ""
+    if team.get("club"):
+        club = await db.clubs.find_one(
+            {"id": team["club"], "user_id": team["user_id"]},
+            {"_id": 0, "name": 1, "logo_url": 1},
+        )
+        if club:
+            club_name = club.get("name", "")
+            if club.get("logo_url"):
+                base = str(request.base_url).rstrip("/")
+                image_url = base + club["logo_url"]
+
+    title = f"{team['name']} — {team['season']}"
+    if club_name:
+        title = f"{team['name']} — {club_name} ({team['season']})"
+    description = f"Squad of {player_count} players. View the full roster, jersey numbers, and recent match film."
+
+    # Frontend SPA route the user is redirected to
+    spa_url = f"/shared-team/{share_token}"
+
+    e_title = html_lib.escape(title)
+    e_desc = html_lib.escape(description)
+    e_img = html_lib.escape(image_url)
+    e_spa = html_lib.escape(spa_url)
+
+    image_tags = ""
+    if image_url:
+        image_tags = f"""
+    <meta property="og:image" content="{e_img}" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta name="twitter:image" content="{e_img}" />"""
+
+    body = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>{e_title}</title>
+    <meta name="description" content="{e_desc}" />
+
+    <meta property="og:type" content="profile" />
+    <meta property="og:title" content="{e_title}" />
+    <meta property="og:description" content="{e_desc}" />
+    <meta property="og:site_name" content="Soccer Scout" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="{e_title}" />
+    <meta name="twitter:description" content="{e_desc}" />{image_tags}
+
+    <meta http-equiv="refresh" content="0; url={e_spa}" />
+    <script>window.location.replace({_js_string(spa_url)});</script>
+</head>
+<body style="background:#0A0A0A;color:#fff;font-family:system-ui;padding:48px;text-align:center">
+    <p>Loading team page&hellip; <a href="{e_spa}" style="color:#007AFF">Click here</a> if not redirected.</p>
+</body>
+</html>"""
+    return HTMLResponse(body)
+
+
+def _js_string(s: str) -> str:
+    """JSON-safe JS string literal to avoid script injection in window.location."""
+    import json
+    return json.dumps(s)
 
 
 # ===== Clubs =====
