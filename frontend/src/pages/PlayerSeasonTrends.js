@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, Sparkle, ArrowsClockwise, UserCircle, TrendUp, Target, GraduationCap, Lightbulb, Star } from '@phosphor-icons/react';
+import { ArrowLeft, Sparkle, ArrowsClockwise, UserCircle, TrendUp, Target, GraduationCap, Lightbulb, Star, Globe } from '@phosphor-icons/react';
 
 const LEVEL_COLORS = {
   'Pro Academy': '#A855F7',
@@ -22,6 +22,7 @@ const PlayerSeasonTrends = () => {
   const [error, setError] = useState(null);
   const [teamId, setTeamId] = useState(null);
   const [availableTeams, setAvailableTeams] = useState([]);
+  const [networkBenchmarks, setNetworkBenchmarks] = useState(null);
 
   useEffect(() => {
     const load = async () => {
@@ -38,6 +39,11 @@ const PlayerSeasonTrends = () => {
           const res = await axios.get(`${API}/players/${playerId}/season-trends`, { headers: getAuthHeader(), params });
           setData(res.data);
         } catch { /* not generated yet */ }
+        // Coach Network benchmarks (best-effort)
+        try {
+          const bench = await axios.get(`${API}/coach-network/benchmarks`, { headers: getAuthHeader() });
+          if (bench.data?.ready) setNetworkBenchmarks(bench.data);
+        } catch { /* not enough coaches */ }
       } catch {
         setError('Player not found');
       } finally {
@@ -243,6 +249,20 @@ const PlayerSeasonTrends = () => {
                     {data.report.recruiter_view.scout_score}<span className="text-base text-[#666]"> / 10</span>
                   </div>
                   <p className="text-[11px] text-[#A3A3A3] mt-2 leading-relaxed">{data.report.recruiter_view.scout_score_rationale}</p>
+                  {networkBenchmarks?.recruit_level_distribution && (() => {
+                    const myLevel = data.report.recruiter_view.estimated_level;
+                    const totalRated = networkBenchmarks.recruit_level_distribution.reduce((sum, r) => sum + r.count, 0);
+                    const myCount = networkBenchmarks.recruit_level_distribution.find((r) => r.level === myLevel)?.count || 0;
+                    if (totalRated < 3 || myCount === 0) return null;
+                    const pct = Math.round((myCount / totalRated) * 100);
+                    return (
+                      <div data-testid="platform-percentile-chip"
+                        className="mt-3 flex items-center gap-1.5 text-[10px] text-[#A855F7] bg-[#A855F7]/10 border border-[#A855F7]/30 px-2 py-1.5 rounded">
+                        <Globe size={11} weight="bold" />
+                        <span>{pct}% of platform-rated players land at <strong>{myLevel}</strong> ({myCount}/{totalRated})</span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <div className="md:col-span-2 bg-[#0A0A0A] border border-white/10 p-5">

@@ -11,6 +11,7 @@ import VideoAnalysisHeader from './components/VideoAnalysisHeader';
 import TrimPanel from './components/TrimPanel';
 import ClipsSidebar from './components/ClipsSidebar';
 import AnnotationsSidebar from './components/AnnotationsSidebar';
+import AnnotationForm from './components/AnnotationForm';
 
 const VideoAnalysis = () => {
   const { videoId } = useParams();
@@ -694,39 +695,17 @@ const VideoAnalysis = () => {
 
             {/* Annotation Form */}
             {showAnnotationForm && (
-              <div className="bg-[#111] rounded-lg border border-white/10 p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold" style={{ fontFamily: 'Space Grotesk' }}>
-                    Add {annotationMode?.replace('_', ' ')} at {formatTime(currentTimestamp)}
-                  </h3>
-                  <button data-testid="close-annotation-form-btn"
-                    onClick={() => { setShowAnnotationForm(false); setAnnotationMode(null); setAnnotationText(''); }}
-                    className="text-[#666] hover:text-white">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                  </button>
-                </div>
-                <textarea data-testid="annotation-text-input" value={annotationText}
-                  onChange={(e) => setAnnotationText(e.target.value)}
-                  className="w-full bg-white/5 rounded-lg text-white px-3 py-2.5 mb-3 text-sm border border-white/10 focus:border-[#007AFF] focus:outline-none resize-none" rows="3"
-                  placeholder="Enter your annotation..." />
-                {players.length > 0 && (
-                  <div className="mb-3">
-                    <label className="block text-[10px] text-[#666] uppercase tracking-wider mb-1">Tag Player (optional)</label>
-                    <select data-testid="annotation-player-select" value={selectedPlayerId}
-                      onChange={(e) => setSelectedPlayerId(e.target.value)}
-                      className="w-full bg-white/5 rounded-lg text-white px-3 py-2 text-sm border border-white/10 focus:border-[#007AFF] focus:outline-none">
-                      <option value="">No player</option>
-                      {players.map(p => (
-                        <option key={p.id} value={p.id}>#{p.number || '?'} {p.name} ({p.team})</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                <button data-testid="save-annotation-btn" onClick={handleAddAnnotation}
-                  className="bg-[#007AFF] hover:bg-[#0066DD] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                  Save Annotation
-                </button>
-              </div>
+              <AnnotationForm
+                annotationMode={annotationMode}
+                currentTimestamp={currentTimestamp}
+                annotationText={annotationText}
+                setAnnotationText={setAnnotationText}
+                selectedPlayerId={selectedPlayerId}
+                setSelectedPlayerId={setSelectedPlayerId}
+                players={players}
+                onClose={() => { setShowAnnotationForm(false); setAnnotationMode(null); setAnnotationText(''); }}
+                onSave={handleAddAnnotation}
+              />
             )}
 
             {/* Analysis Tabs */}

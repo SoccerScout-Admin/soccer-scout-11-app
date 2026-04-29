@@ -2,7 +2,24 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, Sparkle, ArrowsClockwise, TrendUp, TrendDown, Trophy, Lightbulb, Clock, Warning } from '@phosphor-icons/react';
+import { ArrowLeft, Sparkle, ArrowsClockwise, TrendUp, TrendDown, Trophy, Lightbulb, Clock, Warning, Globe } from '@phosphor-icons/react';
+
+// Loose fuzzy match — checks if both phrases share ≥2 meaningful words (length>=4).
+const fuzzyMatchPattern = (text, pattern) => {
+  const norm = (s) => (s || '').toLowerCase().replace(/[^a-z\s]/g, ' ');
+  const a = norm(text).split(/\s+/).filter((w) => w.length >= 4);
+  const b = norm(pattern).split(/\s+/).filter((w) => w.length >= 4);
+  if (a.length === 0 || b.length === 0) return false;
+  const overlap = a.filter((w) => b.includes(w)).length;
+  return overlap >= 2;
+};
+
+const NetworkChip = ({ count, kind }) => (
+  <span data-testid={`network-chip-${kind}`}
+    className="inline-flex items-center gap-1 ml-2 px-1.5 py-0.5 text-[9px] font-bold tracking-wider uppercase bg-[#A855F7]/15 text-[#A855F7] border border-[#A855F7]/30">
+    <Globe size={9} weight="bold" /> {count} coaches also
+  </span>
+);
 
 const MatchInsights = () => {
   const { matchId } = useParams();
@@ -12,6 +29,7 @@ const MatchInsights = () => {
   const [generating, setGenerating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [networkBenchmarks, setNetworkBenchmarks] = useState(null);
 
   useEffect(() => {
     const load = async () => {
@@ -22,6 +40,11 @@ const MatchInsights = () => {
           const ins = await axios.get(`${API}/matches/${matchId}/insights`, { headers: getAuthHeader() });
           setInsights(ins.data);
         } catch { /* not generated yet */ }
+        // Coach Network benchmarks (best-effort, may return ready=false)
+        try {
+          const bench = await axios.get(`${API}/coach-network/benchmarks`, { headers: getAuthHeader() });
+          if (bench.data?.ready) setNetworkBenchmarks(bench.data);
+        } catch { /* not enough coaches yet */ }
       } catch (err) {
         setError('Match not found');
       } finally {
@@ -132,12 +155,15 @@ const MatchInsights = () => {
                   <h3 className="text-xs font-bold tracking-[0.2em] uppercase text-[#10B981]">Strengths</h3>
                 </div>
                 <ul className="space-y-2 text-sm">
-                  {insights.strengths.map((s, i) => (
-                    <li key={i} className="text-white leading-relaxed flex gap-2">
-                      <span className="text-[#10B981] flex-shrink-0">+</span>
-                      <span>{s}</span>
-                    </li>
-                  ))}
+                  {insights.strengths.map((s, i) => {
+                    const match = networkBenchmarks?.common_strengths_across_coaches?.find((n) => fuzzyMatchPattern(s, n.text));
+                    return (
+                      <li key={i} className="text-white leading-relaxed flex gap-2 flex-wrap">
+                        <span className="text-[#10B981] flex-shrink-0">+</span>
+                        <span className="flex-1">{s}{match && <NetworkChip count={match.count} kind={`strength-${i}`} />}</span>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
               <div data-testid="weaknesses-card" className="bg-[#1F0E0E] border border-[#EF4444]/20 p-5">
@@ -146,12 +172,15 @@ const MatchInsights = () => {
                   <h3 className="text-xs font-bold tracking-[0.2em] uppercase text-[#EF4444]">Weaknesses</h3>
                 </div>
                 <ul className="space-y-2 text-sm">
-                  {insights.weaknesses.map((w, i) => (
-                    <li key={i} className="text-white leading-relaxed flex gap-2">
-                      <span className="text-[#EF4444] flex-shrink-0">−</span>
-                      <span>{w}</span>
-                    </li>
-                  ))}
+                  {insights.weaknesses.map((w, i) => {
+                    const match = networkBenchmarks?.common_weaknesses_across_coaches?.find((n) => fuzzyMatchPattern(w, n.text));
+                    return (
+                      <li key={i} className="text-white leading-relaxed flex gap-2 flex-wrap">
+                        <span className="text-[#EF4444] flex-shrink-0">−</span>
+                        <span className="flex-1">{w}{match && <NetworkChip count={match.count} kind={`weakness-${i}`} />}</span>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             </section>

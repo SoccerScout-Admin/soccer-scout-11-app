@@ -1,0 +1,40 @@
+{
+  "summary": "Iteration 6 — focused tests on the 3 new features: (1) Coach Annotation Templates, (2) Coach-Network strength/weakness chips in MatchInsights, (3) Coach-Network platform-percentile chip in PlayerSeasonTrends. Backend: created /app/backend/tests/test_annotation_templates.py with 18 cases covering seed (10 defaults split 3/4/3), filter+invalid type, sort order, auth (5 endpoints × no/invalid token), create+duplicate detection, /use increments + reorders to top, delete + 404 unknown, and cross-user isolation (user B cannot see/use/delete user A's templates). All 18 PASS. Regression sweep + video routes: 35/35 PASS — zero regression from the new annotation-templates router mount. Frontend: AnnotationForm fully verified live on /video/d108814f-... — `tactical-tool-btn` opens form, `annotation-templates-row` renders 4 default tactical chips, clicking first chip fills `annotation-text-input` with 'Pressing trigger — won the ball high', typing custom text shows `save-as-template-btn`, clicking it POSTs and the new chip appears in the row (chip count 4→5→6 across two saves; cleanup performed). MatchInsights + PlayerSeasonTrends: both pages load cleanly with 0 React/JS errors and the network chips correctly hide because the live DB has only k=1 coach sample (samples.match_insights_aggregated=1, samples.player_trends_aggregated=1) → common_strengths_across_coaches=[], common_weaknesses_across_coaches=[], and recruit_level_distribution totalRated=1 fails the `< 3` guard. Both hide-paths verified end-to-end (zero chips rendered, no console errors). Component logic to render chips is correct by code inspection (lines 252–265 of PlayerSeasonTrends.js, fuzzyMatchPattern in MatchInsights.js); the agent-to-agent note in the request explicitly stated this clean-DB state is expected.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_annotation_templates.py",
+    "/app/backend/tests/test_regression_sweep.py",
+    "/app/backend/tests/test_video_routes.py",
+    "/app/test_reports/pytest/iter6_annotation_templates.xml",
+    "/app/test_reports/pytest/iter6_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "annotation_templates.py uses an 'is_default' flag on seed docs but never exposes it through any read endpoint surface — the field is harmless but not user-facing; consider removing from the schema or surfacing in UI to lock-protect default chips from accidental delete.",
+    "AnnotationForm.js `applyTemplate` mutates local state optimistically (line 47) and re-sorts by usage_count only — but the backend sort is (usage_count desc, created_at asc). After many same-usage chips, frontend ordering can diverge from a re-fetch. Low impact.",
+    "AnnotationForm.js shows `templates.length` 'saved' but only renders `templates.slice(0, 6)` — no UI way to see/manage the remaining ones. Acceptable for v1 but consider an overflow link to a 'manage templates' modal once usage grows.",
+    "PlayerSeasonTrends.js inline IIFE `{...(() => { ... })()}` at lines 252–265 is dense; extract to a small `<NetworkPercentileChip level={..} distribution={..} />` for unit-testability and to mirror the NetworkChip pattern already extracted in MatchInsights.js.",
+    "MatchInsights.js fuzzyMatchPattern (≥2 shared words length≥4) is reasonable but stop-words like 'team', 'play', 'goal' will inflate matches across very different statements — consider a tiny stop-word filter so 'Strong team play' doesn't false-match 'Weak team play'."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_annotation_templates.py (NEW — 18 test cases)"
+  ],
+  "success_rate": {
+    "backend": "100% — 18/18 annotation-template cases + 35/35 regression cases = 53/53",
+    "frontend": "100% — AnnotationForm chips/save-as-template fully verified live; MatchInsights + PlayerSeasonTrends pages load with 0 console errors and chips correctly hide per the documented k<3 threshold"
+  },
+  "test_credentials": "testcoach@demo.com / password123 (loaded from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None persistent. Test #test_create_new_template, #test_use_increments, #test_delete creates TEST_-prefixed templates and deletes them in the same test. The frontend chip-save test created 'TEST_UI_49933 — playmaker drift' and 'Built up through the third too slowly' (leftover from a prior iteration) — both deleted via API after the playwright run. Verified via final GET that no TEST_ residues remain in the testcoach@demo.com workspace.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 3 features green. The backend test file /app/backend/tests/test_annotation_templates.py is structured into 4 classes (TestSeedAndList, TestAuth, TestCreateUseDelete, TestIsolation) and reuses the auth_headers fixture from conftest.py. The seed-distribution test depends on the 10 default phrases in /app/backend/routes/annotation_templates.py — if the DEFAULT_TEMPLATES list changes (e.g., +1 phrase added), update test_seed_distribution counts (currently asserts 3 note + 4 tactical + 3 key_moment). Network-chip rendering is data-state-dependent: needs ≥3 coaches with overlapping match_insights themes (≥2 shared meaningful words length≥4) for MatchInsights chips, and ≥3 total ratings in recruit_level_distribution including the player's own level for PlayerSeasonTrends chip. To exercise the rendered-chip path live, seed 2 additional fake coaches with similar 'pressing/transition' themed match_insights and Youth Competitive trends. The Coach Network endpoint /api/coach-network/benchmarks currently reports samples.match_insights_aggregated=1 and samples.player_trends_aggregated=1, hence chips correctly hide.",
+  "rca of the issue": "N/A — no defects."
+}
