@@ -14,7 +14,7 @@ import jwt
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://video-scout-11.preview.emergentagent.com").rstrip("/")
 EXISTING_VIDEO_ID = "d108814f-cf70-43ee-b3e2-a2269c84aa63"  # LFC 07B vs Express FC, chunked
 
 

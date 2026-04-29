@@ -45,6 +45,19 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### server.py Refactor — Video Routes Extracted (Complete - Apr 29, 2026)
+- New `routes/videos.py` (111 lines) holds the 3 read-only video endpoints: `GET /api/videos/{video_id}/access-token` (5-min JWT for stream URLs), `GET /api/videos/{video_id}/metadata` (with chunks_available/chunks_total/data_integrity for chunked videos), `GET /api/videos/{video_id}/processing-status` (with completed_types/failed_types from analyses + server_boot_id).
+- Cached lazy-import for `SERVER_BOOT_ID` (read once, reused) avoids circular import with server.py.
+- Old duplicate definitions in server.py fully deleted — 2402 → 2331 lines.
+- 12 new pytest cases in `/app/backend/tests/test_video_routes.py` (auth-required, 404 paths, payload schema, chunk integrity, completed-analyses reflection, no-410-shim verification). Combined with 23-case regression sweep: **35/35 passing**.
+- Heavily-coupled endpoints (`/videos/{id}/reprocess`, `/analysis/generate`, `/analysis/generate-trimmed`, video streaming with Range, upload chunking, soft-delete) deliberately stay in server.py — they all depend on `run_auto_processing` / `read_chunk_data` / chunked-upload pipeline state.
+
+### VideoAnalysis Decomposition — Analysis Tabs Extracted (Complete - Apr 29, 2026)
+- New `pages/components/AnalysisTabs.js` (250 lines) — composed of `OverviewTab` (3-card summary + Start AI Processing CTA), `TimelineTab` (sortable AI marker list with click-to-seek), `AnalysisDetailTab` (handles tactical/player_performance/highlights with regenerate / generate states), wrapped by parent `AnalysisTabs` that owns the 5-tab nav and indicator dots (green for completed analyses, yellow for timeline with markers).
+- Pure presentational; parent VideoAnalysis still owns all state and passes callbacks (`onSelectTab`, `onGenerate`, `onStart`, `onSeek`).
+- VideoAnalysis.js: 1232 → 1076 lines (-156 lines, removed dead `getAnalysis` helper too). Combined with previous `VideoPlayerWithMarkers` extraction: 1266 → 1076 lines (-15%).
+- Verified end-to-end: all 5 tabs render, click-to-seek works (clicked timeline event @ 0:17 → video.currentTime=17), green/yellow indicator dots correct, regenerate/generate flows preserved.
+
 ### Coach Network — Anonymized Platform Benchmarks (Complete - Apr 29, 2026)
 - Backend `routes/coach_network.py` exposes `GET /api/coach-network/benchmarks` with k-anonymity threshold (≥3 coaches). Returns platform stats, per-coach distributions, position breakdown, recruit-level distribution, and the calling user's percentile bucket on matches/clips. Cross-coach themes (strengths/weaknesses) only surface when ≥3 coaches have hit the same pattern.
 - Frontend `pages/CoachNetwork.js` at `/coach-network`: privacy-first banner, 5-card platform stats grid, "Your bucket on the platform" gradient card with percentile pills, Recharts position-bar chart, recruiter-level pie chart, side-by-side common-strengths/weaknesses panels.
@@ -312,8 +325,8 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 ### P2 (Nice to Have)
 - Season stats dashboard per player (aggregate stats across matches)
 - Batch share multiple clips at once (checkbox selection in VideoAnalysis.js → single shareable link)
-- Refactor remaining `server.py` (matches, folders, analysis, videos) into route modules
-- Decompose `VideoAnalysis.js` (~1231 lines) — Timeline strip + Video Player extracted; Tactical/Players/Highlights/Timeline tabs still inline
+- Refactor remaining `server.py` (matches, folders, analysis, videos) into route modules — Videos read endpoints DONE; reprocess + AI-generate stay coupled to `run_auto_processing`
+- Decompose `VideoAnalysis.js` — VideoPlayerWithMarkers + AnalysisTabs DONE (1266 → 1076 lines). Remaining inline blocks: Trim panel, Clips sidebar, Annotations sidebar, Header processing chip — all medium-complexity but optional
 - Full extraction of AI auto-processing pipeline (`run_auto_processing`, `prepare_video_sample`, FFmpeg multi-segment compression) from `server.py` into `services/processing.py` — DEFERRED due to high regression risk on the core AI-pipeline / chunked-upload coupling
 
 ## Test Credentials

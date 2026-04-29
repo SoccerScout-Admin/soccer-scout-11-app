@@ -13,13 +13,19 @@ from routes.auth import get_current_user
 
 router = APIRouter()
 
+# Cache the boot id after first lookup so we don't import server.py on every request
+_cached_boot_id = None
+
 
 def _get_server_boot_id():
     """Lazy-load SERVER_BOOT_ID from server module so we don't create a circular import.
-    server.py owns the live boot-id constant; we read it on demand.
+    Cached after the first call.
     """
-    import server  # local import — server already imports this router *after* it's mounted
-    return server.SERVER_BOOT_ID
+    global _cached_boot_id
+    if _cached_boot_id is None:
+        import server  # local import — server already imports this router *after* it's mounted
+        _cached_boot_id = server.SERVER_BOOT_ID
+    return _cached_boot_id
 
 
 @router.get("/videos/{video_id}/access-token")

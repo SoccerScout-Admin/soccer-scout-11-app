@@ -53,9 +53,7 @@ const OverviewIcon = ({ type }) => {
   );
 };
 
-const OverviewTab = ({ analyses, isProcessing, isProcessed, processingStatus, onSelectTab, onStart }) => {
-  const getAnalysis = (type) => analyses.find((a) => a.analysis_type === type);
-  return (
+const OverviewTab = ({ getAnalysis, isProcessing, isProcessed, processingStatus, onSelectTab, onStart }) => (
     <div data-testid="overview-content">
       <h3 className="text-base font-semibold mb-4" style={{ fontFamily: 'Space Grotesk' }}>Analysis Summary</h3>
       {isProcessing ? (
@@ -107,7 +105,6 @@ const OverviewTab = ({ analyses, isProcessing, isProcessed, processingStatus, on
       )}
     </div>
   );
-};
 
 const TimelineTab = ({ sortedMarkers, onSeek }) => (
   <div data-testid="timeline-content">
@@ -118,7 +115,7 @@ const TimelineTab = ({ sortedMarkers, onSeek }) => (
         <p className="text-xs text-[#555]">Markers are automatically generated during AI processing.</p>
       </div>
     ) : (
-      <div className="space-y-1.5 max-h-[500px] overflow-y-auto">
+      <div className="space-y-1.5 max-h-[70vh] overflow-y-auto">
         {sortedMarkers.map((m) => {
           const color = TIMELINE_COLORS[m.type] || '#888';
           return (
@@ -225,7 +222,7 @@ const AnalysisTabs = ({
       <div className="p-6">
         {activeTab === 'overview' ? (
           <OverviewTab
-            analyses={analyses}
+            getAnalysis={getAnalysis}
             isProcessing={isProcessing}
             isProcessed={isProcessed}
             processingStatus={processingStatus}
