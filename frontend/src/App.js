@@ -9,6 +9,7 @@ import VideoAnalysis from './pages/VideoAnalysis';
 import SharedView from './pages/SharedView';
 import SharedClipView from './pages/SharedClipView';
 import ClubManager from './pages/ClubManager';
+import TeamRoster from './pages/TeamRoster';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
@@ -75,6 +76,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <ClubManager />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/team/:teamId"
+            element={
+              <ProtectedRoute>
+                <TeamRoster />
               </ProtectedRoute>
             }
           />

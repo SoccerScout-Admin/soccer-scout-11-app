@@ -273,7 +273,8 @@ const ClubManager = () => {
                 const clubInfo = clubs.find(c => c.id === team.club);
                 return (
                   <div key={team.id} data-testid={`team-card-${team.id}`}
-                    className="bg-[#141414] border border-white/10 p-5 flex items-center gap-4 hover:bg-[#1A1A1A] transition-colors group">
+                    onClick={() => navigate(`/team/${team.id}`)}
+                    className="bg-[#141414] border border-white/10 p-5 flex items-center gap-4 hover:bg-[#1A1A1A] transition-colors group cursor-pointer">
                     {/* Club Logo */}
                     <div className="w-10 h-10 flex-shrink-0 bg-[#0A0A0A] border border-white/5 flex items-center justify-center overflow-hidden">
                       {clubInfo?.logo_url ? (

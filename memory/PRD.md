@@ -105,6 +105,14 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
 - ffmpeg auto-installs at server startup if missing
 
+### Team Roster Page + Profile Pic Upload UI (Complete - Apr 29, 2026)
+- Dedicated `/team/:teamId` page (`TeamRoster.js`) for managing team-specific rosters per season
+- Players grouped by position (Goalkeeper/Defender/Midfielder/Forward)
+- Hover-to-reveal profile picture upload overlay on each player avatar
+- Cache-busting on uploaded avatars so freshly uploaded photos render immediately
+- Upload validates image MIME + 5MB cap; stored in Object Storage at `{APP}/players/{user}/{player}.{ext}`
+- Backend `/api/players` accepts `team_id`; `/api/teams/{team_id}/players` returns roster
+
 ## Backlog
 
 ### P0 (Must Have)
@@ -114,9 +122,10 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Re-upload degraded videos (LFC vs Express 3%, LFC07BvsAYSO 8% data remaining) — filesystem chunks lost on container restart
 
 ### P2 (Nice to Have)
-- Refactor `server.py` into route modules (auth, matches, folders, players, analysis, videos)
-- Shareable public folder links
-- Team management beyond per-match rosters
+- Season stats dashboard per player (aggregate stats across matches)
+- Batch share multiple clips at once (checkbox selection in VideoAnalysis.js → single shareable link)
+- Refactor remaining `server.py` (matches, folders, analysis, videos) into route modules
+- Decompose `VideoAnalysis.js` (~1176 lines) into Video Player + Timeline child components
 
 ## Test Credentials
 - Email: testcoach@demo.com

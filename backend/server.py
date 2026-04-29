@@ -361,22 +361,26 @@ class Player(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
-    match_id: str
+    match_id: Optional[str] = None
+    team_id: Optional[str] = None
     name: str
     number: Optional[int] = None
     position: str = ""
     team: str = ""
+    profile_pic_url: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 class PlayerCreate(BaseModel):
-    match_id: str
+    match_id: Optional[str] = None
+    team_id: Optional[str] = None
     name: str
     number: Optional[int] = None
     position: str = ""
     team: str = ""
 
 class PlayerBulkImport(BaseModel):
-    match_id: str
+    match_id: Optional[str] = None
+    team_id: Optional[str] = None
     csv_data: str
     team: str = ""
 
@@ -724,8 +728,9 @@ async def stream_shared_video(share_token: str, video_id: str, request: Request)
 @api_router.post("/players")
 async def create_player(input: PlayerCreate, current_user: dict = Depends(get_current_user)):
     player = Player(user_id=current_user["id"], **input.model_dump())
-    await db.players.insert_one(player.model_dump())
-    return player.model_dump()
+    data = player.model_dump()
+    await db.players.insert_one(data)
+    return {k: v for k, v in data.items() if k != "_id"}
 
 @api_router.post("/players/import-csv")
 async def import_players_csv(input: PlayerBulkImport, current_user: dict = Depends(get_current_user)):
@@ -1215,11 +1220,106 @@ async def get_video_metadata(video_id: str, current_user: dict = Depends(get_cur
 
 # ===== Auto-Processing (Hudl/Veo-like) =====
 
+def build_roster_context(roster: list) -> str:
+    """Build roster context string for AI prompts"""
+    if not roster:
+        return ""
+    roster_lines = []
+    for p in roster:
+        line = f"#{p.get('number', '?')} {p['name']}"
+        if p.get('position'):
+            line += f" ({p['position']})"
+        if p.get('team'):
+            line += f" - {p['team']}"
+        roster_lines.append(line)
+    return "\n\n**Known Players on the Roster:**\n" + "\n".join(roster_lines) + "\n\nReference these players by name and number in your analysis when you can identify them."
+
+
+def build_analysis_prompts(match: dict, roster_context: str, segment_preamble: str) -> dict:
+    """Build the AI prompt dictionary for each analysis type"""
+    return {
+        "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis covering:\n\n1. **Formations** - What formations are each team using? Any formation changes during the match?\n2. **Pressing Patterns** - How do teams press? High press, mid-block, or low block?\n3. **Build-up Play** - How do teams build from the back? Through the middle or wide?\n4. **Defensive Organization** - Shape, line height, compactness\n5. **Key Tactical Moments** - Pivotal tactical decisions that influenced the game\n6. **Recommendations** - Tactical improvements for both teams{roster_context}",
+        "player_performance": f"Analyze individual player performances in this soccer match between {match['team_home']} and {match['team_away']}. For each notable player provide:\n\n1. **Standout Performers** - Who were the best players and why?\n2. **Key Contributions** - Goals, assists, key passes, tackles\n3. **Work Rate & Positioning** - Movement, runs, defensive contribution\n4. **Decision Making** - Quality of decisions in key moments\n5. **Areas for Improvement** - What each key player could do better\n6. **Player Ratings** - Rate key players out of 10 with justification{roster_context}",
+        "highlights": f"Identify and describe ALL key moments and highlights from this soccer match between {match['team_home']} and {match['team_away']}. Include:\n\n1. **Goals & Assists** - Describe each goal in detail with timestamps if visible\n2. **Near Misses** - Close chances that didn't result in goals\n3. **Outstanding Saves** - Goalkeeper heroics\n4. **Tactical Shifts** - Moments where the game's momentum changed\n5. **Key Fouls & Cards** - Significant disciplinary moments\n6. **Game-Changing Plays** - Moments that altered the match outcome\n\nFor each moment, indicate the approximate time if visible and rate its significance (1-5 stars).{roster_context}",
+        "timeline_markers": f"Watch this soccer match video between {match['team_home']} and {match['team_away']}. The video contains multiple segments from across the full match at high quality.\n\n{segment_preamble}Identify EVERY key event with precise match timestamps (in seconds from the start of the match, NOT from the start of each segment).\n\nReturn ONLY a JSON array of event objects. Each object must have:\n- \"time\": match timestamp in seconds (number, from match start)\n- \"type\": one of \"goal\", \"shot\", \"save\", \"foul\", \"card\", \"substitution\", \"tactical\", \"chance\"\n- \"label\": short description (max 60 chars)\n- \"team\": which team (\"{match['team_home']}\" or \"{match['team_away']}\" or \"neutral\")\n- \"importance\": 1-5 (5 = most important, e.g. goals)\n\nBe thorough — identify goals, shots on target, saves, dangerous attacks, key fouls, tactical changes. Aim for 15-30 events across the full match.\n\nReturn ONLY the JSON array, no other text.{roster_context}"
+    }
+
+
+async def parse_and_store_markers(response: str, video_id: str, match_id: str, user_id: str):
+    """Parse timeline markers JSON from AI response and store in DB"""
+    import json as json_mod
+    clean = response.strip()
+    if clean.startswith("```"):
+        clean = clean.split("\n", 1)[1] if "\n" in clean else clean[3:]
+        if clean.endswith("```"):
+            clean = clean[:-3]
+        clean = clean.strip()
+    markers_data = json_mod.loads(clean)
+    if not isinstance(markers_data, list):
+        return 0
+    await db.markers.delete_many({"video_id": video_id, "user_id": user_id, "auto_generated": True})
+    for m in markers_data:
+        marker_doc = {
+            "id": str(uuid.uuid4()),
+            "video_id": video_id,
+            "match_id": match_id,
+            "user_id": user_id,
+            "time": float(m.get("time", 0)),
+            "type": m.get("type", "chance"),
+            "label": str(m.get("label", ""))[:100],
+            "team": m.get("team", "neutral"),
+            "importance": min(5, max(1, int(m.get("importance", 3)))),
+            "auto_generated": True,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.markers.insert_one(marker_doc)
+    logger.info(f"Stored {len(markers_data)} AI timeline markers for video {video_id}")
+    await auto_create_clips_from_markers(video_id, user_id, match_id)
+    return len(markers_data)
+
+
+async def run_single_analysis(video_id: str, user_id: str, match_id: str, analysis_type: str, video_file_path: str, prompt: str):
+    """Run a single analysis type against Gemini and store the result"""
+    chat = LlmChat(
+        api_key=EMERGENT_KEY,
+        session_id=f"auto-{video_id}-{analysis_type}",
+        system_message="You are an expert soccer analyst. You will receive the full match video (compressed). Analyze the entire match and provide detailed tactical insights, player assessments, highlight identification, and precise timestamp markers for key events."
+    ).with_model("gemini", "gemini-3.1-pro-preview")
+
+    video_file = FileContentWithMimeType(file_path=video_file_path, mime_type="video/mp4")
+    response = await chat.send_message(UserMessage(text=prompt, file_contents=[video_file]))
+
+    analysis_doc = {
+        "id": str(uuid.uuid4()),
+        "video_id": video_id,
+        "match_id": match_id,
+        "user_id": user_id,
+        "analysis_type": analysis_type,
+        "content": response,
+        "status": "completed",
+        "auto_generated": True,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.analyses.insert_one(analysis_doc)
+    logger.info(f"Auto-processing {video_id}: {analysis_type} COMPLETED")
+
+    # Parse timeline markers if applicable
+    if analysis_type == "timeline_markers" and response:
+        try:
+            await parse_and_store_markers(response, video_id, match_id, user_id)
+        except Exception as parse_err:
+            logger.warning(f"Failed to parse timeline markers JSON: {parse_err}")
+
+    return response
+
+
 async def run_auto_processing(video_id: str, user_id: str, only_types: list = None):
     """Background task: runs analysis types after upload. Saves each independently so partial completion survives restarts."""
     all_types = ["tactical", "player_performance", "highlights", "timeline_markers"]
     analysis_types = only_types if only_types else all_types
-    
+    tmp_path = None
+    tmp_path_720p = None
+
     try:
         await db.videos.update_one(
             {"id": video_id},
@@ -1236,38 +1336,23 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
             logger.error(f"Auto-processing: match for video {video_id} not found")
             return
 
-        # Fetch roster data for richer AI prompts
+        # Build context
         roster = await db.players.find({"match_id": video["match_id"]}, {"_id": 0}).to_list(100)
-        roster_context = ""
-        if roster:
-            roster_lines = []
-            for p in roster:
-                line = f"#{p.get('number', '?')} {p['name']}"
-                if p.get('position'):
-                    line += f" ({p['position']})"
-                if p.get('team'):
-                    line += f" - {p['team']}"
-                roster_lines.append(line)
-            roster_context = "\n\n**Known Players on the Roster:**\n" + "\n".join(roster_lines) + "\n\nReference these players by name and number in your analysis when you can identify them."
+        roster_context = build_roster_context(roster)
 
-        # Prepare video sample for AI analysis
-        tmp_path = None
-        segments_info = None
+        # Prepare video samples
         try:
             tmp_path = await prepare_video_sample(video)
         except Exception as e:
             logger.error(f"Auto-processing: failed to prepare video sample: {e}")
             await db.videos.update_one(
                 {"id": video_id},
-                {"$set": {
-                    "processing_status": "failed",
-                    "processing_error": f"Failed to prepare video: {str(e)[:200]}"
-                }}
+                {"$set": {"processing_status": "failed", "processing_error": f"Failed to prepare video: {str(e)[:200]}"}}
             )
             return
 
-        # For timeline markers, prepare a separate 720p multi-segment sample
-        tmp_path_720p = None
+        # For timeline markers, prepare 480p multi-segment sample
+        segments_info = None
         if "timeline_markers" in analysis_types:
             try:
                 tmp_path_720p, segments_info = await prepare_video_segments_720p(video)
@@ -1275,94 +1360,27 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
             except Exception as e:
                 logger.warning(f"720p segments failed, will fall back to standard sample: {e}")
 
+        # Build prompts
+        segment_preamble = ""
+        if segments_info:
+            segment_preamble = "Segment timing (these are the real match times shown in the video):\n" + segments_info + "\n\n"
+        prompts = build_analysis_prompts(match, roster_context, segment_preamble)
+
+        # Run each analysis type
         for idx, analysis_type in enumerate(analysis_types):
-            progress = int(((idx) / len(analysis_types)) * 100)
+            progress = int((idx / len(analysis_types)) * 100)
             await db.videos.update_one(
                 {"id": video_id},
-                {"$set": {
-                    "processing_progress": progress,
-                    "processing_current": analysis_type
-                }}
+                {"$set": {"processing_progress": progress, "processing_current": analysis_type}}
             )
             logger.info(f"Auto-processing {video_id}: {analysis_type} ({progress}%)")
 
+            use_path = tmp_path_720p if (analysis_type == "timeline_markers" and tmp_path_720p) else tmp_path
+
             try:
-                chat = LlmChat(
-                    api_key=EMERGENT_KEY,
-                    session_id=f"auto-{video_id}-{analysis_type}",
-                    system_message="You are an expert soccer analyst. You will receive the full match video (compressed). Analyze the entire match and provide detailed tactical insights, player assessments, highlight identification, and precise timestamp markers for key events."
-                ).with_model("gemini", "gemini-3.1-pro-preview")
-
-                # Use 720p segments for timeline markers if available, standard for others
-                use_path = tmp_path_720p if (analysis_type == "timeline_markers" and tmp_path_720p) else tmp_path
-                video_file = FileContentWithMimeType(file_path=use_path, mime_type="video/mp4")
-
-                segment_preamble = ""
-                if segments_info:
-                    segment_preamble = "Segment timing (these are the real match times shown in the video):\n" + segments_info + "\n\n"
-
-                prompts = {
-                    "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis covering:\n\n1. **Formations** - What formations are each team using? Any formation changes during the match?\n2. **Pressing Patterns** - How do teams press? High press, mid-block, or low block?\n3. **Build-up Play** - How do teams build from the back? Through the middle or wide?\n4. **Defensive Organization** - Shape, line height, compactness\n5. **Key Tactical Moments** - Pivotal tactical decisions that influenced the game\n6. **Recommendations** - Tactical improvements for both teams{roster_context}",
-                    "player_performance": f"Analyze individual player performances in this soccer match between {match['team_home']} and {match['team_away']}. For each notable player provide:\n\n1. **Standout Performers** - Who were the best players and why?\n2. **Key Contributions** - Goals, assists, key passes, tackles\n3. **Work Rate & Positioning** - Movement, runs, defensive contribution\n4. **Decision Making** - Quality of decisions in key moments\n5. **Areas for Improvement** - What each key player could do better\n6. **Player Ratings** - Rate key players out of 10 with justification{roster_context}",
-                    "highlights": f"Identify and describe ALL key moments and highlights from this soccer match between {match['team_home']} and {match['team_away']}. Include:\n\n1. **Goals & Assists** - Describe each goal in detail with timestamps if visible\n2. **Near Misses** - Close chances that didn't result in goals\n3. **Outstanding Saves** - Goalkeeper heroics\n4. **Tactical Shifts** - Moments where the game's momentum changed\n5. **Key Fouls & Cards** - Significant disciplinary moments\n6. **Game-Changing Plays** - Moments that altered the match outcome\n\nFor each moment, indicate the approximate time if visible and rate its significance (1-5 stars).{roster_context}",
-                    "timeline_markers": f"Watch this soccer match video between {match['team_home']} and {match['team_away']}. The video contains multiple segments from across the full match at high quality.\n\n{segment_preamble}Identify EVERY key event with precise match timestamps (in seconds from the start of the match, NOT from the start of each segment).\n\nReturn ONLY a JSON array of event objects. Each object must have:\n- \"time\": match timestamp in seconds (number, from match start)\n- \"type\": one of \"goal\", \"shot\", \"save\", \"foul\", \"card\", \"substitution\", \"tactical\", \"chance\"\n- \"label\": short description (max 60 chars)\n- \"team\": which team (\"{match['team_home']}\" or \"{match['team_away']}\" or \"neutral\")\n- \"importance\": 1-5 (5 = most important, e.g. goals)\n\nBe thorough — identify goals, shots on target, saves, dangerous attacks, key fouls, tactical changes. Aim for 15-30 events across the full match.\n\nReturn ONLY the JSON array, no other text.{roster_context}"
-                }
-                prompt = prompts.get(analysis_type, prompts["tactical"])
-
-                response = await chat.send_message(UserMessage(text=prompt, file_contents=[video_file]))
-
-                analysis_doc = {
-                    "id": str(uuid.uuid4()),
-                    "video_id": video_id,
-                    "match_id": video["match_id"],
-                    "user_id": user_id,
-                    "analysis_type": analysis_type,
-                    "content": response,
-                    "status": "completed",
-                    "auto_generated": True,
-                    "created_at": datetime.now(timezone.utc).isoformat()
-                }
-                await db.analyses.insert_one(analysis_doc)
-                logger.info(f"Auto-processing {video_id}: {analysis_type} COMPLETED")
-
-                # If timeline_markers, parse JSON and store individual markers
-                if analysis_type == "timeline_markers" and response:
-                    try:
-                        import json as json_mod
-                        # Strip markdown code fences if present
-                        clean = response.strip()
-                        if clean.startswith("```"):
-                            clean = clean.split("\n", 1)[1] if "\n" in clean else clean[3:]
-                            if clean.endswith("```"):
-                                clean = clean[:-3]
-                            clean = clean.strip()
-                        markers = json_mod.loads(clean)
-                        if isinstance(markers, list):
-                            await db.markers.delete_many({"video_id": video_id, "user_id": user_id, "auto_generated": True})
-                            for m in markers:
-                                marker_doc = {
-                                    "id": str(uuid.uuid4()),
-                                    "video_id": video_id,
-                                    "match_id": video["match_id"],
-                                    "user_id": user_id,
-                                    "time": float(m.get("time", 0)),
-                                    "type": m.get("type", "chance"),
-                                    "label": str(m.get("label", ""))[:100],
-                                    "team": m.get("team", "neutral"),
-                                    "importance": min(5, max(1, int(m.get("importance", 3)))),
-                                    "auto_generated": True,
-                                    "created_at": datetime.now(timezone.utc).isoformat()
-                                }
-                                await db.markers.insert_one(marker_doc)
-                            logger.info(f"Stored {len(markers)} AI timeline markers for video {video_id}")
-                            # Auto-create clips from markers
-                            await auto_create_clips_from_markers(video_id, user_id, video["match_id"])
-                    except Exception as parse_err:
-                        logger.warning(f"Failed to parse timeline markers JSON: {parse_err}")
-
+                await run_single_analysis(video_id, user_id, video["match_id"], analysis_type, use_path, prompts[analysis_type])
             except Exception as e:
                 logger.error(f"Auto-processing {video_id}: {analysis_type} FAILED: {e}")
-                # Save partial failure but continue with other analysis types
                 analysis_doc = {
                     "id": str(uuid.uuid4()),
                     "video_id": video_id,
@@ -1376,21 +1394,15 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
                 }
                 await db.analyses.insert_one(analysis_doc)
 
-        # Check if any analyses succeeded
+        # Final status
         completed_analyses = await db.analyses.find(
             {"video_id": video_id, "user_id": user_id, "status": "completed"},
             {"_id": 0, "analysis_type": 1}
         ).to_list(10)
-        
         final_status = "completed" if len(completed_analyses) > 0 else "failed"
         await db.videos.update_one(
             {"id": video_id},
-            {"$set": {
-                "processing_status": final_status,
-                "processing_progress": 100,
-                "processing_current": None,
-                "processing_completed_at": datetime.now(timezone.utc).isoformat()
-            }}
+            {"$set": {"processing_status": final_status, "processing_progress": 100, "processing_current": None, "processing_completed_at": datetime.now(timezone.utc).isoformat()}}
         )
         logger.info(f"Auto-processing {'COMPLETE' if final_status == 'completed' else 'FAILED (all types)'} for video {video_id}")
 
@@ -1398,10 +1410,7 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
         logger.error(f"Auto-processing FAILED for video {video_id}: {e}")
         await db.videos.update_one(
             {"id": video_id},
-            {"$set": {
-                "processing_status": "failed",
-                "processing_error": str(e)[:200]
-            }}
+            {"$set": {"processing_status": "failed", "processing_error": str(e)[:200]}}
         )
     finally:
         if tmp_path and os.path.exists(tmp_path):
