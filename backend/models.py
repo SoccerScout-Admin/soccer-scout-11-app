@@ -103,6 +103,7 @@ class Player(BaseModel):
     position: Optional[str] = None
     team: Optional[str] = None
     profile_pic_url: Optional[str] = None
+    share_token: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 class Team(BaseModel):

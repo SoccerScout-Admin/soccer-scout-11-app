@@ -9,7 +9,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 from db import db
-from services.og_card import render_folder_card, render_clip_card
+from services.og_card import render_folder_card, render_clip_card, render_player_card
+from services.storage import get_object_sync
 
 router = APIRouter()
 
@@ -238,6 +239,110 @@ async def og_clip_collection_image(share_token: str):
         len(clips),
         labels,
         "CLIP REEL",
+    )
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+
+# ===== Player OG (public dossier) =====
+
+@router.get("/og/player/{share_token}")
+async def og_player(share_token: str, request: Request):
+    player = await db.players.find_one({"share_token": share_token}, {"_id": 0})
+    if not player:
+        return HTMLResponse(
+            "<html><body><h1>Link Unavailable</h1></body></html>",
+            status_code=404,
+        )
+    owner = await db.users.find_one({"id": player["user_id"]}, {"_id": 0, "name": 1})
+    coach = (owner or {}).get("name", "Coach")
+
+    name = player.get("name") or "Player"
+    number = player.get("number")
+    position = player.get("position") or ""
+
+    title_parts = []
+    if number is not None:
+        title_parts.append(f"#{number}")
+    title_parts.append(name)
+    title = " ".join(title_parts)
+    if position:
+        title = f"{title} — {position}"
+
+    clip_count = await db.clips.count_documents(
+        {"player_ids": player["id"], "user_id": player["user_id"]}
+    )
+    description = (
+        f"Player dossier for {name}. {clip_count} clip{'s' if clip_count != 1 else ''} "
+        f"on Soccer Scout, shared by {coach}."
+    )
+
+    spa_url = f"/shared-player/{share_token}"
+    image_url = f"{_public_base(request)}/api/og/player/{share_token}/image.png"
+    return HTMLResponse(_og_html(title, description, image_url, spa_url))
+
+
+@router.get("/og/player/{share_token}/image.png")
+async def og_player_image(share_token: str):
+    player = await db.players.find_one(
+        {"share_token": share_token}, {"_id": 0}
+    )
+    if not player:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    user_id = player["user_id"]
+
+    # Stats by clip type
+    clips = await db.clips.find(
+        {"player_ids": player["id"], "user_id": user_id},
+        {"_id": 0, "clip_type": 1},
+    ).to_list(500)
+    stats: dict[str, int] = {}
+    for c in clips:
+        t = (c.get("clip_type") or "highlight").lower()
+        stats[t] = stats.get(t, 0) + 1
+
+    # Teams summary: "U17 + U19 (2025/26)"
+    team_ids = player.get("team_ids") or []
+    teams = []
+    if team_ids:
+        teams = await db.teams.find(
+            {"id": {"$in": team_ids}, "user_id": user_id},
+            {"_id": 0, "name": 1, "season": 1},
+        ).to_list(50)
+    seasons = sorted({t["season"] for t in teams}, reverse=True)
+    teams_summary = ""
+    if teams:
+        teams_summary = f"{len(teams)} team{'s' if len(teams) != 1 else ''}"
+        if seasons:
+            teams_summary += f" • {seasons[0]}"
+
+    # Profile pic bytes
+    profile_pic_bytes = None
+    if player.get("profile_pic_path"):
+        try:
+            profile_pic_bytes, _ = await run_in_threadpool(
+                get_object_sync, player["profile_pic_path"]
+            )
+        except Exception:
+            pass
+
+    owner = await db.users.find_one({"id": user_id}, {"_id": 0, "name": 1})
+    coach = (owner or {}).get("name", "")
+
+    png = await run_in_threadpool(
+        render_player_card,
+        player.get("name") or "Player",
+        player.get("number"),
+        player.get("position") or "",
+        teams_summary,
+        stats,
+        coach,
+        profile_pic_bytes,
     )
     return Response(
         content=png,

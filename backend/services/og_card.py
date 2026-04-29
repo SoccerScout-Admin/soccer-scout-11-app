@@ -334,3 +334,132 @@ def render_clip_card(
     out = BytesIO()
     img.save(out, format="PNG", optimize=True)
     return out.getvalue()
+
+
+
+def render_player_card(
+    name: str,
+    number: Optional[int] = None,
+    position: str = "",
+    teams_summary: str = "",
+    stats: Optional[dict] = None,
+    coach_name: str = "",
+    profile_pic_bytes: Optional[bytes] = None,
+) -> bytes:
+    """Render OG card for a public player dossier."""
+    img = Image.new("RGB", (W, H), BG_BOTTOM)
+    _gradient_bg(img)
+    draw = ImageDraw.Draw(img)
+
+    draw.rectangle([(0, 0), (8, H)], fill=ACCENT)
+
+    label_font = _load_font(FONT_BOLD, 22)
+    draw.text((64, 56), "PLAYER PROFILE", font=label_font, fill=ACCENT)
+
+    # Avatar circle on the right
+    avatar_size = 280
+    avatar_x = W - avatar_size - 64
+    avatar_y = (H - avatar_size) // 2 - 10
+    if profile_pic_bytes:
+        crop = _circle_crop(profile_pic_bytes, avatar_size)
+        if crop:
+            ring_size = avatar_size + 16
+            ring = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
+            ImageDraw.Draw(ring).ellipse(
+                (0, 0, ring_size - 1, ring_size - 1),
+                outline=ACCENT, width=4,
+            )
+            img.paste(ring, (avatar_x - 8, avatar_y - 8), ring)
+            img.paste(crop, (avatar_x, avatar_y), crop)
+    else:
+        # Placeholder ring
+        draw.ellipse(
+            (avatar_x, avatar_y, avatar_x + avatar_size, avatar_y + avatar_size),
+            fill=(31, 31, 31), outline=ACCENT, width=4,
+        )
+        ph_font = _load_font(FONT_BOLD, 96)
+        ph = (name or "?")[0].upper()
+        bbox = draw.textbbox((0, 0), ph, font=ph_font)
+        draw.text(
+            (avatar_x + (avatar_size - (bbox[2] - bbox[0])) // 2,
+             avatar_y + (avatar_size - (bbox[3] - bbox[1])) // 2 - 16),
+            ph, font=ph_font, fill=WHITE,
+        )
+
+    text_max_w = avatar_x - 64 - 32
+
+    # Jersey number (huge, blue) + name
+    if number is not None:
+        num_font = _load_font(FONT_BOLD, 144)
+        num_str = f"#{number}"
+        draw.text((64, 100), num_str, font=num_font, fill=ACCENT)
+        num_bbox = draw.textbbox((64, 100), num_str, font=num_font)
+        name_x = num_bbox[2] + 24
+        avail = text_max_w - (name_x - 64)
+        name_font = _fit_text(draw, name, FONT_BOLD, avail, start_size=88, min_size=44)
+        # Vertically align name baseline with bottom of number
+        nb = draw.textbbox((0, 0), name, font=name_font)
+        name_h = nb[3] - nb[1]
+        name_y = num_bbox[3] - name_h - 30
+        draw.text((name_x, name_y), name, font=name_font, fill=WHITE)
+        sub_y = num_bbox[3] + 12
+    else:
+        name_font = _fit_text(draw, name, FONT_BOLD, text_max_w, start_size=104, min_size=52)
+        draw.text((64, 110), name, font=name_font, fill=WHITE)
+        sub_y = draw.textbbox((64, 110), name, font=name_font)[3] + 18
+
+    # Position + teams summary
+    sub_parts = []
+    if position:
+        sub_parts.append(position)
+    if teams_summary:
+        sub_parts.append(teams_summary)
+    if sub_parts:
+        sub_font = _load_font(FONT_REG, 30)
+        draw.text((64, sub_y), "  •  ".join(sub_parts), font=sub_font, fill=SUBTLE)
+        sub_y += 50
+
+    # Stats chips (Goals, Saves, Highlights, etc.)
+    if stats:
+        chip_y = max(sub_y + 20, H - 200)
+        chip_x = 64
+        chip_font = _load_font(FONT_BOLD, 26)
+        small_font = _load_font(FONT_REG, 16)
+        # Show top 4 non-zero buckets
+        priority = ["goal", "save", "foul", "card", "highlight", "shot", "chance"]
+        ordered = [k for k in priority if (stats.get(k) or 0) > 0]
+        for k in ordered[:4]:
+            label = k.upper() + ("S" if not k.endswith("s") else "")
+            count = str(stats[k])
+            # Chip: count over label
+            count_bbox = draw.textbbox((0, 0), count, font=chip_font)
+            label_bbox = draw.textbbox((0, 0), label, font=small_font)
+            chip_w = max(count_bbox[2] - count_bbox[0], label_bbox[2] - label_bbox[0]) + 32
+            draw.rectangle(
+                (chip_x, chip_y, chip_x + chip_w, chip_y + 90),
+                fill=(20, 20, 20), outline=(60, 60, 60), width=1,
+            )
+            draw.rectangle((chip_x, chip_y, chip_x + 4, chip_y + 90), fill=ACCENT)
+            cw = count_bbox[2] - count_bbox[0]
+            draw.text((chip_x + (chip_w - cw) // 2, chip_y + 12),
+                      count, font=chip_font, fill=WHITE)
+            lw = label_bbox[2] - label_bbox[0]
+            draw.text((chip_x + (chip_w - lw) // 2, chip_y + 60),
+                      label, font=small_font, fill=SUBTLE)
+            chip_x += chip_w + 12
+
+    # Coach + brand
+    if coach_name:
+        coach_font = _load_font(FONT_REG, 18)
+        draw.text((64, H - 90), f"Shared by Coach {coach_name}",
+                  font=coach_font, fill=(120, 120, 120))
+
+    brand_font = _load_font(FONT_BOLD, 22)
+    brand = "SOCCER SCOUT"
+    bw = draw.textbbox((0, 0), brand, font=brand_font)[2]
+    draw.text((W - bw - 64, H - 56), brand, font=brand_font, fill=WHITE)
+    draw.ellipse((W - bw - 84, H - 50, W - bw - 72, H - 38), fill=ACCENT)
+
+    out = BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue()

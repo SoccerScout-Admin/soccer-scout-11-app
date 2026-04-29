@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, UserCircle, CalendarBlank, Play, Trophy, FilmStrip, Shield, ShieldCheck, Warning } from '@phosphor-icons/react';
+import { ArrowLeft, UserCircle, CalendarBlank, Play, Trophy, FilmStrip, Shield, ShieldCheck, Warning, ShareNetwork, Copy, Check, X } from '@phosphor-icons/react';
 
 const STAT_ICON = {
   goal: { label: 'Goals', color: '#10B981', icon: Trophy },
@@ -19,6 +19,8 @@ const PlayerProfile = () => {
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     axios.get(`${API}/players/${playerId}/profile`, { headers: getAuthHeader() })
@@ -26,6 +28,30 @@ const PlayerProfile = () => {
       .catch(err => console.error('Failed to fetch profile:', err))
       .finally(() => setLoading(false));
   }, [playerId]);
+
+  const handleToggleShare = async () => {
+    try {
+      const res = await axios.post(`${API}/players/${playerId}/share`, {}, { headers: getAuthHeader() });
+      setData(prev => ({ ...prev, player: { ...prev.player, share_token: res.data.share_token } }));
+    } catch (err) {
+      alert('Failed to update share status: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  const shareToken = data?.player?.share_token;
+  const shareUrl = shareToken ? `${window.location.origin}/api/og/player/${shareToken}` : '';
+  const previewUrl = shareToken ? `${window.location.origin}/shared-player/${shareToken}` : '';
+
+  const handleCopy = async () => {
+    if (!shareUrl) return;
+    try { await navigator.clipboard.writeText(shareUrl); }
+    catch {
+      const ta = document.createElement('textarea');
+      ta.value = shareUrl; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const teamsBySeason = useMemo(() => {
     if (!data?.teams) return {};
@@ -75,6 +101,14 @@ const PlayerProfile = () => {
           <h1 className="text-2xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
             Player Profile
           </h1>
+          <button data-testid="share-player-btn" onClick={() => setShareModalOpen(true)}
+            className={`ml-auto flex items-center gap-2 px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors border ${
+              shareToken
+                ? 'border-[#10B981]/40 text-[#10B981] hover:bg-[#10B981]/10'
+                : 'border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F]'
+            }`}>
+            <ShareNetwork size={14} weight="bold" /> {shareToken ? 'Shared' : 'Share Profile'}
+          </button>
         </div>
       </header>
 
@@ -211,6 +245,71 @@ const PlayerProfile = () => {
           </section>
         )}
       </main>
+
+      {/* Share Modal */}
+      {shareModalOpen && (
+        <div data-testid="share-modal-overlay" onClick={() => setShareModalOpen(false)}
+          className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center px-4">
+          <div onClick={(e) => e.stopPropagation()}
+            className="bg-[#141414] border border-white/10 max-w-lg w-full p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
+                  Public Player Dossier
+                </h3>
+                <p className="text-xs text-[#A3A3A3] mt-1">
+                  Share this player's stats and highlight reel with recruiters, scouts, and parents.
+                </p>
+              </div>
+              <button data-testid="close-share-modal" onClick={() => setShareModalOpen(false)}
+                className="p-1 text-[#666] hover:text-white">
+                <X size={20} />
+              </button>
+            </div>
+
+            {shareToken ? (
+              <>
+                <div className="bg-[#0A0A0A] border border-white/10 p-3 flex items-center gap-2 mb-3">
+                  <input data-testid="share-url-input" readOnly value={shareUrl}
+                    className="flex-1 bg-transparent text-xs text-[#A3A3A3] outline-none truncate" />
+                  <button data-testid="copy-share-btn" onClick={handleCopy}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-[#007AFF] hover:bg-[#005bb5] text-white tracking-wider uppercase font-bold">
+                    {copied ? <><Check size={12} weight="bold" /> Copied</> : <><Copy size={12} weight="bold" /> Copy</>}
+                  </button>
+                </div>
+                <div className="text-[10px] text-[#10B981] tracking-[0.15em] uppercase font-bold mb-3 flex items-center gap-1.5">
+                  <Check size={11} weight="bold" /> Smart link — unfurls with rich preview in WhatsApp, Slack, Twitter
+                </div>
+                <a data-testid="preview-link" href={previewUrl} target="_blank" rel="noopener noreferrer"
+                  className="block text-xs text-[#A3A3A3] hover:text-white underline underline-offset-2 mb-4">
+                  Open public dossier in new tab →
+                </a>
+                <p className="text-[11px] text-[#666] mb-4">
+                  Anyone with this link can see the player's photo, jersey, stats, and highlight clips.
+                  Internal data and ownership remain private.
+                </p>
+                <button data-testid="revoke-share-btn" onClick={handleToggleShare}
+                  className="w-full text-xs py-3 border border-[#EF4444]/30 text-[#EF4444] hover:bg-[#EF4444]/10 tracking-wider uppercase font-bold transition-colors">
+                  Revoke Public Link
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="bg-[#0A0A0A] border border-white/10 p-4 mb-4">
+                  <p className="text-sm text-[#A3A3A3] leading-relaxed">
+                    Generate a public link with the player's photo, jersey number, position, season stats,
+                    and full highlight reel. Perfect for recruiter outreach and college applications.
+                  </p>
+                </div>
+                <button data-testid="enable-share-btn" onClick={handleToggleShare}
+                  className="w-full text-xs py-3 bg-[#007AFF] hover:bg-[#005bb5] text-white tracking-wider uppercase font-bold transition-colors flex items-center justify-center gap-2">
+                  <ShareNetwork size={14} weight="bold" /> Generate Public Dossier
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,4 +1,4 @@
-"""Player profile aggregation and clip-collection (batch share) endpoints."""
+"""Player profile aggregation, public share, and clip-collection (batch share) endpoints."""
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -10,54 +10,78 @@ from routes.auth import get_current_user
 router = APIRouter()
 
 
-# ===== Player profile + season stats =====
+async def _build_profile_payload(player: dict, user_id: str, public: bool) -> dict:
+    """Aggregate player identity + teams + clip-derived stats + highlight reel.
 
-@router.get("/players/{player_id}/profile")
-async def get_player_profile(
-    player_id: str, current_user: dict = Depends(get_current_user)
-):
-    """Aggregated profile: identity + teams (with seasons) + clip-derived stats + highlight reel."""
-    player = await db.players.find_one(
-        {"id": player_id, "user_id": current_user["id"]},
-        {"_id": 0, "profile_pic_path": 0},
-    )
-    if not player:
-        raise HTTPException(status_code=404, detail="Player not found")
-
+    When `public=True`, sanitize internal fields and ensure each clip has a
+    share_token so its existing public stream endpoint serves the video.
+    """
     team_ids = player.get("team_ids") or []
     teams = []
     if team_ids:
-        teams_raw = await db.teams.find(
-            {"id": {"$in": team_ids}, "user_id": current_user["id"]},
+        teams = await db.teams.find(
+            {"id": {"$in": team_ids}, "user_id": user_id},
             {"_id": 0, "id": 1, "name": 1, "season": 1, "club": 1},
         ).to_list(50)
-        teams = teams_raw
 
-    # Clips that reference this player
     clips = await db.clips.find(
-        {"player_ids": player_id, "user_id": current_user["id"]},
-        {"_id": 0},
+        {"player_ids": player["id"], "user_id": user_id}, {"_id": 0}
     ).sort("created_at", -1).to_list(500)
 
-    # Stats from clip types per match → group by team season via match.team_home etc.
     stats_by_type: dict[str, int] = {}
     for c in clips:
         t = (c.get("clip_type") or "highlight").lower()
         stats_by_type[t] = stats_by_type.get(t, 0) + 1
-
     total_duration = sum(
         max(0, (c.get("end_time") or 0) - (c.get("start_time") or 0)) for c in clips
     )
 
-    # Per-season aggregation: requires joining clip → match → team season
     match_ids = list({c.get("match_id") for c in clips if c.get("match_id")})
     matches = []
     if match_ids:
         matches = await db.matches.find(
-            {"id": {"$in": match_ids}, "user_id": current_user["id"]},
+            {"id": {"$in": match_ids}, "user_id": user_id},
             {"_id": 0, "id": 1, "team_home": 1, "team_away": 1, "date": 1, "competition": 1},
         ).to_list(500)
     match_by_id = {m["id"]: m for m in matches}
+
+    if public:
+        # Auto-grant a share_token on each highlight clip so streams work for viewers
+        for c in clips[:50]:
+            if not c.get("share_token"):
+                tok = str(uuid.uuid4())[:12]
+                await db.clips.update_one(
+                    {"id": c["id"]}, {"$set": {"share_token": tok}}
+                )
+                c["share_token"] = tok
+
+        public_player = {
+            k: player.get(k)
+            for k in {"id", "name", "number", "position", "profile_pic_url", "team"}
+        }
+        public_clip_fields = {
+            "id", "title", "clip_type", "start_time", "end_time",
+            "auto_generated", "share_token", "match_id",
+        }
+        sanitized_clips = [
+            {**{k: c.get(k) for k in public_clip_fields},
+             "match": match_by_id.get(c.get("match_id"))}
+            for c in clips[:50]
+        ]
+        owner = await db.users.find_one(
+            {"id": user_id}, {"_id": 0, "name": 1}
+        )
+        return {
+            "player": public_player,
+            "teams": teams,
+            "stats": {
+                "total_clips": len(clips),
+                "total_seconds": round(total_duration, 1),
+                "by_type": stats_by_type,
+            },
+            "clips": sanitized_clips,
+            "owner": (owner or {}).get("name", "Coach"),
+        }
 
     return {
         "player": player,
@@ -74,6 +98,55 @@ async def get_player_profile(
     }
 
 
+# ===== Player profile =====
+
+@router.get("/players/{player_id}/profile")
+async def get_player_profile(
+    player_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Aggregated profile (auth)."""
+    player = await db.players.find_one(
+        {"id": player_id, "user_id": current_user["id"]},
+        {"_id": 0, "profile_pic_path": 0},
+    )
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return await _build_profile_payload(player, current_user["id"], public=False)
+
+
+@router.post("/players/{player_id}/share")
+async def toggle_player_share(
+    player_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Toggle a public share token on a player's profile."""
+    player = await db.players.find_one(
+        {"id": player_id, "user_id": current_user["id"]}, {"_id": 0}
+    )
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    if player.get("share_token"):
+        await db.players.update_one(
+            {"id": player_id}, {"$set": {"share_token": None}}
+        )
+        return {"status": "unshared", "share_token": None}
+    token = str(uuid.uuid4())[:12]
+    await db.players.update_one(
+        {"id": player_id}, {"$set": {"share_token": token}}
+    )
+    return {"status": "shared", "share_token": token}
+
+
+@router.get("/shared/player/{share_token}")
+async def get_shared_player(share_token: str):
+    """Public dossier (no auth)."""
+    player = await db.players.find_one(
+        {"share_token": share_token}, {"_id": 0, "profile_pic_path": 0}
+    )
+    if not player:
+        raise HTTPException(status_code=404, detail="Player share link not found")
+    return await _build_profile_payload(player, player["user_id"], public=True)
+
+
 # ===== Clip collections (batch share) =====
 
 
@@ -86,8 +159,6 @@ class ClipCollectionCreate(BaseModel):
 async def create_clip_collection(
     body: ClipCollectionCreate, current_user: dict = Depends(get_current_user)
 ):
-    """Bundle several clips into a single shareable collection."""
-    # Validate every clip belongs to this user
     owned = await db.clips.find(
         {"id": {"$in": body.clip_ids}, "user_id": current_user["id"]},
         {"_id": 0, "id": 1},
@@ -115,10 +186,9 @@ async def create_clip_collection(
 
 @router.get("/clip-collections")
 async def list_clip_collections(current_user: dict = Depends(get_current_user)):
-    cols = await db.clip_collections.find(
+    return await db.clip_collections.find(
         {"user_id": current_user["id"]}, {"_id": 0}
     ).sort("created_at", -1).to_list(100)
-    return cols
 
 
 @router.delete("/clip-collections/{collection_id}")
@@ -135,17 +205,13 @@ async def delete_clip_collection(
 
 @router.get("/shared/clip-collection/{share_token}")
 async def get_shared_clip_collection(share_token: str):
-    """Public: bundled clip-collection viewer payload."""
     coll = await db.clip_collections.find_one({"share_token": share_token}, {"_id": 0})
     if not coll:
         raise HTTPException(status_code=404, detail="Not found")
 
-    # Auto-grant share tokens to clips in the collection so each clip's existing
-    # public stream endpoint (/shared/clip/{token}/video) works for viewers.
     clips_raw = await db.clips.find(
         {"id": {"$in": coll["clip_ids"]}, "user_id": coll["user_id"]}, {"_id": 0}
     ).to_list(500)
-    # Preserve the order requested by the collection
     by_id = {c["id"]: c for c in clips_raw}
     ordered_clips: list[dict] = []
     for cid in coll["clip_ids"]:
@@ -160,7 +226,6 @@ async def get_shared_clip_collection(share_token: str):
             c["share_token"] = tok
         ordered_clips.append(c)
 
-    # Match enrichment for display
     match_ids = list({c.get("match_id") for c in ordered_clips if c.get("match_id")})
     matches = []
     if match_ids:

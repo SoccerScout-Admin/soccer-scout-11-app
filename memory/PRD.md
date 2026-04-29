@@ -105,6 +105,15 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
 - ffmpeg auto-installs at server startup if missing
 
+### Public Player Dossier (Complete - Apr 29, 2026)
+- **Schema**: `Player.share_token: Optional[str]` added.
+- **Backend**: `POST /api/players/{id}/share` toggles a 12-char share token. Public `GET /api/shared/player/{token}` returns sanitized payload (only id/name/number/position/profile_pic_url/team — `user_id`, `match_id`, `team_ids`, etc. stripped) plus owner coach name, teams (joined to actual team docs), aggregated stats by clip type, and the highlight reel of clips. Each highlight clip is auto-granted a share_token so the existing public stream endpoint serves the video.
+- **OG card** at `/api/og/player/{token}` + `/image.png`: branded 1200×630 PNG with "PLAYER PROFILE" label, jersey #, name, position + teams summary, top-4 stat chips (Goals/Saves/Fouls/Cards), circular profile pic with blue ring, "Shared by Coach …" credit. Title: `#N Name — Position`.
+- **Frontend**:
+  - `PlayerProfile.js` got a header "Share Profile" button with green "Shared" indicator + modal (copy/revoke flow matching team share UX, includes "Open public dossier in new tab" deep link).
+  - New `SharedPlayerProfile.js` at `/shared-player/:token` mirrors the auth page's hero/stats/teams/highlight-reel sections but is fully public, branded "Player Dossier", with a header copy-link button. Clicking a highlight clip opens an inline video modal that streams via `/shared/clip/{token}/video` (no auth required).
+- Verified end-to-end: toggle on/off, sanitized payload (no `user_id` leak), OG html + 1200×630 PNG, public dossier page renders with hero + team history + footer.
+
 ### Player Profile + Season Stats + Batch Clip-Reel Share (Complete - Apr 29, 2026)
 - **`/player/:id` page** (`PlayerProfile.js`): hero with avatar/jersey/position, career stats grid (total clips, total time, per-type counts: goals/saves/fouls/cards/shots/chances/highlights with color-coded icons), team history grouped by season (chips link directly to each team's roster), highlight reel grid sorted by recency.
 - New backend endpoint `GET /api/players/{id}/profile` aggregates from `clips` collection (counts by `clip_type`) + joins matches into clips for display context.
