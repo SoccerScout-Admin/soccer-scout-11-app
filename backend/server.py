@@ -21,6 +21,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithM
 import tempfile
 import asyncio
 import time
+import subprocess
 from bson import Binary
 
 ROOT_DIR = Path(__file__).parent
@@ -1234,6 +1235,7 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
 
         # Prepare video sample for AI analysis
         tmp_path = None
+        segments_info = None
         try:
             tmp_path = await prepare_video_sample(video)
         except Exception as e:
@@ -1246,6 +1248,15 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
                 }}
             )
             return
+
+        # For timeline markers, prepare a separate 720p multi-segment sample
+        tmp_path_720p = None
+        if "timeline_markers" in analysis_types:
+            try:
+                tmp_path_720p, segments_info = await prepare_video_segments_720p(video)
+                logger.info("Prepared 720p segments for timeline markers")
+            except Exception as e:
+                logger.warning(f"720p segments failed, will fall back to standard sample: {e}")
 
         for idx, analysis_type in enumerate(analysis_types):
             progress = int(((idx) / len(analysis_types)) * 100)
@@ -1265,13 +1276,19 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
                     system_message="You are an expert soccer analyst. You will receive the full match video (compressed). Analyze the entire match and provide detailed tactical insights, player assessments, highlight identification, and precise timestamp markers for key events."
                 ).with_model("gemini", "gemini-3.1-pro-preview")
 
-                video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
+                # Use 720p segments for timeline markers if available, standard for others
+                use_path = tmp_path_720p if (analysis_type == "timeline_markers" and tmp_path_720p) else tmp_path
+                video_file = FileContentWithMimeType(file_path=use_path, mime_type="video/mp4")
+
+                segment_preamble = ""
+                if segments_info:
+                    segment_preamble = "Segment timing (these are the real match times shown in the video):\n" + segments_info + "\n\n"
 
                 prompts = {
                     "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis covering:\n\n1. **Formations** - What formations are each team using? Any formation changes during the match?\n2. **Pressing Patterns** - How do teams press? High press, mid-block, or low block?\n3. **Build-up Play** - How do teams build from the back? Through the middle or wide?\n4. **Defensive Organization** - Shape, line height, compactness\n5. **Key Tactical Moments** - Pivotal tactical decisions that influenced the game\n6. **Recommendations** - Tactical improvements for both teams{roster_context}",
                     "player_performance": f"Analyze individual player performances in this soccer match between {match['team_home']} and {match['team_away']}. For each notable player provide:\n\n1. **Standout Performers** - Who were the best players and why?\n2. **Key Contributions** - Goals, assists, key passes, tackles\n3. **Work Rate & Positioning** - Movement, runs, defensive contribution\n4. **Decision Making** - Quality of decisions in key moments\n5. **Areas for Improvement** - What each key player could do better\n6. **Player Ratings** - Rate key players out of 10 with justification{roster_context}",
                     "highlights": f"Identify and describe ALL key moments and highlights from this soccer match between {match['team_home']} and {match['team_away']}. Include:\n\n1. **Goals & Assists** - Describe each goal in detail with timestamps if visible\n2. **Near Misses** - Close chances that didn't result in goals\n3. **Outstanding Saves** - Goalkeeper heroics\n4. **Tactical Shifts** - Moments where the game's momentum changed\n5. **Key Fouls & Cards** - Significant disciplinary moments\n6. **Game-Changing Plays** - Moments that altered the match outcome\n\nFor each moment, indicate the approximate time if visible and rate its significance (1-5 stars).{roster_context}",
-                    "timeline_markers": f"Watch this entire soccer match between {match['team_home']} and {match['team_away']} and identify EVERY key event with precise timestamps.\n\nReturn ONLY a JSON array of event objects. Each object must have:\n- \"time\": timestamp in seconds (number)\n- \"type\": one of \"goal\", \"shot\", \"save\", \"foul\", \"card\", \"substitution\", \"tactical\", \"chance\"\n- \"label\": short description (max 60 chars)\n- \"team\": which team (\"{match['team_home']}\" or \"{match['team_away']}\" or \"neutral\")\n- \"importance\": 1-5 (5 = most important, e.g. goals)\n\nExample:\n[{{\"time\": 125, \"type\": \"goal\", \"label\": \"Header from corner kick\", \"team\": \"{match['team_home']}\", \"importance\": 5}}, {{\"time\": 340, \"type\": \"save\", \"label\": \"Goalkeeper dive saves 1v1\", \"team\": \"{match['team_away']}\", \"importance\": 4}}]\n\nReturn ONLY the JSON array, no other text.{roster_context}"
+                    "timeline_markers": f"Watch this soccer match video between {match['team_home']} and {match['team_away']}. The video contains multiple segments from across the full match at high quality.\n\n{segment_preamble}Identify EVERY key event with precise match timestamps (in seconds from the start of the match, NOT from the start of each segment).\n\nReturn ONLY a JSON array of event objects. Each object must have:\n- \"time\": match timestamp in seconds (number, from match start)\n- \"type\": one of \"goal\", \"shot\", \"save\", \"foul\", \"card\", \"substitution\", \"tactical\", \"chance\"\n- \"label\": short description (max 60 chars)\n- \"team\": which team (\"{match['team_home']}\" or \"{match['team_away']}\" or \"neutral\")\n- \"importance\": 1-5 (5 = most important, e.g. goals)\n\nBe thorough — identify goals, shots on target, saves, dangerous attacks, key fouls, tactical changes. Aim for 15-30 events across the full match.\n\nReturn ONLY the JSON array, no other text.{roster_context}"
                 }
                 prompt = prompts.get(analysis_type, prompts["tactical"])
 
@@ -1370,11 +1387,12 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
+        if tmp_path_720p and os.path.exists(tmp_path_720p):
+            os.unlink(tmp_path_720p)
 
 async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: float = None) -> str:
     """Compress entire video (or trimmed portion) to 360p for AI analysis.
     For Gemini File API: target <1.5GB, 360p resolution."""
-    import subprocess
     
     ext = video["original_filename"].split(".")[-1] if "." in video["original_filename"] else "mp4"
     raw_path = tempfile.mktemp(suffix=f".{ext}", dir="/var/video_chunks")
@@ -1481,6 +1499,165 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
 
     except Exception:
         for p in [raw_path, clip_path]:
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+        raise
+
+
+async def prepare_video_segments_720p(video: dict) -> tuple:
+    """Extract multiple 720p segments from across the match for high-quality timeline analysis.
+    Returns (clip_path, segment_info_text) where segment_info_text describes
+    the time offsets for each segment so the AI can map to real match timestamps."""
+    
+    ext = video["original_filename"].split(".")[-1] if "." in video["original_filename"] else "mp4"
+    raw_path = tempfile.mktemp(suffix=f".{ext}", dir="/var/video_chunks")
+    clip_path = tempfile.mktemp(suffix=".mp4", dir="/var/video_chunks")
+    segment_files = []
+
+    try:
+        # Assemble full video
+        if video.get("is_chunked"):
+            chunk_paths = video.get("chunk_paths", {})
+            chunk_backends = video.get("chunk_backends", {})
+            total_chunks = video.get("total_chunks", len(chunk_paths))
+            chunk_size = video.get("chunk_size", CHUNK_SIZE)
+
+            logger.info(f"[720p segments] Assembling full video from {total_chunks} chunks")
+            with open(raw_path, 'wb') as f:
+                for i in range(total_chunks):
+                    path = chunk_paths.get(str(i))
+                    if not path:
+                        f.write(b'\x00' * chunk_size)
+                        continue
+                    backend = chunk_backends.get(str(i), "storage")
+                    if backend == "filesystem" and not os.path.exists(path):
+                        f.write(b'\x00' * chunk_size)
+                        continue
+                    chunk_info = {"backend": backend, "path": path}
+                    try:
+                        data = await read_chunk_data(video["id"], i, chunk_info)
+                        f.write(data)
+                        del data
+                    except Exception as e:
+                        logger.warning(f"  Skipping chunk {i}: {str(e)[:60]}")
+                        f.write(b'\x00' * chunk_size)
+        else:
+            data, _ = await run_in_threadpool(get_object_sync, video["storage_path"])
+            with open(raw_path, 'wb') as f:
+                f.write(data)
+            del data
+
+        # Probe duration
+        probe = await run_in_threadpool(
+            subprocess.run,
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", raw_path],
+            capture_output=True, text=True, timeout=60
+        )
+        duration = 0
+        if probe.returncode == 0 and probe.stdout.strip():
+            try:
+                duration = float(probe.stdout.strip())
+            except ValueError:
+                pass
+        logger.info(f"[720p segments] Video duration: {duration:.0f}s ({duration/60:.1f}min)")
+
+        if duration <= 0:
+            raise Exception("Could not determine video duration")
+
+        # Extract segments at 480p, 12fps for good quality while keeping file size manageable
+        segment_duration = 60  # 1 minute each
+        num_segments = 12
+        if duration < segment_duration * num_segments:
+            num_segments = max(1, int(duration / segment_duration))
+        
+        segment_starts = []
+        for i in range(num_segments):
+            pct = i / max(1, num_segments - 1)
+            start = pct * max(0, duration - segment_duration)
+            segment_starts.append(max(0, start))
+
+        logger.info(f"[720p segments] Extracting {num_segments} x {segment_duration}s segments at 480p")
+
+        segment_info_parts = []
+        for idx, start in enumerate(segment_starts):
+            seg_path = tempfile.mktemp(suffix=f"_seg{idx}.mp4", dir="/var/video_chunks")
+            seg_cmd = [
+                "ffmpeg", "-y",
+                "-ss", str(int(start)),
+                "-i", raw_path,
+                "-t", str(segment_duration),
+                "-vf", "scale=-2:480",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", "30",
+                "-r", "12",
+                "-c:a", "aac",
+                "-b:a", "48k",
+                "-movflags", "+faststart",
+                seg_path
+            ]
+            seg_result = await run_in_threadpool(
+                subprocess.run, seg_cmd,
+                capture_output=True, text=True, timeout=300
+            )
+            if seg_result.returncode == 0 and os.path.exists(seg_path) and os.path.getsize(seg_path) > 1000:
+                seg_size = os.path.getsize(seg_path) / (1024 * 1024)
+                segment_files.append(seg_path)
+                s_min, s_sec = divmod(int(start), 60)
+                e_min, e_sec = divmod(int(start + segment_duration), 60)
+                segment_info_parts.append(
+                    f"Segment {idx+1}: match time {s_min}:{s_sec:02d} to {e_min}:{e_sec:02d}"
+                )
+                logger.info(f"  Segment {idx+1}/{num_segments}: {start:.0f}s, {seg_size:.1f}MB")
+            else:
+                logger.warning(f"  Segment {idx+1} failed at {start:.0f}s")
+                if os.path.exists(seg_path):
+                    os.unlink(seg_path)
+
+        # Delete raw file to free disk
+        if os.path.exists(raw_path):
+            os.unlink(raw_path)
+            logger.info("[720p segments] Deleted raw video file")
+
+        if not segment_files:
+            raise Exception("Failed to extract any video segments")
+
+        # Concatenate all segments into one file
+        if len(segment_files) == 1:
+            os.rename(segment_files[0], clip_path)
+            segment_files = []
+        else:
+            concat_list = tempfile.mktemp(suffix=".txt", dir="/var/video_chunks")
+            with open(concat_list, 'w') as f:
+                for seg in segment_files:
+                    f.write(f"file '{seg}'\n")
+            concat_result = await run_in_threadpool(
+                subprocess.run,
+                ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                 "-i", concat_list, "-c", "copy", "-movflags", "+faststart", clip_path],
+                capture_output=True, text=True, timeout=300
+            )
+            # Cleanup
+            if os.path.exists(concat_list):
+                os.unlink(concat_list)
+            for seg in segment_files:
+                if os.path.exists(seg):
+                    os.unlink(seg)
+            segment_files = []
+            if concat_result.returncode != 0:
+                raise Exception("Failed to concatenate video segments")
+
+        clip_size = os.path.getsize(clip_path) / (1024 * 1024)
+        segment_info_text = "\n".join(segment_info_parts)
+        logger.info(f"[720p segments] Created {clip_size:.1f}MB combined clip ({len(segment_info_parts)} segments)")
+        return clip_path, segment_info_text
+
+    except Exception:
+        for p in [raw_path, clip_path] + segment_files:
             if p and os.path.exists(p):
                 try:
                     os.unlink(p)
@@ -2085,6 +2262,22 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
+    # Ensure ffmpeg is installed (persists across container restarts)
+    import shutil
+    if not shutil.which("ffmpeg"):
+        logger.info("ffmpeg not found — installing...")
+        result = await run_in_threadpool(
+            subprocess.run,
+            ["bash", "-c", "apt-get update -qq && apt-get install -y -qq ffmpeg"],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0:
+            logger.info(f"ffmpeg installed: {shutil.which('ffmpeg')}")
+        else:
+            logger.error(f"ffmpeg install failed: {result.stderr[-200:]}")
+    else:
+        logger.info(f"ffmpeg available: {shutil.which('ffmpeg')}")
+    
     try:
         init_storage()
         logger.info("Storage initialized")
