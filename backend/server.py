@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 # ===== Import modular routes =====
 from routes.teams import router as teams_router
 from routes.og import router as og_router
+from routes.players import router as players_router
 
 # ===== Storage: Connection Pooling + Retry for SSL resilience =====
 
@@ -725,60 +726,8 @@ async def stream_shared_video(share_token: str, video_id: str, request: Request)
         return Response(content=data, media_type=content_type, headers={"Content-Length": str(len(data))})
 
 # ===== Players / Rosters =====
-
-@api_router.post("/players")
-async def create_player(input: PlayerCreate, current_user: dict = Depends(get_current_user)):
-    player = Player(user_id=current_user["id"], **input.model_dump())
-    data = player.model_dump()
-    await db.players.insert_one(data)
-    return {k: v for k, v in data.items() if k != "_id"}
-
-@api_router.post("/players/import-csv")
-async def import_players_csv(input: PlayerBulkImport, current_user: dict = Depends(get_current_user)):
-    """Import players from CSV data. Expected columns: name, number, position"""
-    import csv
-    import io
-    match = await db.matches.find_one({"id": input.match_id, "user_id": current_user["id"]}, {"_id": 0})
-    if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
-    
-    reader = csv.DictReader(io.StringIO(input.csv_data))
-    imported = []
-    for row in reader:
-        name = row.get("name", "").strip()
-        if not name:
-            continue
-        number = None
-        num_str = row.get("number", "").strip()
-        if num_str.isdigit():
-            number = int(num_str)
-        position = row.get("position", "").strip()
-        team = input.team or row.get("team", "").strip()
-        
-        player = Player(
-            user_id=current_user["id"],
-            match_id=input.match_id,
-            name=name,
-            number=number,
-            position=position,
-            team=team
-        )
-        await db.players.insert_one(player.model_dump())
-        imported.append(player.model_dump())
-    
-    return {"imported": len(imported), "players": imported}
-
-@api_router.get("/players/match/{match_id}")
-async def get_match_players(match_id: str, current_user: dict = Depends(get_current_user)):
-    players = await db.players.find({"match_id": match_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(100)
-    return players
-
-@api_router.delete("/players/{player_id}")
-async def delete_player(player_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.players.delete_one({"id": player_id, "user_id": current_user["id"]})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Player not found")
-    return {"status": "deleted"}
+# Player CRUD has been extracted to routes/players.py and is mounted below
+# (search for `players_router`). The duplicate definitions used to live here.
 
 # ===== Standard Video Upload (for files < 1GB) =====
 
@@ -2235,32 +2184,13 @@ _og_api = APIRouter(prefix="/api")
 _og_api.include_router(og_router)
 app.include_router(_og_api)
 
+# Mount Players router (multi-team rosters, profile pics, promote, etc.)
+_players_api = APIRouter(prefix="/api")
+_players_api.include_router(players_router)
+app.include_router(_players_api)
+
 # ===== Player Profile Pics =====
-
-@api_router.post("/players/{player_id}/profile-pic")
-async def upload_profile_pic(player_id: str, file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
-    player = await db.players.find_one({"id": player_id, "user_id": current_user["id"]}, {"_id": 0})
-    if not player:
-        raise HTTPException(status_code=404, detail="Player not found")
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="File must be an image")
-    data = await file.read()
-    if len(data) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Image too large (max 5MB)")
-    ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
-    path = f"{APP_NAME}/players/{current_user['id']}/{player_id}.{ext}"
-    await run_in_threadpool(put_object_sync, path, data, file.content_type)
-    pic_url = f"/api/players/{player_id}/profile-pic/view"
-    await db.players.update_one({"id": player_id}, {"$set": {"profile_pic_url": pic_url, "profile_pic_path": path}})
-    return {"url": pic_url}
-
-@api_router.get("/players/{player_id}/profile-pic/view")
-async def view_profile_pic(player_id: str):
-    player = await db.players.find_one({"id": player_id}, {"_id": 0, "profile_pic_path": 1})
-    if not player or not player.get("profile_pic_path"):
-        raise HTTPException(status_code=404, detail="No profile picture")
-    data, ct = await run_in_threadpool(get_object_sync, player["profile_pic_path"])
-    return Response(content=data, media_type=ct)
+# (Moved to routes/players.py — this section intentionally left empty)
 
 # ===== Clip Sharing =====
 

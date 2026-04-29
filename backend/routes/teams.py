@@ -28,7 +28,7 @@ async def get_teams(current_user: dict = Depends(get_current_user)):
     teams = await db.teams.find({"user_id": current_user["id"]}, {"_id": 0}).to_list(100)
     # Enrich with player count and club info
     for team in teams:
-        team["player_count"] = await db.players.count_documents({"team_id": team["id"], "user_id": current_user["id"]})
+        team["player_count"] = await db.players.count_documents({"team_ids": team["id"], "user_id": current_user["id"]})
         if team.get("club"):
             club = await db.clubs.find_one({"id": team["club"], "user_id": current_user["id"]}, {"_id": 0, "name": 1, "logo_url": 1})
             team["club_info"] = club
@@ -40,7 +40,7 @@ async def get_team(team_id: str, current_user: dict = Depends(get_current_user))
     team = await db.teams.find_one({"id": team_id, "user_id": current_user["id"]}, {"_id": 0})
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
-    team["player_count"] = await db.players.count_documents({"team_id": team_id, "user_id": current_user["id"]})
+    team["player_count"] = await db.players.count_documents({"team_ids": team_id, "user_id": current_user["id"]})
     return team
 
 
@@ -67,13 +67,20 @@ async def delete_team(team_id: str, current_user: dict = Depends(get_current_use
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
     await db.teams.delete_one({"id": team_id})
-    await db.players.update_many({"team_id": team_id}, {"$set": {"team_id": None}})
+    # Pull this team_id from any players that referenced it
+    await db.players.update_many(
+        {"team_ids": team_id, "user_id": current_user["id"]},
+        {"$pull": {"team_ids": team_id}},
+    )
     return {"status": "deleted"}
 
 
 @router.get("/teams/{team_id}/players")
 async def get_team_players(team_id: str, current_user: dict = Depends(get_current_user)):
-    players = await db.players.find({"team_id": team_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(200)
+    players = await db.players.find(
+        {"team_ids": team_id, "user_id": current_user["id"]},
+        {"_id": 0, "profile_pic_path": 0},
+    ).to_list(200)
     return players
 
 
@@ -100,7 +107,7 @@ async def get_shared_team(share_token: str):
 
     # Roster (sanitize: drop internal fields like storage paths and user_id)
     players_raw = await db.players.find(
-        {"team_id": team["id"], "user_id": team["user_id"]}, {"_id": 0}
+        {"team_ids": team["id"], "user_id": team["user_id"]}, {"_id": 0}
     ).to_list(200)
     public_fields = {"id", "name", "number", "position", "profile_pic_url"}
     players = [{k: p.get(k) for k in public_fields} for p in players_raw]
@@ -172,7 +179,7 @@ async def og_team_preview(share_token: str, request: Request):
         )
 
     player_count = await db.players.count_documents(
-        {"team_id": team["id"], "user_id": team["user_id"]}
+        {"team_ids": team["id"], "user_id": team["user_id"]}
     )
 
     club_name = ""
@@ -246,7 +253,7 @@ async def og_team_image(share_token: str):
 
     # Player count + first few avatars
     cursor = db.players.find(
-        {"team_id": team["id"], "user_id": team["user_id"]},
+        {"team_ids": team["id"], "user_id": team["user_id"]},
         {"_id": 0, "profile_pic_path": 1, "number": 1, "name": 1, "position": 1},
     ).sort("number", 1)
     all_players = await cursor.to_list(50)

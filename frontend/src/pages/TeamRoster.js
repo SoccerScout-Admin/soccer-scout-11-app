@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, Users, Plus, Trash, Upload, UserCircle, CalendarBlank, Shield, ShareNetwork, Copy, Check, X } from '@phosphor-icons/react';
+import { ArrowLeft, Users, Plus, Trash, Upload, UserCircle, CalendarBlank, Shield, ShareNetwork, Copy, Check, X, UserPlus } from '@phosphor-icons/react';
 
 const TeamRoster = () => {
   const { teamId } = useParams();
@@ -16,6 +16,9 @@ const TeamRoster = () => {
   const [picVersions, setPicVersions] = useState({});
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showAddExisting, setShowAddExisting] = useState(false);
+  const [eligible, setEligible] = useState([]);
+  const [eligibleLoading, setEligibleLoading] = useState(false);
 
   useEffect(() => {
     fetchTeam();
@@ -62,9 +65,20 @@ const TeamRoster = () => {
   };
 
   const handleDeletePlayer = async (playerId) => {
-    if (!window.confirm('Remove this player from the team?')) return;
+    const player = players.find(p => p.id === playerId);
+    const otherTeams = (player?.team_ids || []).filter(tid => tid !== teamId);
+    const msg = otherTeams.length > 0
+      ? `Remove ${player?.name} from this team? They'll stay on their other ${otherTeams.length} team${otherTeams.length === 1 ? '' : 's'}.`
+      : `Remove ${player?.name || 'this player'} from the team? Their record will be deleted since this is their only team.`;
+    if (!window.confirm(msg)) return;
     try {
-      await axios.delete(`${API}/players/${playerId}`, { headers: getAuthHeader() });
+      if (otherTeams.length > 0) {
+        // Multi-team: just unlink from this team
+        await axios.delete(`${API}/players/${playerId}/teams/${teamId}`, { headers: getAuthHeader() });
+      } else {
+        // Last team: hard delete
+        await axios.delete(`${API}/players/${playerId}`, { headers: getAuthHeader() });
+      }
       setPlayers(players.filter(p => p.id !== playerId));
     } catch (err) { console.error('Failed to delete player:', err); }
   };
@@ -115,6 +129,30 @@ const TeamRoster = () => {
       alert('Failed to upload photo: ' + (err.response?.data?.detail || err.message));
     } finally {
       setUploadingPic(null);
+    }
+  };
+
+  const openAddExisting = async () => {
+    setShowAddExisting(true);
+    setEligibleLoading(true);
+    try {
+      const res = await axios.get(`${API}/teams/${teamId}/eligible-players`, { headers: getAuthHeader() });
+      setEligible(res.data);
+    } catch (err) {
+      console.error('Failed to load eligible players:', err);
+      setEligible([]);
+    } finally {
+      setEligibleLoading(false);
+    }
+  };
+
+  const handleAddExisting = async (playerId) => {
+    try {
+      await axios.post(`${API}/players/${playerId}/teams/${teamId}`, {}, { headers: getAuthHeader() });
+      setEligible(prev => prev.filter(p => p.id !== playerId));
+      fetchPlayers();
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Failed to add player to team');
     }
   };
 
@@ -177,6 +215,10 @@ const TeamRoster = () => {
                   : 'border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F]'
               }`}>
               <ShareNetwork size={14} weight="bold" /> {team.share_token ? 'Shared' : 'Share'}
+            </button>
+            <button data-testid="add-existing-player-btn" onClick={openAddExisting}
+              className="flex items-center gap-2 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors">
+              <UserPlus size={14} weight="bold" /> Add Existing
             </button>
             <button data-testid="add-player-btn" onClick={() => setShowAddPlayer(true)}
               className="flex items-center gap-2 bg-[#007AFF] hover:bg-[#005bb5] text-white px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors">
@@ -295,6 +337,87 @@ const TeamRoster = () => {
           </div>
         )}
       </main>
+
+      {/* Add Existing Player Modal */}
+      {showAddExisting && (
+        <div data-testid="existing-modal-overlay" onClick={() => setShowAddExisting(false)}
+          className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center px-4">
+          <div onClick={(e) => e.stopPropagation()}
+            className="bg-[#141414] border border-white/10 max-w-2xl w-full max-h-[80vh] flex flex-col">
+            <div className="p-6 border-b border-white/10 flex items-start justify-between">
+              <div>
+                <h3 className="text-xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
+                  Add Existing Player
+                </h3>
+                <p className="text-xs text-[#A3A3A3] mt-1">
+                  Players already registered on a different team in season <strong className="text-white">{team?.season}</strong>.
+                  Each player can be on at most 2 teams per season.
+                </p>
+              </div>
+              <button data-testid="close-existing-modal" onClick={() => setShowAddExisting(false)}
+                className="p-1 text-[#666] hover:text-white">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto">
+              {eligibleLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="w-6 h-6 border-2 border-[#007AFF] border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : eligible.length === 0 ? (
+                <div className="text-center py-10">
+                  <Users size={48} className="text-[#A3A3A3] mx-auto mb-3" />
+                  <p className="text-[#A3A3A3]">No eligible players</p>
+                  <p className="text-xs text-[#666] mt-1">
+                    No other teams exist in {team?.season}, or all candidates are already on this team.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {eligible.map(p => (
+                    <div key={p.id} data-testid={`eligible-${p.id}`}
+                      className="bg-[#0A0A0A] border border-white/10 p-3 flex items-center gap-3">
+                      <div className="w-12 h-12 flex-shrink-0 rounded-full bg-[#141414] border border-white/10 overflow-hidden flex items-center justify-center">
+                        {p.profile_pic_url ? (
+                          <img src={`${API.replace('/api', '')}${p.profile_pic_url}`} alt={p.name}
+                            className="w-full h-full object-cover" />
+                        ) : (
+                          <UserCircle size={28} className="text-[#333]" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg font-bold text-[#007AFF]" style={{ fontFamily: 'Bebas Neue' }}>
+                            {p.number ?? '—'}
+                          </span>
+                          <span className="text-sm font-semibold text-white truncate">{p.name}</span>
+                        </div>
+                        <div className="text-[10px] text-[#666] mt-0.5 tracking-wider">
+                          {p.position || 'No position'}
+                          {p.other_team_names?.length > 0 && (
+                            <> • Already on: {p.other_team_names.join(', ')}</>
+                          )}
+                        </div>
+                      </div>
+                      <button data-testid={`add-existing-${p.id}-btn`}
+                        disabled={p.at_cap}
+                        onClick={() => handleAddExisting(p.id)}
+                        className={`text-xs px-3 py-2 font-bold tracking-wider uppercase transition-colors ${
+                          p.at_cap
+                            ? 'bg-[#333] text-[#666] cursor-not-allowed'
+                            : 'bg-[#007AFF] hover:bg-[#005bb5] text-white'
+                        }`}>
+                        {p.at_cap ? 'At cap' : 'Add'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Share Modal */}
       {shareModalOpen && (

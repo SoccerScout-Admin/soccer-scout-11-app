@@ -97,7 +97,7 @@ class Player(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str = ""
     match_id: Optional[str] = None
-    team_id: Optional[str] = None
+    team_ids: List[str] = Field(default_factory=list)
     name: str
     number: Optional[int] = None
     position: Optional[str] = None

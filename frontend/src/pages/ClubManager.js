@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, Plus, Shield, Users, Trash, PencilSimple, Upload, CalendarBlank, CaretDown, CaretRight } from '@phosphor-icons/react';
+import { ArrowLeft, Plus, Shield, Users, Trash, PencilSimple, Upload, CalendarBlank, CaretDown, CaretRight, ArrowsClockwise } from '@phosphor-icons/react';
 
 const ClubManager = () => {
   const navigate = useNavigate();
@@ -15,6 +15,9 @@ const ClubManager = () => {
   const [collapsedClubs, setCollapsedClubs] = useState({});
   const [teamFormClubId, setTeamFormClubId] = useState(null); // null = closed, '' = unaffiliated, string = club id
   const [teamForm, setTeamForm] = useState({ name: '', season: '' });
+  const [promoteTarget, setPromoteTarget] = useState(null); // {team} or null
+  const [promoteForm, setPromoteForm] = useState({ new_season: '', new_team_name: '', keep_old: true });
+  const [promoting, setPromoting] = useState(false);
 
   useEffect(() => { fetchClubs(); fetchTeams(); }, []);
 
@@ -113,6 +116,44 @@ const ClubManager = () => {
     setTeamForm({ name: '', season: '' });
   };
 
+  const openPromote = (team, e) => {
+    e.stopPropagation();
+    setPromoteTarget(team);
+    // Suggest next season string based on current (e.g., 2025/26 → 2026/27)
+    const m = (team.season || '').match(/^(\d{4})\/(\d{2,4})$/);
+    let suggested = '';
+    if (m) {
+      const startY = parseInt(m[1]) + 1;
+      const endY = (parseInt(m[2]) + 1).toString().padStart(2, '0').slice(-2);
+      suggested = `${startY}/${endY}`;
+    }
+    setPromoteForm({ new_season: suggested, new_team_name: team.name, keep_old: true });
+  };
+
+  const handlePromote = async (e) => {
+    e.preventDefault();
+    if (!promoteTarget || !promoteForm.new_season.trim()) return;
+    setPromoting(true);
+    try {
+      const res = await axios.post(
+        `${API}/teams/${promoteTarget.id}/promote`,
+        {
+          new_season: promoteForm.new_season.trim(),
+          new_team_name: promoteForm.new_team_name.trim() || promoteTarget.name,
+          keep_old: promoteForm.keep_old,
+        },
+        { headers: getAuthHeader() }
+      );
+      setPromoteTarget(null);
+      fetchTeams(); fetchClubs();
+      alert(`Promoted ${res.data.promoted_count} player${res.data.promoted_count === 1 ? '' : 's'} to ${promoteForm.new_season}.`);
+    } catch (err) {
+      alert('Promote failed: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setPromoting(false);
+    }
+  };
+
   const renderTeamRow = (team) => (
     <div key={team.id} data-testid={`team-card-${team.id}`}
       onClick={() => navigate(`/team/${team.id}`)}
@@ -127,6 +168,12 @@ const ClubManager = () => {
           <span className="text-xs text-[#666]">{team.player_count || 0} players</span>
         </div>
       </div>
+      <button data-testid={`promote-team-${team.id}-btn`}
+        onClick={(e) => openPromote(team, e)}
+        title="Promote roster to next season"
+        className="flex items-center gap-1.5 text-[10px] tracking-[0.15em] uppercase font-bold px-3 py-2 bg-[#10B981]/10 text-[#10B981] hover:bg-[#10B981]/20 transition-colors opacity-0 group-hover:opacity-100">
+        <ArrowsClockwise size={12} weight="bold" /> Promote
+      </button>
       <button data-testid={`delete-team-${team.id}-btn`}
         onClick={(e) => handleDeleteTeam(e, team.id)}
         className="p-2 text-[#444] hover:text-[#EF4444] hover:bg-[#EF4444]/10 opacity-0 group-hover:opacity-100 transition-all">
@@ -329,6 +376,63 @@ const ClubManager = () => {
           </button>
         )}
       </main>
+
+      {/* Promote Modal */}
+      {promoteTarget && (
+        <div data-testid="promote-modal-overlay" onClick={() => !promoting && setPromoteTarget(null)}
+          className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center px-4">
+          <form onClick={(e) => e.stopPropagation()} onSubmit={handlePromote}
+            className="bg-[#141414] border border-white/10 max-w-lg w-full p-6">
+            <div className="flex items-center gap-3 mb-2">
+              <ArrowsClockwise size={22} className="text-[#10B981]" weight="bold" />
+              <h3 className="text-2xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
+                Promote to Next Season
+              </h3>
+            </div>
+            <p className="text-sm text-[#A3A3A3] mb-5">
+              Carry <strong className="text-white">{promoteTarget.name}</strong> ({promoteTarget.season})'s
+              roster forward into a new team for the next season. Players keep their photos and jersey numbers.
+            </p>
+
+            <div className="space-y-3 mb-5">
+              <div>
+                <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">New Season *</label>
+                <input data-testid="promote-season-input" type="text"
+                  value={promoteForm.new_season}
+                  onChange={(e) => setPromoteForm({ ...promoteForm, new_season: e.target.value })}
+                  placeholder="e.g., 2026/27"
+                  required autoFocus
+                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#10B981] focus:outline-none" />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">New Team Name</label>
+                <input data-testid="promote-name-input" type="text"
+                  value={promoteForm.new_team_name}
+                  onChange={(e) => setPromoteForm({ ...promoteForm, new_team_name: e.target.value })}
+                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#10B981] focus:outline-none" />
+              </div>
+              <label className="flex items-center gap-2 text-sm text-[#A3A3A3] cursor-pointer pt-1">
+                <input data-testid="promote-keep-old" type="checkbox"
+                  checked={promoteForm.keep_old}
+                  onChange={(e) => setPromoteForm({ ...promoteForm, keep_old: e.target.checked })}
+                  className="accent-[#10B981]" />
+                Also keep players on the old roster (recommended)
+              </label>
+            </div>
+
+            <div className="flex gap-3">
+              <button data-testid="promote-submit-btn" type="submit" disabled={promoting}
+                className="flex-1 bg-[#10B981] hover:bg-[#0EA371] disabled:opacity-50 text-black py-3 font-bold tracking-wider uppercase text-xs transition-colors flex items-center justify-center gap-2">
+                {promoting ? 'Promoting…' : <><ArrowsClockwise size={14} weight="bold" /> Promote Roster</>}
+              </button>
+              <button type="button" onClick={() => setPromoteTarget(null)} disabled={promoting}
+                className="px-5 py-3 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors text-xs font-bold uppercase">
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

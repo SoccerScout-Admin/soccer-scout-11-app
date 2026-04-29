@@ -105,6 +105,20 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
 - ffmpeg auto-installs at server startup if missing
 
+### Multi-Team Players + Promote Roster (Complete - Apr 29, 2026)
+- **Data model**: `Player.team_id` (single, optional) → `team_ids: List[str]`. One-time migration converted all existing players' `team_id` strings into single-element arrays.
+- **Backend validation**: `_enforce_season_cap` blocks any insert/update that would put a player on more than 2 teams sharing the same `season` string.
+- **New endpoints in `routes/players.py`**:
+  - `POST /api/players/{player_id}/teams/{team_id}` — add existing player to additional team (validates cap)
+  - `DELETE /api/players/{player_id}/teams/{team_id}` — remove player from one team (record stays if other teams remain)
+  - `GET /api/teams/{team_id}/eligible-players` — players already on a different team in this team's season, with `at_cap` flag
+  - `POST /api/teams/{team_id}/promote` — clones the team into a new season inside the same club and copies the roster (default `keep_old=true` so players appear on both)
+- All `team_id` queries across `routes/teams.py` (player_count, get_team_players, public team share, OG card) updated to query `team_ids` array containment.
+- Duplicate `/api/players` endpoints in `server.py` removed; `routes/players.py` now mounted as the single source of truth.
+- **Frontend `ClubManager.js`**: green "Promote" button on each team row → modal with auto-suggested next season string (parses "YYYY/YY" → bumps both years by 1), pre-filled team name, "keep players on old roster" checkbox.
+- **Frontend `TeamRoster.js`**: new "Add Existing" header button → modal lists same-season eligible players with their other team affiliations and an "At cap" badge for blocked candidates. Delete button now smartly chooses between "remove from this team only" (multi-team) vs full delete (last team) based on how many teams the player has.
+- Verified via curl: cap enforcement, promote with 4 players, add-existing across seasons, delete-from-one-team flows all working. Frontend modals captured via screenshots.
+
 ### Club → Team Hierarchy + OG Cards Everywhere (Complete - Apr 29, 2026)
 - **ClubManager UI** rebuilt: each club is now a collapsible card containing its nested teams. Per-club "Add Team" CTA pre-fills the club. Empty clubs show a dashed "Add first team to {Club}" button. Teams not assigned to any club fall into a separate "Unaffiliated Teams" section. Aggregate "N teams • M players total" summary on each club header.
 - One-time data migration ran: existing teams that referenced a club by name string instead of UUID were repointed to the proper club id.
