@@ -15,6 +15,7 @@ import PlayerProfile from './pages/PlayerProfile';
 import SharedPlayerProfile from './pages/SharedPlayerProfile';
 import SharedClipCollectionView from './pages/SharedClipCollectionView';
 import SharedClubView from './pages/SharedClubView';
+import MatchInsights from './pages/MatchInsights';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
@@ -85,6 +86,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <PlayerProfile />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/match/:matchId/insights"
+            element={
+              <ProtectedRoute>
+                <MatchInsights />
               </ProtectedRoute>
             }
           />

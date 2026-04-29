@@ -350,6 +350,11 @@ const MatchDetail = () => {
                 className="bg-[#007AFF] hover:bg-[#005bb5] text-white px-6 py-3 font-bold tracking-wider uppercase transition-colors">
                 View Analysis
               </button>
+              <button data-testid="match-insights-btn" onClick={() => navigate(`/match/${matchId}/insights`)}
+                className="flex items-center gap-2 bg-gradient-to-r from-[#A855F7] to-[#FBBF24] hover:opacity-90 text-black px-5 py-3 font-bold tracking-wider uppercase text-xs transition-opacity">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L9.91 8.26L2 9.27L7.91 14.14L6.18 22L12 18.27L17.82 22L16.09 14.14L22 9.27L14.09 8.26L12 2Z"/></svg>
+                AI Insights
+              </button>
               <button data-testid="reupload-video-btn" onClick={() => setConfirmReupload(true)}
                 className="flex items-center gap-2 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] px-4 py-3 font-bold tracking-wider uppercase text-xs transition-colors"
                 title="Delete this video and upload a new one. Clips and AI analysis will be removed.">

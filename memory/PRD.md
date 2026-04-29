@@ -105,6 +105,33 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
 - ffmpeg auto-installs at server startup if missing
 
+### Match Insights + VideoAnalysis Decomposition + Processing Pipeline Extraction (Complete - Apr 29, 2026)
+
+**Match Insights — AI coaching brief**
+- New `routes/insights.py`: `POST /api/matches/{id}/insights` synthesises `markers + clips + roster + score → Gemini 2.5 Flash` into a structured JSON dossier (verdict + strengths + weaknesses + 3-5 numbered coaching points + 3-6 pivotal moments + score context). Cached on the match doc; `GET` returns cached or 404.
+- New `MatchInsights.js` page at `/match/:id/insights`: purple-gradient verdict card, side-by-side strengths/weaknesses panels (green/red), numbered coaching cards (yellow), pivotal-moments timeline (blue clock chips), regenerate button.
+- "AI Insights" button in MatchDetail header (yellow-purple gradient) launches the page.
+- Verified end-to-end: Gemini returned a real, well-formatted brief with specific minute marks for an existing match — screenshot confirms layout.
+
+**VideoAnalysis.js decomposition** (1463 → 1266 lines)
+- New `pages/components/TagPlayersModal.js` (122 lines) — full search + AI-suggest + roster checkboxes
+- New `pages/components/ShareReelModal.js` (88 lines) — bundle clips into shareable reel
+- New `pages/components/ShareClipModal.js` (74 lines) — single-clip share with social buttons
+- Parent VideoAnalysis still owns the modal-related state (lifted-up pattern, low-risk) and passes it down via props. Behavior preserved.
+
+**Auto-processing pipeline partial extraction** (high regression risk explicitly flagged by user)
+- New `services/processing.py` (199 lines) holds the *pure* helpers — `build_roster_context`, `build_analysis_prompts`, `parse_and_store_markers`, `run_single_analysis` — with `auto_create_clips_callback` as an injected dependency (no circular imports).
+- Heavy orchestration (`run_auto_processing`, `prepare_video_sample`, `prepare_video_segments_720p`, FFmpeg multi-segment compression, circuit breaker state) **deliberately remains in server.py** because they have deep coupling with `read_chunk_data`, `processing_status` global state, and the chunked-upload pipeline. Moving these requires a focused session with AI-pipeline test coverage.
+- server.py keeps backward-compatible shims so the existing call sites work unchanged.
+- **23/23 regression sweep still passes** after the extraction.
+
+**Final code structure:**
+- server.py: 2402 lines (heavy AI/FFmpeg/streaming pipeline + remaining orchestration)
+- 11 route modules (auth/teams/players/player_profile/clips/folders/matches/annotations/analysis/insights/og)
+- 4 services (storage, processing, og_card, __init__)
+- 3 frontend modal components
+- Routes directory now serves 90+ endpoints across 11 domains.
+
 ### Backlog Items Cleared (Complete - Apr 29, 2026)
 
 **1. Background sweeper for soft-deleted videos**

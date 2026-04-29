@@ -165,7 +165,7 @@ async def bulk_delete_matches(
             await db.analyses.delete_many(
                 {"video_id": m["video_id"], "user_id": current_user["id"]}
             )
-            await db.timeline_markers.delete_many(
+            await db.markers.delete_many(
                 {"video_id": m["video_id"], "user_id": current_user["id"]}
             )
         await db.matches.delete_one({"id": m["id"]})

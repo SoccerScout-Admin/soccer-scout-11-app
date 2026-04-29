@@ -2,6 +2,9 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
+import TagPlayersModal from './components/TagPlayersModal';
+import ShareReelModal from './components/ShareReelModal';
+import ShareClipModal from './components/ShareClipModal';
 
 const VideoAnalysis = () => {
   const { videoId } = useParams();
@@ -1217,245 +1220,45 @@ const VideoAnalysis = () => {
       </main>
 
       {/* Clip Share Modal */}
-      {sharingClip && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
-          <div className="bg-[#141414] border border-white/10 w-full max-w-md p-8 rounded-lg">
-            <div className="flex items-center gap-3 mb-5">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#A855F7" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-              <h3 className="text-2xl font-bold" style={{ fontFamily: 'Bebas Neue' }}>Share Clip</h3>
-            </div>
-            <p className="text-sm text-[#A3A3A3] mb-4">
-              <strong className="text-white">{sharingClip.title}</strong> — anyone with the link can view this clip.
-            </p>
-
-            {/* Share URL */}
-            <div className="flex items-center gap-2 mb-2">
-              <div className="flex-1 bg-[#0A0A0A] border border-white/10 text-[#007AFF] px-3 py-2.5 text-xs font-mono truncate select-all rounded">
-                {window.location.origin}/api/og/clip/{sharingClip.share_token}
-              </div>
-              <button data-testid="copy-clip-share-btn" onClick={copyClipShareLink}
-                className={`px-4 py-2.5 font-bold tracking-wider uppercase text-xs transition-colors rounded ${
-                  clipShareCopied ? 'bg-[#4ADE80] text-black' : 'bg-[#007AFF] hover:bg-[#005bb5] text-white'
-                }`}>
-                {clipShareCopied ? 'Copied!' : 'Copy'}
-              </button>
-            </div>
-            <div className="text-[10px] text-[#10B981] tracking-[0.15em] uppercase font-bold mb-5 flex items-center gap-1.5">
-              ✓ Smart link — unfurls with rich preview in WhatsApp, Slack, Twitter
-            </div>
-
-            {/* Social Share Buttons */}
-            <div className="grid grid-cols-2 gap-2 mb-5">
-              <button data-testid="share-clip-facebook" onClick={() => shareClipTo('facebook')}
-                className="flex items-center gap-2 px-3 py-2.5 bg-[#1877F2]/10 border border-[#1877F2]/20 text-[#1877F2] text-xs font-medium rounded hover:bg-[#1877F2]/20 transition-colors">
-                <div className="w-5 h-5 rounded bg-[#1877F2] text-white text-[8px] font-bold flex items-center justify-center">FB</div>
-                Facebook
-              </button>
-              <button data-testid="share-clip-instagram" onClick={() => shareClipTo('instagram')}
-                className="flex items-center gap-2 px-3 py-2.5 bg-[#E4405F]/10 border border-[#E4405F]/20 text-[#E4405F] text-xs font-medium rounded hover:bg-[#E4405F]/20 transition-colors">
-                <div className="w-5 h-5 rounded bg-[#E4405F] text-white text-[8px] font-bold flex items-center justify-center">IG</div>
-                Instagram
-              </button>
-              <button data-testid="share-clip-youtube" onClick={() => shareClipTo('youtube')}
-                className="flex items-center gap-2 px-3 py-2.5 bg-[#FF0000]/10 border border-[#FF0000]/20 text-[#FF0000] text-xs font-medium rounded hover:bg-[#FF0000]/20 transition-colors">
-                <div className="w-5 h-5 rounded bg-[#FF0000] text-white text-[8px] font-bold flex items-center justify-center">YT</div>
-                YouTube
-              </button>
-              <button data-testid="share-clip-sms" onClick={() => shareClipTo('sms')}
-                className="flex items-center gap-2 px-3 py-2.5 bg-[#4ADE80]/10 border border-[#4ADE80]/20 text-[#4ADE80] text-xs font-medium rounded hover:bg-[#4ADE80]/20 transition-colors">
-                <div className="w-5 h-5 rounded bg-[#4ADE80] text-black text-[8px] font-bold flex items-center justify-center">SM</div>
-                Text / SMS
-              </button>
-            </div>
-
-            {/* Revoke + Close */}
-            <button data-testid="revoke-clip-share-btn" onClick={handleRevokeClipShare}
-              className="w-full bg-transparent border border-[#EF4444]/30 text-[#EF4444] py-2 text-xs font-bold tracking-wider uppercase hover:bg-[#EF4444]/10 transition-colors rounded mb-2">
-              Revoke Share Link
-            </button>
-            <button data-testid="close-clip-share-modal" onClick={() => setSharingClip(null)}
-              className="w-full bg-transparent border border-white/10 text-white py-2.5 text-xs font-bold tracking-wider uppercase hover:bg-[#1F1F1F] transition-colors rounded">
-              Close
-            </button>
-          </div>
-        </div>
-      )}
+      <ShareClipModal
+        sharingClip={sharingClip}
+        setSharingClip={setSharingClip}
+        copyClipShareLink={copyClipShareLink}
+        clipShareCopied={clipShareCopied}
+        shareClipTo={shareClipTo}
+        handleRevokeClipShare={handleRevokeClipShare}
+      />
 
       {/* Clip Reel (batch share) Modal */}
-      {collectionModalOpen && (
-        <div data-testid="reel-modal-overlay" onClick={() => !creatingCollection && setCollectionModalOpen(false)}
-          className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center px-4">
-          <div onClick={(e) => e.stopPropagation()}
-            className="bg-[#141414] border border-white/10 max-w-lg w-full p-6 rounded-lg">
-            <div className="flex items-center gap-2 mb-2">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#A855F7" strokeWidth="2"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="8" y1="6" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="18"/></svg>
-              <h3 className="text-2xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
-                {collectionShare ? 'Reel Ready' : 'Share Clip Reel'}
-              </h3>
-            </div>
+      <ShareReelModal
+        collectionModalOpen={collectionModalOpen}
+        setCollectionModalOpen={setCollectionModalOpen}
+        collectionShare={collectionShare}
+        selectedClips={selectedClips}
+        collectionTitle={collectionTitle}
+        setCollectionTitle={setCollectionTitle}
+        handleCreateCollection={handleCreateCollection}
+        creatingCollection={creatingCollection}
+        collectionUrl={collectionUrl}
+        copyCollectionUrl={copyCollectionUrl}
+        collectionCopied={collectionCopied}
+      />
 
-            {!collectionShare ? (
-              <>
-                <p className="text-sm text-[#A3A3A3] mb-4">
-                  Bundle <strong className="text-white">{selectedClips.length} selected clip{selectedClips.length === 1 ? '' : 's'}</strong> into
-                  one shareable reel page with a built-in playlist.
-                </p>
-                <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Reel Title</label>
-                <input data-testid="reel-title-input" type="text"
-                  value={collectionTitle}
-                  onChange={(e) => setCollectionTitle(e.target.value)}
-                  placeholder={`e.g., 1st Half Highlights, Ethan's Goals…`}
-                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 mb-5 focus:border-[#A855F7] focus:outline-none rounded" />
-                <div className="flex gap-3">
-                  <button data-testid="create-reel-btn" onClick={handleCreateCollection} disabled={creatingCollection}
-                    className="flex-1 bg-[#A855F7] hover:bg-[#9333EA] disabled:opacity-50 text-white py-3 font-bold tracking-wider uppercase text-xs transition-colors rounded">
-                    {creatingCollection ? 'Creating…' : 'Create Reel'}
-                  </button>
-                  <button type="button" onClick={() => setCollectionModalOpen(false)} disabled={creatingCollection}
-                    className="px-5 py-3 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] text-xs font-bold uppercase rounded">
-                    Cancel
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="text-sm text-[#A3A3A3] mb-4">
-                  Reel <strong className="text-white">"{collectionShare.title}"</strong> with {selectedClips.length} clip{selectedClips.length === 1 ? '' : 's'} is ready to share.
-                </p>
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="flex-1 bg-[#0A0A0A] border border-white/10 text-[#A855F7] px-3 py-2.5 text-xs font-mono truncate select-all rounded">
-                    {collectionUrl}
-                  </div>
-                  <button data-testid="copy-reel-url-btn" onClick={copyCollectionUrl}
-                    className={`px-4 py-2.5 text-xs font-bold tracking-wider uppercase rounded transition-colors ${
-                      collectionCopied ? 'bg-[#10B981] text-black' : 'bg-[#A855F7] hover:bg-[#9333EA] text-white'
-                    }`}>
-                    {collectionCopied ? 'Copied' : 'Copy'}
-                  </button>
-                </div>
-                <div className="text-[10px] text-[#10B981] tracking-[0.15em] uppercase font-bold mb-3 flex items-center gap-1.5">
-                  ✓ Smart link — unfurls with rich preview
-                </div>
-                <a data-testid="reel-preview-link"
-                  href={`${window.location.origin}/clips/${collectionShare.share_token}`}
-                  target="_blank" rel="noopener noreferrer"
-                  className="block text-xs text-[#A3A3A3] hover:text-white underline underline-offset-2 mb-5">
-                  Open reel in new tab →
-                </a>
-                <button onClick={() => setCollectionModalOpen(false)}
-                  className="w-full border border-white/10 text-white py-3 text-xs font-bold tracking-wider uppercase hover:bg-[#1F1F1F] rounded transition-colors">
-                  Done
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
       {/* Tag Players Modal */}
-      {taggingClip && (
-        <div data-testid="tag-modal-overlay" onClick={() => !savingTags && setTaggingClip(null)}
-          className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center px-4">
-          <div onClick={(e) => e.stopPropagation()}
-            className="bg-[#141414] border border-white/10 max-w-lg w-full max-h-[80vh] flex flex-col rounded-lg">
-            <div className="p-5 border-b border-white/10">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>Tag Players</h3>
-                  <p className="text-xs text-[#A3A3A3] mt-0.5 truncate">{taggingClip.title}</p>
-                </div>
-                <button data-testid="close-tag-modal" onClick={() => setTaggingClip(null)}
-                  className="p-1 text-[#666] hover:text-white">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-              </div>
-              <input data-testid="tag-search-input" type="text"
-                value={tagSearch}
-                onChange={(e) => setTagSearch(e.target.value)}
-                placeholder="Search by name or jersey number..."
-                className="w-full mt-3 bg-[#0A0A0A] border border-white/10 text-white px-3 py-2 text-sm focus:outline-none focus:border-[#FBBF24] rounded" />
-              <button data-testid="ai-suggest-btn" onClick={handleAiSuggest} disabled={aiSuggesting}
-                className="mt-3 w-full text-xs py-2.5 bg-gradient-to-r from-[#A855F7] to-[#FBBF24] hover:opacity-90 disabled:opacity-50 text-black font-bold tracking-wider uppercase rounded flex items-center justify-center gap-2 transition-opacity">
-                {aiSuggesting ? (
-                  <>
-                    <div className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin" />
-                    Analyzing frame…
-                  </>
-                ) : (
-                  <>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L9.91 8.26L2 9.27L7.91 14.14L6.18 22L12 18.27L17.82 22L16.09 14.14L22 9.27L14.09 8.26L12 2Z"/></svg>
-                    AI Suggest Players
-                  </>
-                )}
-              </button>
-              {aiSuggestions && (
-                <div data-testid="ai-suggestions-result"
-                  className="mt-2 text-[10px] tracking-wider text-[#FBBF24] bg-[#FBBF24]/10 px-2 py-1.5 border border-[#FBBF24]/20">
-                  {aiSuggestions.suggestions.length > 0
-                    ? <>AI detected jersey #{aiSuggestions.raw_numbers.join(', #')} — {aiSuggestions.suggestions.length} matched to roster (pre-selected below).</>
-                    : aiSuggestions.raw_numbers.length > 0
-                      ? <>AI saw jersey #{aiSuggestions.raw_numbers.join(', #')} but no roster match.</>
-                      : <>AI couldn't read any jersey numbers from this clip's frame.</>
-                  }
-                </div>
-              )}
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-3 space-y-1">
-              {players.length === 0 ? (
-                <p className="text-center text-sm text-[#666] py-8">No players in roster yet. Add players from the match detail page.</p>
-              ) : (
-                players
-                  .filter(p => {
-                    const q = tagSearch.toLowerCase();
-                    if (!q) return true;
-                    return (p.name || '').toLowerCase().includes(q) || String(p.number ?? '').includes(q);
-                  })
-                  .map(p => {
-                    const selected = tagSelection.includes(p.id);
-                    return (
-                      <button key={p.id} data-testid={`tag-player-${p.id}`}
-                        onClick={() => toggleTag(p.id)}
-                        className={`w-full flex items-center gap-3 p-3 transition-colors text-left rounded ${
-                          selected ? 'bg-[#FBBF24]/10 border border-[#FBBF24]/40' : 'bg-[#0A0A0A] border border-white/10 hover:bg-[#1A1A1A]'
-                        }`}>
-                        <div className={`w-5 h-5 flex-shrink-0 rounded border flex items-center justify-center ${
-                          selected ? 'bg-[#FBBF24] border-[#FBBF24]' : 'border-white/30'
-                        }`}>
-                          {selected && (
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
-                          )}
-                        </div>
-                        <span className="text-xl font-bold text-[#007AFF] flex-shrink-0 min-w-[28px] text-center" style={{ fontFamily: 'Bebas Neue' }}>
-                          {p.number ?? '—'}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-semibold text-white truncate">{p.name}</div>
-                          <div className="text-[10px] text-[#666] tracking-wider">{p.position || 'No position'}</div>
-                        </div>
-                      </button>
-                    );
-                  })
-              )}
-            </div>
-
-            <div className="p-4 border-t border-white/10 flex items-center justify-between gap-3">
-              <span className="text-xs text-[#A3A3A3]">
-                {tagSelection.length} player{tagSelection.length === 1 ? '' : 's'} selected
-              </span>
-              <div className="flex gap-2">
-                <button onClick={() => setTaggingClip(null)} disabled={savingTags}
-                  className="px-4 py-2 border border-white/10 text-[#A3A3A3] hover:text-white text-xs font-bold uppercase rounded">
-                  Cancel
-                </button>
-                <button data-testid="save-tags-btn" onClick={saveClipTags} disabled={savingTags}
-                  className="px-5 py-2 bg-[#FBBF24] hover:bg-[#FCD34D] disabled:opacity-50 text-black text-xs font-bold tracking-wider uppercase rounded">
-                  {savingTags ? 'Saving…' : 'Save Tags'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <TagPlayersModal
+        taggingClip={taggingClip}
+        setTaggingClip={setTaggingClip}
+        tagSearch={tagSearch}
+        setTagSearch={setTagSearch}
+        tagSelection={tagSelection}
+        toggleTag={toggleTag}
+        savingTags={savingTags}
+        saveClipTags={saveClipTags}
+        aiSuggesting={aiSuggesting}
+        aiSuggestions={aiSuggestions}
+        handleAiSuggest={handleAiSuggest}
+        players={players}
+      />
     </div>
   );
 };
