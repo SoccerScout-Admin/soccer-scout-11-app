@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, UserCircle, CalendarBlank, Play, Trophy, FilmStrip, Shield, ShieldCheck, Warning, ShareNetwork, Copy, Check, X } from '@phosphor-icons/react';
+import { ArrowLeft, UserCircle, CalendarBlank, Play, Trophy, FilmStrip, Shield, ShieldCheck, Warning, ShareNetwork, Copy, Check, X, Sparkle } from '@phosphor-icons/react';
 
 const STAT_ICON = {
   goal: { label: 'Goals', color: '#10B981', icon: Trophy },
@@ -101,8 +101,12 @@ const PlayerProfile = () => {
           <h1 className="text-2xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
             Player Profile
           </h1>
+          <button data-testid="player-trends-btn" onClick={() => navigate(`/player/${playerId}/trends`)}
+            className="ml-auto flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#A855F7] to-[#FBBF24] hover:opacity-90 text-black text-xs font-bold tracking-wider uppercase rounded transition-opacity">
+            <Sparkle size={14} weight="fill" /> Season Trends
+          </button>
           <button data-testid="share-player-btn" onClick={() => setShareModalOpen(true)}
-            className={`ml-auto flex items-center gap-2 px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors border ${
+            className={`flex items-center gap-2 px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors border ${
               shareToken
                 ? 'border-[#10B981]/40 text-[#10B981] hover:bg-[#10B981]/10'
                 : 'border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F]'

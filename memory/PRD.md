@@ -105,6 +105,34 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
 - ffmpeg auto-installs at server startup if missing
 
+### Player Season Trends + Recruiter Lens (Complete - Apr 29, 2026)
+
+**Backend (`routes/player_trends.py`)**
+- `POST /api/players/{id}/season-trends?team_id=X` aggregates every clip tagged with the player_id, scoped to one of their teams (defaults to most recent season).
+- Computes per-clip-type stats, total featured time, per-match clip distribution.
+- Auto-detects position via `_normalize_position` (GK / Defender / Midfielder / Winger / Forward) and looks up a position-specific recruiter rubric — derived from US Soccer Development Academy / NCAA D1 / pro academy scout guides — listing the 5 attributes scouts evaluate plus what they specifically prioritize at each position.
+- Sends a structured prompt to Gemini 2.5 Flash with the clip data + rubric, gets back JSON containing:
+  - `player_summary` (verdict)
+  - `team_role`: current_role + strengths_for_team + opportunities_for_team (scoped to *this team's needs*)
+  - `recruiter_view`: estimated_level (Youth Recreational → Pro Academy), scout_score (1-10), per-rubric-attribute ratings with notes, where_they_excel, development_priorities
+  - `recommended_drills` (3-4 tailored to development priorities)
+- Cached on the player document keyed by team_id; `GET` returns cached.
+
+**Frontend (`PlayerSeasonTrends.js` at `/player/:id/trends`)**
+- Hero: avatar + jersey + name + position + team-season + AI verdict prose
+- 4-card stats grid: Total Clips, Featured Time, Matches Active, Position
+- "Role on {team}" panel with side-by-side Strengths (green) and Opportunities (yellow) — scoped to current team
+- "Recruiter Lens" gradient card:
+  - Left: Suggested Level pill (color-coded by recruitment tier: pink for Youth Recreational → purple for Pro Academy), 10-star rating, score-out-of-10, rationale
+  - Right: Scout attributes table — each rubric attribute with progress bar (red <5, yellow 5-6, green ≥7) and notes
+  - Below: "Where they excel" (green) + "Development priorities" (red)
+- Recommended Drills cards (numbered, yellow accent)
+- Multi-team selector in header (when player is on >1 team) lets coach switch season context
+
+**Integration**: PlayerProfile gains a gradient "Season Trends" CTA in the header next to "Share Profile".
+
+**Verified**: Real Gemini-generated GK report on a 3-clip dataset for Marcus Johnson — appropriately conservative ratings (6/10 shot stopping, 3/10 command of the box) reflecting limited sample, accurate position-specific rubric, grounded team-role analysis. Screenshot confirms layout. 23/23 regression sweep still passes.
+
 ### Season Trends — Aggregate Coaching Dashboard (Complete - Apr 29, 2026)
 - New `routes/season_trends.py` — `POST /api/folders/{id}/season-trends` aggregates every match in a folder:
   - **Per-match scoreline** inferred from `markers` (counts goals by team)
