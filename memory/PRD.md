@@ -105,8 +105,28 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
 - ffmpeg auto-installs at server startup if missing
 
+### server.py Refactor + Restore-Deleted-Video (Complete - Apr 29, 2026)
+
+**Restore deleted videos (24h grace window)**
+- New `GET /api/matches/{id}/deleted-videos` returns videos with `is_deleted=true` and `deleted_at >= now-24h`.
+- New `POST /api/videos/{id}/restore` validates the 24h window, refuses to clobber an already-attached video on the same match (HTTP 409), then unsets `is_deleted` + `deleted_at` and re-attaches `match.video_id` + `match.duration`.
+- MatchDetail.js gained a "Recover a recently deleted video" link in the upload state and a drawer listing each deleted video with its filename, deletion timestamp, and a green "Restore" button.
+- Note: restore reattaches the video file only — clips/AI analyses/markers cascade-deleted at delete time are not recoverable. UI confirmation explains this clearly.
+
+**server.py refactor (CRUD-style routes extracted)**
+- New `routes/folders.py` (204 lines) — folder CRUD + folder sharing (toggle, public folder view, public match detail). The public video stream endpoint stays in server.py because it depends on `read_chunk_data` from the chunked-upload pipeline.
+- New `routes/matches.py` (98 lines) — match CRUD + the new `/matches/{id}/deleted-videos` endpoint.
+- New `routes/annotations.py` (61 lines) — annotation CRUD.
+- New `routes/analysis.py` (61 lines) — read endpoints `/analysis/video/{id}`, `/highlights/video/{id}`, `/markers/video/{id}`. The AI-generation endpoints (`/analysis/generate`, `/process/...`, reprocess, trimmed) stay in server.py because they import the auto-processing pipeline + Gemini integration that would create circular dependencies.
+- All four routers mounted in server.py via the established `_api = APIRouter(prefix="/api"); include_router; app.include_router` pattern.
+- Result: server.py shrank from ~2510 → 2292 lines. Routes directory is now the single source of truth for 70+ endpoints across 8 domains (auth/teams/players/player_profile/clips/og/folders/matches/annotations/analysis).
+- **Verified**: full 23/23 regression sweep passes after the refactor — zero behavior change.
+
 ### Replace / Re-upload Match Video (Complete - Apr 29, 2026)
 - New `DELETE /api/videos/{id}` endpoint: soft-deletes the video (sets `is_deleted=true`, records `deleted_at`), unlinks `match.video_id` + `match.duration` + `match.processing_status`, hard-deletes derived `clips` / `analyses` / `timeline_markers`, and best-effort cleans both object-storage chunks and on-disk `/var/video_chunks/{video_id}` directories so the next upload starts fresh. Also drops orphaned `chunked_uploads` session records.
+- MatchDetail.js now polls `/api/videos/{id}/processing-status` every 5s when a video is attached and shows a colored status chip (`AI ready` / `Processing… N%` / `Processing failed`).
+- New "Replace Video" button next to "View Analysis" → confirmation modal listing exactly what will be removed (video file, clips, AI markers/analyses) vs preserved (match, roster, folder, share links). After delete, MatchDetail seamlessly returns to its upload state without forcing a page reload.
+- Cascade verified end-to-end: seeded a fake video + clip + analysis + marker, called DELETE, confirmed all derived rows gone and match unlinked. (sets `is_deleted=true`, records `deleted_at`), unlinks `match.video_id` + `match.duration` + `match.processing_status`, hard-deletes derived `clips` / `analyses` / `timeline_markers`, and best-effort cleans both object-storage chunks and on-disk `/var/video_chunks/{video_id}` directories so the next upload starts fresh. Also drops orphaned `chunked_uploads` session records.
 - MatchDetail.js now polls `/api/videos/{id}/processing-status` every 5s when a video is attached and shows a colored status chip (`AI ready` / `Processing… N%` / `Processing failed`).
 - New "Replace Video" button next to "View Analysis" → confirmation modal listing exactly what will be removed (video file, clips, AI markers/analyses) vs preserved (match, roster, folder, share links). After delete, MatchDetail seamlessly returns to its upload state without forcing a page reload.
 - Cascade verified end-to-end: seeded a fake video + clip + analysis + marker, called DELETE, confirmed all derived rows gone and match unlinked.

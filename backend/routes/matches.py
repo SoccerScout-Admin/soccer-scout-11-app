@@ -1,0 +1,98 @@
+"""Match CRUD + recently-deleted-videos lookup."""
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, Field, ConfigDict
+from typing import List, Optional
+from datetime import datetime, timezone, timedelta
+import uuid
+from db import db
+from routes.auth import get_current_user
+
+router = APIRouter()
+
+
+class Match(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    team_home: str
+    team_away: str
+    date: str
+    competition: str = ""
+    folder_id: Optional[str] = None
+    video_id: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class MatchCreate(BaseModel):
+    team_home: str
+    team_away: str
+    date: str
+    competition: str = ""
+    folder_id: Optional[str] = None
+
+
+@router.post("/matches", response_model=Match)
+async def create_match(input: MatchCreate, current_user: dict = Depends(get_current_user)):
+    match_obj = Match(user_id=current_user["id"], **input.model_dump())
+    await db.matches.insert_one(match_obj.model_dump())
+    return match_obj
+
+
+@router.get("/matches", response_model=List[Match])
+async def get_matches(current_user: dict = Depends(get_current_user)):
+    matches = await db.matches.find(
+        {"user_id": current_user["id"]}, {"_id": 0}
+    ).to_list(1000)
+    for match in matches:
+        if match.get("video_id"):
+            video = await db.videos.find_one(
+                {"id": match["video_id"]},
+                {"_id": 0, "processing_status": 1, "processing_progress": 1},
+            )
+            if video:
+                match["processing_status"] = video.get("processing_status", "none")
+                match["processing_progress"] = video.get("processing_progress", 0)
+    return matches
+
+
+@router.get("/matches/{match_id}", response_model=Match)
+async def get_match(match_id: str, current_user: dict = Depends(get_current_user)):
+    match = await db.matches.find_one(
+        {"id": match_id, "user_id": current_user["id"]}, {"_id": 0}
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return match
+
+
+@router.patch("/matches/{match_id}")
+async def update_match(
+    match_id: str, updates: dict, current_user: dict = Depends(get_current_user)
+):
+    match = await db.matches.find_one(
+        {"id": match_id, "user_id": current_user["id"]}, {"_id": 0}
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    allowed = {"folder_id", "team_home", "team_away", "date", "competition"}
+    filtered = {k: v for k, v in updates.items() if k in allowed}
+    if filtered:
+        await db.matches.update_one({"id": match_id}, {"$set": filtered})
+    return {"status": "updated"}
+
+
+@router.get("/matches/{match_id}/deleted-videos")
+async def list_deleted_videos(
+    match_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Recently deleted videos for a match (24h restore window)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    return await db.videos.find(
+        {
+            "match_id": match_id,
+            "user_id": current_user["id"],
+            "is_deleted": True,
+            "deleted_at": {"$gte": cutoff},
+        },
+        {"_id": 0, "chunk_paths": 0, "chunk_sizes": 0, "chunk_backends": 0},
+    ).sort("deleted_at", -1).to_list(20)

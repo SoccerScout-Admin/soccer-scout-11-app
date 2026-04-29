@@ -51,6 +51,10 @@ from routes.teams import router as teams_router
 from routes.og import router as og_router
 from routes.players import router as players_router
 from routes.player_profile import router as player_profile_router
+from routes.folders import router as folders_router
+from routes.matches import router as matches_router
+from routes.annotations import router as annotations_router
+from routes.analysis import router as analysis_router
 
 # ===== Storage: Connection Pooling + Retry for SSL resilience =====
 
@@ -498,185 +502,13 @@ async def debug_match(match_id: str, current_user: dict = Depends(get_current_us
     return {"match_exists": match is not None, "match_id": match_id, "user_id": current_user["id"], "match": match}
 
 # ===== Matches =====
-
-@api_router.post("/matches", response_model=Match)
-async def create_match(input: MatchCreate, current_user: dict = Depends(get_current_user)):
-    match_obj = Match(user_id=current_user["id"], **input.model_dump())
-    await db.matches.insert_one(match_obj.model_dump())
-    return match_obj
-
-@api_router.get("/matches", response_model=List[Match])
-async def get_matches(current_user: dict = Depends(get_current_user)):
-    matches = await db.matches.find({"user_id": current_user["id"]}, {"_id": 0}).to_list(1000)
-    # Enrich with processing status
-    for match in matches:
-        if match.get("video_id"):
-            video = await db.videos.find_one(
-                {"id": match["video_id"]},
-                {"_id": 0, "processing_status": 1, "processing_progress": 1}
-            )
-            if video:
-                match["processing_status"] = video.get("processing_status", "none")
-                match["processing_progress"] = video.get("processing_progress", 0)
-    return matches
-
-@api_router.get("/matches/{match_id}", response_model=Match)
-async def get_match(match_id: str, current_user: dict = Depends(get_current_user)):
-    match = await db.matches.find_one({"id": match_id, "user_id": current_user["id"]}, {"_id": 0})
-    if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
-    return match
-
-@api_router.patch("/matches/{match_id}")
-async def update_match(match_id: str, updates: dict, current_user: dict = Depends(get_current_user)):
-    match = await db.matches.find_one({"id": match_id, "user_id": current_user["id"]}, {"_id": 0})
-    if not match:
-        raise HTTPException(status_code=404, detail="Match not found")
-    allowed = {"folder_id", "team_home", "team_away", "date", "competition"}
-    filtered = {k: v for k, v in updates.items() if k in allowed}
-    if filtered:
-        await db.matches.update_one({"id": match_id}, {"$set": filtered})
-    return {"status": "updated"}
+# Match CRUD has moved to routes/matches.py and is mounted via matches_router.
+# Only video-related match operations stay below (deleted-videos restore is in matches.py).
 
 # ===== Folders =====
-
-@api_router.post("/folders")
-async def create_folder(input: FolderCreate, current_user: dict = Depends(get_current_user)):
-    if input.parent_id:
-        parent = await db.folders.find_one({"id": input.parent_id, "user_id": current_user["id"]}, {"_id": 0})
-        if not parent:
-            raise HTTPException(status_code=404, detail="Parent folder not found")
-    folder = Folder(user_id=current_user["id"], **input.model_dump())
-    await db.folders.insert_one(folder.model_dump())
-    return folder.model_dump()
-
-@api_router.get("/folders")
-async def get_folders(current_user: dict = Depends(get_current_user)):
-    folders = await db.folders.find({"user_id": current_user["id"]}, {"_id": 0}).to_list(500)
-    return folders
-
-@api_router.patch("/folders/{folder_id}")
-async def update_folder(folder_id: str, input: FolderUpdate, current_user: dict = Depends(get_current_user)):
-    folder = await db.folders.find_one({"id": folder_id, "user_id": current_user["id"]}, {"_id": 0})
-    if not folder:
-        raise HTTPException(status_code=404, detail="Folder not found")
-    updates = {k: v for k, v in input.model_dump().items() if v is not None}
-    if updates:
-        await db.folders.update_one({"id": folder_id}, {"$set": updates})
-    return {"status": "updated"}
-
-@api_router.delete("/folders/{folder_id}")
-async def delete_folder(folder_id: str, current_user: dict = Depends(get_current_user)):
-    folder = await db.folders.find_one({"id": folder_id, "user_id": current_user["id"]}, {"_id": 0})
-    if not folder:
-        raise HTTPException(status_code=404, detail="Folder not found")
-    # Move child folders to parent
-    await db.folders.update_many(
-        {"parent_id": folder_id, "user_id": current_user["id"]},
-        {"$set": {"parent_id": folder.get("parent_id")}}
-    )
-    # Move matches to parent folder
-    await db.matches.update_many(
-        {"folder_id": folder_id, "user_id": current_user["id"]},
-        {"$set": {"folder_id": folder.get("parent_id")}}
-    )
-    await db.folders.delete_one({"id": folder_id})
-    return {"status": "deleted"}
-
-# ===== Folder Sharing =====
-
-@api_router.post("/folders/{folder_id}/share")
-async def toggle_folder_share(folder_id: str, current_user: dict = Depends(get_current_user)):
-    """Generate or revoke a share token for a public folder"""
-    folder = await db.folders.find_one({"id": folder_id, "user_id": current_user["id"]}, {"_id": 0})
-    if not folder:
-        raise HTTPException(status_code=404, detail="Folder not found")
-    if folder.get("is_private"):
-        raise HTTPException(status_code=400, detail="Cannot share a private folder. Set it to public first.")
-    
-    if folder.get("share_token"):
-        # Revoke sharing
-        await db.folders.update_one({"id": folder_id}, {"$set": {"share_token": None}})
-        return {"status": "unshared", "share_token": None}
-    else:
-        # Generate share token
-        token = str(uuid.uuid4())[:12]
-        await db.folders.update_one({"id": folder_id}, {"$set": {"share_token": token}})
-        return {"status": "shared", "share_token": token}
-
-@api_router.get("/shared/{share_token}")
-async def get_shared_folder(share_token: str):
-    """Public endpoint: view a shared folder and its matches (no auth required)"""
-    folder = await db.folders.find_one({"share_token": share_token, "is_private": False}, {"_id": 0})
-    if not folder:
-        raise HTTPException(status_code=404, detail="Shared folder not found or link expired")
-    
-    matches = await db.matches.find(
-        {"folder_id": folder["id"], "user_id": folder["user_id"]}, {"_id": 0}
-    ).to_list(500)
-    
-    # Enrich with processing status
-    for match in matches:
-        if match.get("video_id"):
-            video = await db.videos.find_one(
-                {"id": match["video_id"]},
-                {"_id": 0, "processing_status": 1, "processing_progress": 1}
-            )
-            if video:
-                match["processing_status"] = video.get("processing_status", "none")
-    
-    owner = await db.users.find_one({"id": folder["user_id"]}, {"_id": 0, "name": 1, "role": 1})
-    
-    return {
-        "folder": {"id": folder["id"], "name": folder["name"]},
-        "owner": {"name": owner.get("name", "Coach") if owner else "Coach", "role": owner.get("role", "") if owner else ""},
-        "matches": matches
-    }
-
-@api_router.get("/shared/{share_token}/match/{match_id}")
-async def get_shared_match_detail(share_token: str, match_id: str):
-    """Public endpoint: view a specific match's analyses, clips, annotations, and roster"""
-    folder = await db.folders.find_one({"share_token": share_token, "is_private": False}, {"_id": 0})
-    if not folder:
-        raise HTTPException(status_code=404, detail="Shared folder not found or link expired")
-    
-    match = await db.matches.find_one(
-        {"id": match_id, "folder_id": folder["id"], "user_id": folder["user_id"]}, {"_id": 0}
-    )
-    if not match:
-        raise HTTPException(status_code=404, detail="Match not found in this shared folder")
-    
-    result = {"match": match, "folder_name": folder["name"]}
-    
-    if match.get("video_id"):
-        video = await db.videos.find_one({"id": match["video_id"]}, {"_id": 0, "id": 1, "processing_status": 1, "original_filename": 1, "size": 1})
-        result["video"] = video
-        
-        analyses = await db.analyses.find(
-            {"video_id": match["video_id"], "user_id": folder["user_id"], "status": "completed"},
-            {"_id": 0}
-        ).to_list(10)
-        result["analyses"] = analyses
-        
-        clips = await db.clips.find(
-            {"video_id": match["video_id"], "user_id": folder["user_id"]},
-            {"_id": 0}
-        ).to_list(100)
-        result["clips"] = clips
-        
-        annotations = await db.annotations.find(
-            {"video_id": match["video_id"], "user_id": folder["user_id"]},
-            {"_id": 0}
-        ).to_list(500)
-        result["annotations"] = annotations
-    
-    players = await db.players.find(
-        {"match_id": match_id, "user_id": folder["user_id"]},
-        {"_id": 0}
-    ).to_list(100)
-    result["players"] = players
-    
-    return result
+# Folder CRUD + sharing moved to routes/folders.py.
+# The public video stream endpoint stays here because it depends on
+# `read_chunk_data` from the chunked-upload pipeline.
 
 @api_router.get("/shared/{share_token}/video/{video_id}")
 async def stream_shared_video(share_token: str, video_id: str, request: Request):
@@ -1206,6 +1038,49 @@ async def delete_video(video_id: str, current_user: dict = Depends(get_current_u
             pass
 
     return {"status": "deleted", "video_id": video_id, "match_id": video["match_id"]}
+
+
+@api_router.post("/videos/{video_id}/restore")
+async def restore_video(video_id: str, current_user: dict = Depends(get_current_user)):
+    """Undo a recent video deletion (24h grace window). Re-attaches the video to its match.
+
+    NOTE: Cascade-deleted clips/analyses/markers cannot be restored — they were hard-deleted.
+    """
+    video = await db.videos.find_one(
+        {"id": video_id, "user_id": current_user["id"], "is_deleted": True}, {"_id": 0}
+    )
+    if not video:
+        raise HTTPException(status_code=404, detail="Deleted video not found")
+    deleted_at = video.get("deleted_at")
+    if not deleted_at:
+        raise HTTPException(status_code=400, detail="Video has no deletion timestamp")
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    try:
+        deleted_dt = datetime.fromisoformat(deleted_at.replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid deletion timestamp")
+    if deleted_dt < cutoff:
+        raise HTTPException(status_code=410, detail="Restore window has expired (24h)")
+
+    # If the match already has a different active video, refuse to clobber it
+    match = await db.matches.find_one(
+        {"id": video["match_id"], "user_id": current_user["id"]}, {"_id": 0, "video_id": 1}
+    )
+    if match and match.get("video_id") and match["video_id"] != video_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Match already has another active video. Replace that one first.",
+        )
+
+    await db.videos.update_one(
+        {"id": video_id},
+        {"$set": {"is_deleted": False}, "$unset": {"deleted_at": ""}},
+    )
+    await db.matches.update_one(
+        {"id": video["match_id"]},
+        {"$set": {"video_id": video_id, "duration": video.get("duration")}},
+    )
+    return {"status": "restored", "video_id": video_id}
 
 
 @api_router.get("/videos/{video_id}/metadata")
@@ -1836,30 +1711,11 @@ async def generate_analysis(input: AnalysisRequest, current_user: dict = Depends
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
-@api_router.get("/analysis/video/{video_id}")
-async def get_analyses(video_id: str, current_user: dict = Depends(get_current_user)):
-    analyses = await db.analyses.find({"video_id": video_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(100)
-    return analyses
+# ===== Analysis (read endpoints moved to routes/analysis.py) =====
+# AI generation endpoints stay below because they depend on the auto-processing pipeline.
 
 # ===== Annotations =====
-
-@api_router.post("/annotations", response_model=Annotation)
-async def create_annotation(input: AnnotationCreate, current_user: dict = Depends(get_current_user)):
-    annotation_obj = Annotation(user_id=current_user["id"], **input.model_dump())
-    await db.annotations.insert_one(annotation_obj.model_dump())
-    return annotation_obj
-
-@api_router.get("/annotations/video/{video_id}", response_model=List[Annotation])
-async def get_annotations(video_id: str, current_user: dict = Depends(get_current_user)):
-    annotations = await db.annotations.find({"video_id": video_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(1000)
-    return annotations
-
-@api_router.delete("/annotations/{annotation_id}")
-async def delete_annotation(annotation_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.annotations.delete_one({"id": annotation_id, "user_id": current_user["id"]})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Annotation not found")
-    return {"message": "Annotation deleted"}
+# Annotation CRUD moved to routes/annotations.py
 
 # ===== Clips =====
 
@@ -1914,22 +1770,7 @@ async def update_clip(clip_id: str, body: ClipUpdate, current_user: dict = Depen
     return {"status": "updated", **updates}
 
 # ===== Highlights =====
-
-@api_router.get("/highlights/video/{video_id}")
-async def get_highlights_package(video_id: str, current_user: dict = Depends(get_current_user)):
-    video = await db.videos.find_one({"id": video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0})
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-    match = await db.matches.find_one({"id": video["match_id"]}, {"_id": 0})
-    clips = await db.clips.find({"video_id": video_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(1000)
-    analyses = await db.analyses.find({"video_id": video_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(100)
-    return {
-        "match": match,
-        "video": {"id": video["id"], "filename": video["original_filename"], "size": video["size"]},
-        "clips": clips,
-        "analyses": analyses,
-        "generated_at": datetime.now(timezone.utc).isoformat()
-    }
+# `/highlights/video/{video_id}` moved to routes/analysis.py.
 
 @api_router.get("/clips/{clip_id}/download")
 async def download_clip_info(clip_id: str, current_user: dict = Depends(get_current_user)):
@@ -1946,11 +1787,7 @@ async def download_clip_info(clip_id: str, current_user: dict = Depends(get_curr
     }
 
 # ===== Timeline Markers =====
-
-@api_router.get("/markers/video/{video_id}")
-async def get_markers(video_id: str, current_user: dict = Depends(get_current_user)):
-    markers = await db.markers.find({"video_id": video_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(500)
-    return markers
+# `/markers/video/{video_id}` moved to routes/analysis.py.
 
 # ===== Clip Video Download (actual MP4 extraction) =====
 
@@ -2289,6 +2126,12 @@ app.include_router(_players_api)
 _pp_api = APIRouter(prefix="/api")
 _pp_api.include_router(player_profile_router)
 app.include_router(_pp_api)
+
+# Mount Folders, Matches, Annotations, Analysis (CRUD-style routers)
+for r in (folders_router, matches_router, annotations_router, analysis_router):
+    _api = APIRouter(prefix="/api")
+    _api.include_router(r)
+    app.include_router(_api)
 
 # ===== Player Profile Pics =====
 # (Moved to routes/players.py — this section intentionally left empty)
