@@ -15,7 +15,7 @@ const SharedClipView = () => {
 
   useEffect(() => {
     fetchClip();
-  }, [shareToken]);
+  }, [shareToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchClip = async () => {
     try {

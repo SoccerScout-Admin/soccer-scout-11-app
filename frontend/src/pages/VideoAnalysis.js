@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
@@ -24,6 +24,7 @@ const VideoAnalysis = () => {
   const [clipFormData, setClipFormData] = useState({ title: '', start_time: 0, end_time: 0, clip_type: 'highlight', description: '' });
   const [currentTimestamp, setCurrentTimestamp] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
+  const [videoSrc, setVideoSrc] = useState('');
   const [markers, setMarkers] = useState([]);
   const [showTrimPanel, setShowTrimPanel] = useState(false);
   const [trimStart, setTrimStart] = useState(0);
@@ -89,6 +90,14 @@ const VideoAnalysis = () => {
           const markersRes = await axios.get(`${API}/markers/video/${videoId}`, { headers: getAuthHeader() });
           setMarkers(markersRes.data);
         } catch (e) { console.error('Failed to fetch markers:', e); }
+        // Get short-lived video access token (avoids exposing main JWT in video URL)
+        try {
+          const tokenRes = await axios.get(`${API}/videos/${videoId}/access-token`, { headers: getAuthHeader() });
+          setVideoSrc(`${API}/videos/${videoId}?token=${tokenRes.data.token}`);
+        } catch (e) {
+          console.error('Failed to get video access token:', e);
+          setVideoSrc(`${API}/videos/${videoId}`);
+        }
       } catch (err) {
         console.error('Failed to load data:', err);
       }
@@ -111,7 +120,7 @@ const VideoAnalysis = () => {
         try {
           const mkRes = await axios.get(`${API}/markers/video/${videoId}`, { headers: getAuthHeader() });
           setMarkers(mkRes.data);
-        } catch (e) { /* ignore */ }
+        } catch (e) { console.error('Failed to refresh markers after processing:', e); }
       }
     }, 8000);
     return () => clearInterval(interval);
@@ -269,8 +278,8 @@ const VideoAnalysis = () => {
         setClipShareCopied(true);
         setTimeout(() => setClipShareCopied(false), 2000);
       });
-    } catch {
-      // ignore
+    } catch (e) {
+      console.error('Clipboard copy failed:', e);
     }
   };
 
@@ -397,6 +406,11 @@ const VideoAnalysis = () => {
     'highlights': 'Highlights Detection',
     'timeline_markers': 'Timeline Markers'
   };
+
+  const sortedMarkers = useMemo(() =>
+    [...markers].sort((a, b) => a.time - b.time),
+    [markers]
+  );
 
   if (!videoMetadata) {
     return (
@@ -547,7 +561,7 @@ const VideoAnalysis = () => {
             <div className="bg-black rounded-lg overflow-hidden relative">
               <video ref={videoRef} data-testid="video-player" controls
                 className="w-full aspect-video"
-                src={`${API}/videos/${videoId}?token=${localStorage.getItem('token')}`}
+                src={videoSrc}
                 preload="auto"
                 onTimeUpdate={(e) => setCurrentTimestamp(e.target.currentTime)}
                 onLoadedMetadata={(e) => setVideoDuration(e.target.duration || 0)}
@@ -876,7 +890,7 @@ const VideoAnalysis = () => {
                       </div>
                     ) : (
                       <div className="space-y-1.5 max-h-[500px] overflow-y-auto">
-                        {markers.sort((a, b) => a.time - b.time).map(m => {
+                        {sortedMarkers.map(m => {
                           const colors = { goal: '#FFD700', shot: '#FF6B35', save: '#4ADE80', foul: '#EF4444', card: '#EF4444', substitution: '#A855F7', tactical: '#007AFF', chance: '#FFB800' };
                           const color = colors[m.type] || '#888';
                           return (

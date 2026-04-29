@@ -22,7 +22,7 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const user = getCurrentUser();
 
-  useEffect(() => { fetchMatches(); fetchFolders(); }, []);
+  useEffect(() => { fetchMatches(); fetchFolders(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchMatches = async () => {
     try {

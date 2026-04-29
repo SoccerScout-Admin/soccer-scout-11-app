@@ -4,8 +4,8 @@ import os
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://video-scout-11.preview.emergentagent.com').rstrip('/')
 
-TEST_EMAIL = "testcoach@demo.com"
-TEST_PASSWORD = "password123"
+TEST_EMAIL = os.environ.get('TEST_EMAIL', 'testcoach@demo.com')
+TEST_PASSWORD = os.environ.get('TEST_PASSWORD', 'password123')
 
 
 @pytest.fixture(scope="session")

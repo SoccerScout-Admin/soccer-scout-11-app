@@ -1021,6 +1021,20 @@ async def finalize_chunked_upload(upload_id: str, total_chunks: int, current_use
 
 # ===== Video Serving (streaming with Range support) =====
 
+@api_router.get("/videos/{video_id}/access-token")
+async def get_video_access_token(video_id: str, current_user: dict = Depends(get_current_user)):
+    """Generate a short-lived access token for video streaming (prevents exposing main JWT in URLs)"""
+    video = await db.videos.find_one({"id": video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0, "id": 1})
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    # Short-lived token (5 min) specifically for this video
+    import time
+    video_token = jwt.encode(
+        {"user_id": current_user["id"], "video_id": video_id, "exp": int(time.time()) + 300, "type": "video_access"},
+        JWT_SECRET, algorithm="HS256"
+    )
+    return {"token": video_token}
+
 @api_router.get("/videos/{video_id}")
 async def get_video(video_id: str, request: Request, token: str = None, authorization: str = Header(None)):
     """Serve video with streaming and HTTP Range support. Auth via header or ?token= query param."""

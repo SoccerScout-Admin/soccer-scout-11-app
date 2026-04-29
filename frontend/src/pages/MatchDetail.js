@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
@@ -24,7 +24,7 @@ const MatchDetail = () => {
     fetchMatch();
     fetchPlayers();
     fetchTeams();
-  }, [matchId]);
+  }, [matchId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchMatch = async () => {
     try {
@@ -205,10 +205,12 @@ const MatchDetail = () => {
     }
   };
 
-  // Group players by team
-  const homeTeamPlayers = players.filter(p => p.team === match?.team_home);
-  const awayTeamPlayers = players.filter(p => p.team === match?.team_away);
-  const otherPlayers = players.filter(p => p.team !== match?.team_home && p.team !== match?.team_away);
+  // Group players by team (memoized)
+  const { homeTeamPlayers, awayTeamPlayers, otherPlayers } = useMemo(() => ({
+    homeTeamPlayers: players.filter(p => p.team === match?.team_home),
+    awayTeamPlayers: players.filter(p => p.team === match?.team_away),
+    otherPlayers: players.filter(p => p.team !== match?.team_home && p.team !== match?.team_away)
+  }), [players, match?.team_home, match?.team_away]);
 
   if (!match) {
     return (
