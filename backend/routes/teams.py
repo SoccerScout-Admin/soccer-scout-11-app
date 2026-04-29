@@ -75,6 +75,86 @@ async def get_team_players(team_id: str, current_user: dict = Depends(get_curren
     return players
 
 
+@router.post("/teams/{team_id}/share")
+async def toggle_team_share(team_id: str, current_user: dict = Depends(get_current_user)):
+    """Toggle public share link for a team's roster page"""
+    team = await db.teams.find_one({"id": team_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    if team.get("share_token"):
+        await db.teams.update_one({"id": team_id}, {"$set": {"share_token": None}})
+        return {"status": "unshared", "share_token": None}
+    token = str(uuid.uuid4())[:12]
+    await db.teams.update_one({"id": team_id}, {"$set": {"share_token": token}})
+    return {"status": "shared", "share_token": token}
+
+
+@router.get("/shared/team/{share_token}")
+async def get_shared_team(share_token: str):
+    """Public endpoint: view a team's roster + recently shared matches (no auth)"""
+    team = await db.teams.find_one({"share_token": share_token}, {"_id": 0})
+    if not team:
+        raise HTTPException(status_code=404, detail="Shared team not found or link expired")
+
+    # Roster (sanitize: drop internal fields like storage paths and user_id)
+    players_raw = await db.players.find(
+        {"team_id": team["id"], "user_id": team["user_id"]}, {"_id": 0}
+    ).to_list(200)
+    public_fields = {"id", "name", "number", "position", "profile_pic_url"}
+    players = [{k: p.get(k) for k in public_fields} for p in players_raw]
+
+    # Club info (for crest)
+    club_info = None
+    if team.get("club"):
+        club = await db.clubs.find_one(
+            {"id": team["club"], "user_id": team["user_id"]},
+            {"_id": 0, "name": 1, "logo_url": 1, "id": 1}
+        )
+        if club:
+            club_info = club
+
+    # Owner / coach
+    owner = await db.users.find_one({"id": team["user_id"]}, {"_id": 0, "name": 1, "role": 1})
+
+    # Recently shared matches: find matches owned by this team's coach where the
+    # parent folder is publicly shared. Match folder.share_token = token so
+    # the public viewer can navigate from team page → folder share view.
+    shared_folders = await db.folders.find(
+        {"user_id": team["user_id"], "share_token": {"$ne": None}, "is_private": False},
+        {"_id": 0, "id": 1, "name": 1, "share_token": 1}
+    ).to_list(100)
+
+    folder_by_id = {f["id"]: f for f in shared_folders}
+    shared_matches = []
+    if folder_by_id:
+        matches = await db.matches.find(
+            {
+                "user_id": team["user_id"],
+                "folder_id": {"$in": list(folder_by_id.keys())},
+            },
+            {"_id": 0, "id": 1, "team_home": 1, "team_away": 1, "date": 1,
+             "competition": 1, "folder_id": 1, "video_id": 1}
+        ).sort("date", -1).to_list(20)
+        for m in matches:
+            f = folder_by_id.get(m.get("folder_id"))
+            if f:
+                m["folder_share_token"] = f["share_token"]
+                m["folder_name"] = f["name"]
+                shared_matches.append(m)
+
+    return {
+        "team": {
+            "id": team["id"],
+            "name": team["name"],
+            "season": team["season"],
+        },
+        "club": club_info,
+        "owner": {"name": (owner or {}).get("name", "Coach")},
+        "players": players,
+        "shared_matches": shared_matches,
+    }
+
+
 # ===== Clubs =====
 
 @router.post("/clubs")

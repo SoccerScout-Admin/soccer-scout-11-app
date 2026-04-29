@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, Users, Plus, Trash, Upload, UserCircle, CalendarBlank, Shield } from '@phosphor-icons/react';
+import { ArrowLeft, Users, Plus, Trash, Upload, UserCircle, CalendarBlank, Shield, ShareNetwork, Copy, Check, X } from '@phosphor-icons/react';
 
 const TeamRoster = () => {
   const { teamId } = useParams();
@@ -14,6 +14,8 @@ const TeamRoster = () => {
   const [playerForm, setPlayerForm] = useState({ name: '', number: '', position: '' });
   const [uploadingPic, setUploadingPic] = useState(null);
   const [picVersions, setPicVersions] = useState({});
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     fetchTeam();
@@ -65,6 +67,34 @@ const TeamRoster = () => {
       await axios.delete(`${API}/players/${playerId}`, { headers: getAuthHeader() });
       setPlayers(players.filter(p => p.id !== playerId));
     } catch (err) { console.error('Failed to delete player:', err); }
+  };
+
+  const handleToggleShare = async () => {
+    try {
+      const res = await axios.post(`${API}/teams/${teamId}/share`, {}, { headers: getAuthHeader() });
+      setTeam(prev => ({ ...prev, share_token: res.data.share_token }));
+    } catch (err) {
+      alert('Failed to update share status: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  const shareUrl = useMemo(() =>
+    team?.share_token ? `${window.location.origin}/shared-team/${team.share_token}` : '',
+    [team?.share_token]
+  );
+
+  const handleCopyShare = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+    } catch {
+      // Fallback for sandboxed iframes
+      const ta = document.createElement('textarea');
+      ta.value = shareUrl; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleProfilePicUpload = async (playerId, file) => {
@@ -135,6 +165,14 @@ const TeamRoster = () => {
           </div>
           <div className="ml-auto flex items-center gap-3">
             <span className="text-xs text-[#666] bg-white/5 px-3 py-1.5">{players.length} Players</span>
+            <button data-testid="share-team-btn" onClick={() => setShareModalOpen(true)}
+              className={`flex items-center gap-2 px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors border ${
+                team.share_token
+                  ? 'border-[#10B981]/40 text-[#10B981] hover:bg-[#10B981]/10'
+                  : 'border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F]'
+              }`}>
+              <ShareNetwork size={14} weight="bold" /> {team.share_token ? 'Shared' : 'Share'}
+            </button>
             <button data-testid="add-player-btn" onClick={() => setShowAddPlayer(true)}
               className="flex items-center gap-2 bg-[#007AFF] hover:bg-[#005bb5] text-white px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors">
               <Plus size={14} weight="bold" /> Add Player
@@ -252,6 +290,62 @@ const TeamRoster = () => {
           </div>
         )}
       </main>
+
+      {/* Share Modal */}
+      {shareModalOpen && (
+        <div data-testid="share-modal-overlay" onClick={() => setShareModalOpen(false)}
+          className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center px-4">
+          <div onClick={(e) => e.stopPropagation()}
+            className="bg-[#141414] border border-white/10 max-w-lg w-full p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
+                  Public Team Page
+                </h3>
+                <p className="text-xs text-[#A3A3A3] mt-1">Share your roster with parents, scouts, and recruiters.</p>
+              </div>
+              <button data-testid="close-share-modal" onClick={() => setShareModalOpen(false)}
+                className="p-1 text-[#666] hover:text-white">
+                <X size={20} />
+              </button>
+            </div>
+
+            {team.share_token ? (
+              <>
+                <div className="bg-[#0A0A0A] border border-white/10 p-3 flex items-center gap-2 mb-4">
+                  <input data-testid="share-url-input" readOnly value={shareUrl}
+                    className="flex-1 bg-transparent text-xs text-[#A3A3A3] outline-none truncate" />
+                  <button data-testid="copy-share-btn" onClick={handleCopyShare}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-[#007AFF] hover:bg-[#005bb5] text-white tracking-wider uppercase font-bold">
+                    {copied ? <><Check size={12} weight="bold" /> Copied</> : <><Copy size={12} weight="bold" /> Copy</>}
+                  </button>
+                </div>
+                <p className="text-[11px] text-[#666] mb-4">
+                  Anyone with this link can see the squad photos, jersey numbers, positions, and any public
+                  match film folders you've shared from this account.
+                </p>
+                <button data-testid="revoke-share-btn" onClick={handleToggleShare}
+                  className="w-full text-xs py-3 border border-[#EF4444]/30 text-[#EF4444] hover:bg-[#EF4444]/10 tracking-wider uppercase font-bold transition-colors">
+                  Revoke Public Link
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="bg-[#0A0A0A] border border-white/10 p-4 mb-4">
+                  <p className="text-sm text-[#A3A3A3] leading-relaxed">
+                    Generate a public link that lets anyone see the team's squad list (with photos & jersey numbers)
+                    and any match film folders you've already shared. No login required for viewers.
+                  </p>
+                </div>
+                <button data-testid="enable-share-btn" onClick={handleToggleShare}
+                  className="w-full text-xs py-3 bg-[#007AFF] hover:bg-[#005bb5] text-white tracking-wider uppercase font-bold transition-colors flex items-center justify-center gap-2">
+                  <ShareNetwork size={14} weight="bold" /> Generate Public Link
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

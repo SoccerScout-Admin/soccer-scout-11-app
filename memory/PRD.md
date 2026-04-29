@@ -105,6 +105,13 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
 - ffmpeg auto-installs at server startup if missing
 
+### Public Team Page Share Link (Complete - Apr 29, 2026)
+- New `POST /api/teams/{team_id}/share` toggles a share token on the team
+- New public `GET /api/shared/team/{share_token}` returns sanitized team info, club crest, full roster (only id/name/number/position/profile_pic_url — no internal fields), and any matches whose parent folder is publicly shared (with a folder share token for chained navigation)
+- Share button + modal on TeamRoster.js (copy/revoke flow matching the folder share UX)
+- New public route `/shared-team/:shareToken` rendered by `SharedTeamView.js` — Hero header, position-grouped squad cards with photos, "Recent Match Film" section linking out to the existing folder shared view
+- 404 fallback ("Link Unavailable") for revoked tokens
+
 ### Team Roster Page + Profile Pic Upload UI (Complete - Apr 29, 2026)
 - Dedicated `/team/:teamId` page (`TeamRoster.js`) for managing team-specific rosters per season
 - Players grouped by position (Goalkeeper/Defender/Midfielder/Forward)

@@ -10,6 +10,7 @@ import SharedView from './pages/SharedView';
 import SharedClipView from './pages/SharedClipView';
 import ClubManager from './pages/ClubManager';
 import TeamRoster from './pages/TeamRoster';
+import SharedTeamView from './pages/SharedTeamView';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
@@ -70,6 +71,7 @@ function App() {
             }
           />
           <Route path="/shared/:shareToken" element={<SharedView />} />
+          <Route path="/shared-team/:shareToken" element={<SharedTeamView />} />
           <Route path="/clip/:shareToken" element={<SharedClipView />} />
           <Route
             path="/clubs"

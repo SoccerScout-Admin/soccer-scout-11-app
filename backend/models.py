@@ -113,6 +113,7 @@ class Team(BaseModel):
     club: Optional[str] = None
     season: str
     logo_url: Optional[str] = None
+    share_token: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 class TrimmedAnalysisRequest(BaseModel):
