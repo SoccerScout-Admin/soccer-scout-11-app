@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
-import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check } from '@phosphor-icons/react';
+import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield } from '@phosphor-icons/react';
 
 const Dashboard = () => {
   const [matches, setMatches] = useState([]);
@@ -197,6 +197,10 @@ const Dashboard = () => {
             <h1 className="text-3xl font-bold" style={{ fontFamily: 'Bebas Neue' }}>SOCCER SCOUT</h1>
           </div>
           <div className="flex items-center gap-6">
+            <button data-testid="clubs-nav-btn" onClick={() => navigate('/clubs')}
+              className="flex items-center gap-2 px-3 py-1.5 text-xs text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors border border-white/10 font-bold uppercase tracking-wider">
+              <Shield size={16} /> Clubs & Teams
+            </button>
             <div className="text-right">
               <p className="text-sm text-[#A3A3A3]">{user?.name}</p>
               <p className="text-xs text-[#A3A3A3] uppercase tracking-wider">{user?.role}</p>
