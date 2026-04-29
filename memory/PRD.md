@@ -95,6 +95,16 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Downloadable Clips: "Download MP4" button on each clip extracts actual video via ffmpeg
 - New "Timeline" tab showing all AI-detected events in chronological order
 
+### Team Management + Player Registration + Clip Sharing + Auto-clips (Complete - Apr 29, 2026)
+- Team Management: Create teams with name, season (e.g. "2025/26"), club. Multiple teams/seasons per coach.
+- Player Registration: Players tied to Team + Season via team_id. Profile picture upload to Object Storage.
+- Clip Sharing: Individual clips get shareable public links. Public endpoint returns clip metadata + video stream.
+- Auto-clip from AI Markers: When timeline markers are generated, clips are automatically created with:
+  - Goals/shots/saves/chances: 8s before + 8s after event
+  - Fouls/cards: 20s before + 5s after event
+- Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
+- ffmpeg auto-installs at server startup if missing
+
 ## Backlog
 
 ### P0 (Must Have)

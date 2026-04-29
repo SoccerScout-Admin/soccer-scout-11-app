@@ -46,6 +46,9 @@ api_router = APIRouter(prefix="/api")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# ===== Import modular routes =====
+from routes.teams import router as teams_router
+
 # ===== Storage: Connection Pooling + Retry for SSL resilience =====
 
 def create_storage_session():
@@ -1338,6 +1341,8 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
                                 }
                                 await db.markers.insert_one(marker_doc)
                             logger.info(f"Stored {len(markers)} AI timeline markers for video {video_id}")
+                            # Auto-create clips from markers
+                            await auto_create_clips_from_markers(video_id, user_id, video["match_id"])
                     except Exception as parse_err:
                         logger.warning(f"Failed to parse timeline markers JSON: {parse_err}")
 
@@ -2196,6 +2201,94 @@ async def generate_trimmed_analysis(input: TrimmedAnalysisRequest, current_user:
             os.unlink(tmp_path)
 
 
+# Mount Teams router (new module)
+_teams_api = APIRouter(prefix="/api")
+_teams_api.include_router(teams_router)
+app.include_router(_teams_api)
+
+# ===== Player Profile Pics =====
+
+@api_router.post("/players/{player_id}/profile-pic")
+async def upload_profile_pic(player_id: str, file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+    player = await db.players.find_one({"id": player_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image too large (max 5MB)")
+    ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+    path = f"{APP_NAME}/players/{current_user['id']}/{player_id}.{ext}"
+    await run_in_threadpool(put_object_sync, path, data, file.content_type)
+    pic_url = f"/api/players/{player_id}/profile-pic/view"
+    await db.players.update_one({"id": player_id}, {"$set": {"profile_pic_url": pic_url, "profile_pic_path": path}})
+    return {"url": pic_url}
+
+@api_router.get("/players/{player_id}/profile-pic/view")
+async def view_profile_pic(player_id: str):
+    player = await db.players.find_one({"id": player_id}, {"_id": 0, "profile_pic_path": 1})
+    if not player or not player.get("profile_pic_path"):
+        raise HTTPException(status_code=404, detail="No profile picture")
+    data, ct = await run_in_threadpool(get_object_sync, player["profile_pic_path"])
+    return Response(content=data, media_type=ct)
+
+# ===== Clip Sharing =====
+
+@api_router.post("/clips/{clip_id}/share")
+async def toggle_clip_share(clip_id: str, current_user: dict = Depends(get_current_user)):
+    clip = await db.clips.find_one({"id": clip_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    if clip.get("share_token"):
+        await db.clips.update_one({"id": clip_id}, {"$set": {"share_token": None}})
+        return {"status": "unshared", "share_token": None}
+    token = str(uuid.uuid4())[:12]
+    await db.clips.update_one({"id": clip_id}, {"$set": {"share_token": token}})
+    return {"status": "shared", "share_token": token}
+
+@api_router.get("/shared/clip/{share_token}")
+async def get_shared_clip_detail(share_token: str):
+    clip = await db.clips.find_one({"share_token": share_token}, {"_id": 0})
+    if not clip:
+        raise HTTPException(status_code=404, detail="Shared clip not found")
+    match = await db.matches.find_one({"id": clip.get("match_id")}, {"_id": 0, "team_home": 1, "team_away": 1, "date": 1, "competition": 1})
+    owner = await db.users.find_one({"id": clip["user_id"]}, {"_id": 0, "name": 1})
+    players = []
+    if clip.get("player_ids"):
+        players = await db.players.find({"id": {"$in": clip["player_ids"]}}, {"_id": 0, "id": 1, "name": 1, "number": 1, "profile_pic_url": 1}).to_list(20)
+    return {"clip": clip, "match": match, "owner": owner.get("name") if owner else "Coach", "players": players}
+
+# ===== Auto-clip from AI Markers =====
+
+async def auto_create_clips_from_markers(video_id: str, user_id: str, match_id: str):
+    """Automatically create clips from AI timeline markers with event-specific padding"""
+    markers = await db.markers.find({"video_id": video_id, "user_id": user_id, "auto_generated": True}, {"_id": 0}).to_list(100)
+    if not markers:
+        return
+    await db.clips.delete_many({"video_id": video_id, "user_id": user_id, "auto_generated": True})
+    created = 0
+    for m in markers:
+        if m.get("type") in ("card", "foul"):
+            pad_before, pad_after = 20, 5
+        else:
+            pad_before, pad_after = 8, 8
+        start = max(0, m["time"] - pad_before)
+        end = m["time"] + pad_after
+        clip_type = "goal" if m.get("type") == "goal" else "highlight"
+        clip = {
+            "id": str(uuid.uuid4()), "user_id": user_id, "video_id": video_id, "match_id": match_id,
+            "title": f"[AI] {m.get('label', m.get('type', 'Event'))}",
+            "start_time": start, "end_time": end, "clip_type": clip_type,
+            "description": f"Auto-generated: {m.get('type')} at {int(m['time']//60)}:{int(m['time']%60):02d}",
+            "player_ids": [], "auto_generated": True, "share_token": None,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.clips.insert_one(clip)
+        created += 1
+    logger.info(f"Auto-created {created} clips from AI markers for video {video_id}")
+
+# ===== Register all api_router routes =====
 app.include_router(api_router)
 
 # ===== Auto-Resume on Startup =====
