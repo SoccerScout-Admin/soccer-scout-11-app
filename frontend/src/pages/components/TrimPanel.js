@@ -1,8 +1,4 @@
-const formatTime = (seconds) => {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-};
+import { formatTime } from './utils/time';
 
 /**
  * Trim Panel — lets coaches select a time range to focus AI analysis on a specific section.
@@ -26,7 +22,7 @@ const TrimPanel = ({
       <div>
         <label className="block text-[10px] text-[#666] uppercase tracking-wider mb-1">Start Time</label>
         <div className="flex gap-2">
-          <input data-testid="trim-start-input" type="number" step="1" min="0" max={videoDuration}
+          <input data-testid="trim-start-input" type="number" step="1" min="0" max={videoDuration || undefined}
             value={trimStart} onChange={(e) => setTrimStart(Math.max(0, parseFloat(e.target.value) || 0))}
             className="flex-1 bg-white/5 rounded-lg text-white px-3 py-2 text-sm border border-white/10 focus:border-[#A855F7] focus:outline-none" />
           <button data-testid="trim-start-now-btn" onClick={() => setTrimStart(Math.floor(currentTimestamp))}
@@ -37,8 +33,8 @@ const TrimPanel = ({
       <div>
         <label className="block text-[10px] text-[#666] uppercase tracking-wider mb-1">End Time</label>
         <div className="flex gap-2">
-          <input data-testid="trim-end-input" type="number" step="1" min="0" max={videoDuration}
-            value={trimEnd} onChange={(e) => setTrimEnd(Math.min(videoDuration, parseFloat(e.target.value) || 0))}
+          <input data-testid="trim-end-input" type="number" step="1" min="0" max={videoDuration || undefined}
+            value={trimEnd} onChange={(e) => setTrimEnd(Math.min(videoDuration || Infinity, parseFloat(e.target.value) || 0))}
             className="flex-1 bg-white/5 rounded-lg text-white px-3 py-2 text-sm border border-white/10 focus:border-[#A855F7] focus:outline-none" />
           <button data-testid="trim-end-now-btn" onClick={() => setTrimEnd(Math.floor(currentTimestamp))}
             className="px-3 py-2 rounded-lg bg-white/10 text-[#A855F7] text-xs font-medium">Now</button>

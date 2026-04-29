@@ -1,4 +1,5 @@
 import { forwardRef } from 'react';
+import { formatTime } from './utils/time';
 
 const MARKER_COLORS = {
   goal: '#FFD700',
@@ -19,12 +20,6 @@ const LEGEND_ENTRIES = [
   ['tactical', '#007AFF', 'Tactical'],
   ['chance', '#FFB800', 'Chances'],
 ];
-
-const formatTime = (seconds) => {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-};
 
 /**
  * Video player + AI timeline markers strip + markers legend.

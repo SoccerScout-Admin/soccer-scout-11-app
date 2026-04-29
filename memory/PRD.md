@@ -45,6 +45,15 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### VideoAnalysis Decomposition — Final 4 Blocks Extracted (Complete - Apr 29, 2026)
+- **`VideoAnalysisHeader.js`** (131 lines) — sticky header with match title/competition/date + back button + Download Package CTA + GB chip + processing banner (spinner, progress bar, 4-type status icons) + processing-failed banner with retry/resume CTA. Pure presentational.
+- **`TrimPanel.js`** (58 lines) — start/end time inputs with "Now" snap-to-currentTimestamp buttons + 3 analyze CTAs (tactical/player_performance/highlights). `videoDuration || Infinity` guard so users can type values before metadata loads (was a latent bug in inline JSX).
+- **`ClipsSidebar.js`** (136 lines) — composed of `ClipCard` sub-component + parent that handles batch selection (Share-as-Reel + Download-as-ZIP buttons appear when ≥1 selected, Download-All-ZIP always visible).
+- **`AnnotationsSidebar.js`** (53 lines) — coach notes panel with timestamp pill + delete + jump-to-moment buttons.
+- **`utils/time.js`** (8 lines) — shared `formatTime(seconds)` helper. Replaces 4 duplicate copies across VideoPlayerWithMarkers / AnalysisTabs / TrimPanel / ClipsSidebar / AnnotationsSidebar.
+- VideoAnalysis.js: 1077 → 821 lines (-256, -24%). Across the entire P2 effort: **1266 → 821 lines (-35%)**.
+- Verified: testing_agent_v3_fork ran a focused frontend regression — zero ui_bugs, zero integration_issues, zero design_issues, all data-testids unique, all callbacks correctly wired, no console errors. Backend 35/35 still passing.
+
 ### server.py Refactor — Video Routes Extracted (Complete - Apr 29, 2026)
 - New `routes/videos.py` (111 lines) holds the 3 read-only video endpoints: `GET /api/videos/{video_id}/access-token` (5-min JWT for stream URLs), `GET /api/videos/{video_id}/metadata` (with chunks_available/chunks_total/data_integrity for chunked videos), `GET /api/videos/{video_id}/processing-status` (with completed_types/failed_types from analyses + server_boot_id).
 - Cached lazy-import for `SERVER_BOOT_ID` (read once, reused) avoids circular import with server.py.
@@ -326,7 +335,7 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Season stats dashboard per player (aggregate stats across matches)
 - Batch share multiple clips at once (checkbox selection in VideoAnalysis.js → single shareable link)
 - Refactor remaining `server.py` (matches, folders, analysis, videos) into route modules — Videos read endpoints DONE; reprocess + AI-generate stay coupled to `run_auto_processing`
-- Decompose `VideoAnalysis.js` — VideoPlayerWithMarkers + AnalysisTabs DONE (1266 → 1076 lines). Remaining inline blocks: Trim panel, Clips sidebar, Annotations sidebar, Header processing chip — all medium-complexity but optional
+- Decompose `VideoAnalysis.js` — DONE (1266 → 821 lines, -35%; 7 child components extracted: VideoPlayerWithMarkers, AnalysisTabs, VideoAnalysisHeader, TrimPanel, ClipsSidebar, AnnotationsSidebar, plus pre-existing TagPlayersModal/ShareClipModal/ShareReelModal)
 - Full extraction of AI auto-processing pipeline (`run_auto_processing`, `prepare_video_sample`, FFmpeg multi-segment compression) from `server.py` into `services/processing.py` — DEFERRED due to high regression risk on the core AI-pipeline / chunked-upload coupling
 
 ## Test Credentials
