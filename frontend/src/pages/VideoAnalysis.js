@@ -218,6 +218,78 @@ const VideoAnalysis = () => {
     setSelectedClips(prev => prev.includes(clipId) ? prev.filter(id => id !== clipId) : [...prev, clipId]);
   };
 
+  const [sharingClip, setSharingClip] = useState(null);
+  const [clipShareCopied, setClipShareCopied] = useState(false);
+
+  const handleShareClip = async (clip) => {
+    if (clip.share_token) {
+      // Already shared — show the modal
+      setSharingClip(clip);
+      return;
+    }
+    try {
+      const res = await axios.post(`${API}/clips/${clip.id}/share`, {}, { headers: getAuthHeader() });
+      if (res.data.share_token) {
+        const updated = { ...clip, share_token: res.data.share_token };
+        setSharingClip(updated);
+        // Update clips list
+        setClips(prev => prev.map(c => c.id === clip.id ? { ...c, share_token: res.data.share_token } : c));
+      }
+    } catch (err) {
+      alert('Failed to generate share link');
+    }
+  };
+
+  const handleRevokeClipShare = async () => {
+    if (!sharingClip) return;
+    try {
+      await axios.post(`${API}/clips/${sharingClip.id}/share`, {}, { headers: getAuthHeader() });
+      setClips(prev => prev.map(c => c.id === sharingClip.id ? { ...c, share_token: null } : c));
+      setSharingClip(null);
+    } catch (err) {
+      alert('Failed to revoke share link');
+    }
+  };
+
+  const copyClipShareLink = () => {
+    const url = `${window.location.origin}/clip/${sharingClip.share_token}`;
+    try {
+      navigator.clipboard.writeText(url).then(() => {
+        setClipShareCopied(true);
+        setTimeout(() => setClipShareCopied(false), 2000);
+      }).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        setClipShareCopied(true);
+        setTimeout(() => setClipShareCopied(false), 2000);
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  const shareClipTo = (platform) => {
+    const url = `${window.location.origin}/clip/${sharingClip.share_token}`;
+    const text = `${sharingClip.title} — Soccer Scout`;
+    const links = {
+      facebook: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`,
+      instagram: url,
+      youtube: url,
+      sms: `sms:?body=${encodeURIComponent(`${text}: ${url}`)}`
+    };
+    if (platform === 'instagram' || platform === 'youtube') {
+      copyClipShareLink();
+      return;
+    }
+    window.open(links[platform], '_blank', 'width=600,height=400');
+  };
+
   const handleAddAnnotation = async () => {
     if (!annotationText.trim() || !annotationMode) return;
     try {
@@ -964,6 +1036,12 @@ const VideoAnalysis = () => {
                             <><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> Download MP4</>
                           )}
                         </button>
+                        <button data-testid={`share-clip-${clip.id}-btn`}
+                          onClick={() => handleShareClip(clip)}
+                          className="flex items-center gap-1 text-[10px] text-[#A855F7] font-medium hover:text-[#C084FC]">
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+                          {clip.share_token ? 'Shared' : 'Share'}
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -1019,6 +1097,68 @@ const VideoAnalysis = () => {
           </div>
         </div>
       </main>
+
+      {/* Clip Share Modal */}
+      {sharingClip && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
+          <div className="bg-[#141414] border border-white/10 w-full max-w-md p-8 rounded-lg">
+            <div className="flex items-center gap-3 mb-5">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#A855F7" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+              <h3 className="text-2xl font-bold" style={{ fontFamily: 'Bebas Neue' }}>Share Clip</h3>
+            </div>
+            <p className="text-sm text-[#A3A3A3] mb-4">
+              <strong className="text-white">{sharingClip.title}</strong> — anyone with the link can view this clip.
+            </p>
+
+            {/* Share URL */}
+            <div className="flex items-center gap-2 mb-5">
+              <div className="flex-1 bg-[#0A0A0A] border border-white/10 text-[#007AFF] px-3 py-2.5 text-xs font-mono truncate select-all rounded">
+                {window.location.origin}/clip/{sharingClip.share_token}
+              </div>
+              <button data-testid="copy-clip-share-btn" onClick={copyClipShareLink}
+                className={`px-4 py-2.5 font-bold tracking-wider uppercase text-xs transition-colors rounded ${
+                  clipShareCopied ? 'bg-[#4ADE80] text-black' : 'bg-[#007AFF] hover:bg-[#005bb5] text-white'
+                }`}>
+                {clipShareCopied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+
+            {/* Social Share Buttons */}
+            <div className="grid grid-cols-2 gap-2 mb-5">
+              <button data-testid="share-clip-facebook" onClick={() => shareClipTo('facebook')}
+                className="flex items-center gap-2 px-3 py-2.5 bg-[#1877F2]/10 border border-[#1877F2]/20 text-[#1877F2] text-xs font-medium rounded hover:bg-[#1877F2]/20 transition-colors">
+                <div className="w-5 h-5 rounded bg-[#1877F2] text-white text-[8px] font-bold flex items-center justify-center">FB</div>
+                Facebook
+              </button>
+              <button data-testid="share-clip-instagram" onClick={() => shareClipTo('instagram')}
+                className="flex items-center gap-2 px-3 py-2.5 bg-[#E4405F]/10 border border-[#E4405F]/20 text-[#E4405F] text-xs font-medium rounded hover:bg-[#E4405F]/20 transition-colors">
+                <div className="w-5 h-5 rounded bg-[#E4405F] text-white text-[8px] font-bold flex items-center justify-center">IG</div>
+                Instagram
+              </button>
+              <button data-testid="share-clip-youtube" onClick={() => shareClipTo('youtube')}
+                className="flex items-center gap-2 px-3 py-2.5 bg-[#FF0000]/10 border border-[#FF0000]/20 text-[#FF0000] text-xs font-medium rounded hover:bg-[#FF0000]/20 transition-colors">
+                <div className="w-5 h-5 rounded bg-[#FF0000] text-white text-[8px] font-bold flex items-center justify-center">YT</div>
+                YouTube
+              </button>
+              <button data-testid="share-clip-sms" onClick={() => shareClipTo('sms')}
+                className="flex items-center gap-2 px-3 py-2.5 bg-[#4ADE80]/10 border border-[#4ADE80]/20 text-[#4ADE80] text-xs font-medium rounded hover:bg-[#4ADE80]/20 transition-colors">
+                <div className="w-5 h-5 rounded bg-[#4ADE80] text-black text-[8px] font-bold flex items-center justify-center">SM</div>
+                Text / SMS
+              </button>
+            </div>
+
+            {/* Revoke + Close */}
+            <button data-testid="revoke-clip-share-btn" onClick={handleRevokeClipShare}
+              className="w-full bg-transparent border border-[#EF4444]/30 text-[#EF4444] py-2 text-xs font-bold tracking-wider uppercase hover:bg-[#EF4444]/10 transition-colors rounded mb-2">
+              Revoke Share Link
+            </button>
+            <button data-testid="close-clip-share-modal" onClick={() => setSharingClip(null)}
+              className="w-full bg-transparent border border-white/10 text-white py-2.5 text-xs font-bold tracking-wider uppercase hover:bg-[#1F1F1F] transition-colors rounded">
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

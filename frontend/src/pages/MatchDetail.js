@@ -9,10 +9,11 @@ const MatchDetail = () => {
   const navigate = useNavigate();
   const [match, setMatch] = useState(null);
   const [players, setPlayers] = useState([]);
+  const [teams, setTeams] = useState([]);
   const [showRosterPanel, setShowRosterPanel] = useState(false);
   const [showAddPlayer, setShowAddPlayer] = useState(false);
   const [showCsvImport, setShowCsvImport] = useState(false);
-  const [playerForm, setPlayerForm] = useState({ name: '', number: '', position: '', team: '' });
+  const [playerForm, setPlayerForm] = useState({ name: '', number: '', position: '', team: '', team_id: '' });
   const [csvData, setCsvData] = useState('');
   const [csvTeam, setCsvTeam] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -22,6 +23,7 @@ const MatchDetail = () => {
   useEffect(() => {
     fetchMatch();
     fetchPlayers();
+    fetchTeams();
   }, [matchId]);
 
   const fetchMatch = async () => {
@@ -42,17 +44,26 @@ const MatchDetail = () => {
     }
   };
 
+  const fetchTeams = async () => {
+    try {
+      const response = await axios.get(`${API}/teams`, { headers: getAuthHeader() });
+      setTeams(response.data);
+    } catch (err) { console.error('Failed to fetch teams:', err); }
+  };
+
   const handleAddPlayer = async (e) => {
     e.preventDefault();
     try {
-      await axios.post(`${API}/players`, {
+      const payload = {
         match_id: matchId,
         name: playerForm.name,
         number: playerForm.number ? parseInt(playerForm.number) : null,
         position: playerForm.position,
         team: playerForm.team || match?.team_home || ''
-      }, { headers: getAuthHeader() });
-      setPlayerForm({ name: '', number: '', position: '', team: '' });
+      };
+      if (playerForm.team_id) payload.team_id = playerForm.team_id;
+      await axios.post(`${API}/players`, payload, { headers: getAuthHeader() });
+      setPlayerForm({ name: '', number: '', position: '', team: '', team_id: '' });
       setShowAddPlayer(false);
       fetchPlayers();
     } catch (err) {
@@ -337,42 +348,57 @@ const MatchDetail = () => {
           {showAddPlayer && (
             <div className="bg-[#0A0A0A] border border-white/10 p-6 mb-6">
               <h4 className="text-sm font-bold uppercase tracking-wider text-white mb-3">Add Player</h4>
-              <form onSubmit={handleAddPlayer} className="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
-                <div>
-                  <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Name *</label>
-                  <input data-testid="player-name-input" type="text" value={playerForm.name}
-                    onChange={(e) => setPlayerForm({ ...playerForm, name: e.target.value })}
-                    className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none"
-                    required />
+              <form onSubmit={handleAddPlayer} className="space-y-3">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Name *</label>
+                    <input data-testid="player-name-input" type="text" value={playerForm.name}
+                      onChange={(e) => setPlayerForm({ ...playerForm, name: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none"
+                      required />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Number</label>
+                    <input data-testid="player-number-input" type="number" value={playerForm.number}
+                      onChange={(e) => setPlayerForm({ ...playerForm, number: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Position</label>
+                    <select data-testid="player-position-select" value={playerForm.position}
+                      onChange={(e) => setPlayerForm({ ...playerForm, position: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none">
+                      <option value="">Select...</option>
+                      <option value="Goalkeeper">Goalkeeper</option>
+                      <option value="Defender">Defender</option>
+                      <option value="Midfielder">Midfielder</option>
+                      <option value="Forward">Forward</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Match Team</label>
+                    <select data-testid="player-team-select" value={playerForm.team}
+                      onChange={(e) => setPlayerForm({ ...playerForm, team: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none">
+                      <option value="">{match.team_home} (default)</option>
+                      <option value={match.team_home}>{match.team_home}</option>
+                      <option value={match.team_away}>{match.team_away}</option>
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Number</label>
-                  <input data-testid="player-number-input" type="number" value={playerForm.number}
-                    onChange={(e) => setPlayerForm({ ...playerForm, number: e.target.value })}
-                    className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none" />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Position</label>
-                  <select data-testid="player-position-select" value={playerForm.position}
-                    onChange={(e) => setPlayerForm({ ...playerForm, position: e.target.value })}
-                    className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none">
-                    <option value="">Select...</option>
-                    <option value="Goalkeeper">Goalkeeper</option>
-                    <option value="Defender">Defender</option>
-                    <option value="Midfielder">Midfielder</option>
-                    <option value="Forward">Forward</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Team</label>
-                  <select data-testid="player-team-select" value={playerForm.team}
-                    onChange={(e) => setPlayerForm({ ...playerForm, team: e.target.value })}
-                    className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none">
-                    <option value="">{match.team_home} (default)</option>
-                    <option value={match.team_home}>{match.team_home}</option>
-                    <option value={match.team_away}>{match.team_away}</option>
-                  </select>
-                </div>
+                {teams.length > 0 && (
+                  <div>
+                    <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Registered Team & Season (optional)</label>
+                    <select data-testid="player-registered-team-select" value={playerForm.team_id}
+                      onChange={(e) => setPlayerForm({ ...playerForm, team_id: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none">
+                      <option value="">None (match-only player)</option>
+                      {teams.map(t => (
+                        <option key={t.id} value={t.id}>{t.name} — {t.season}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="flex gap-2">
                   <button data-testid="cancel-add-player-btn" type="button" onClick={() => setShowAddPlayer(false)}
                     className="px-3 py-2 border border-white/10 text-white text-xs hover:bg-[#1F1F1F] transition-colors">
