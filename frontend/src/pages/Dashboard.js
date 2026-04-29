@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
 import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield, ChartLineUp, Globe } from '@phosphor-icons/react';
+import CoachPulseCard from './components/CoachPulseCard';
 
 const Dashboard = () => {
   const [matches, setMatches] = useState([]);
@@ -392,7 +393,9 @@ const Dashboard = () => {
 
           {/* Coach Network CTA Card — appears when not in selection mode */}
           {!selectionMode && (
-            <button data-testid="coach-network-cta-card" onClick={() => navigate('/coach-network')}
+            <>
+              <CoachPulseCard />
+              <button data-testid="coach-network-cta-card" onClick={() => navigate('/coach-network')}
               className="w-full mb-6 group flex items-center gap-4 bg-gradient-to-r from-[#1B0F2E] via-[#0F1A2E] to-[#0A0A0A] border border-[#A855F7]/30 hover:border-[#A855F7]/60 hover:from-[#2A1547] transition-all px-5 py-4 text-left">
               <div className="w-12 h-12 bg-[#A855F7]/15 border border-[#A855F7]/30 flex items-center justify-center flex-shrink-0">
                 <Globe size={24} weight="bold" className="text-[#A855F7]" />
@@ -404,6 +407,7 @@ const Dashboard = () => {
               </div>
               <CaretRight size={20} className="text-[#A855F7] group-hover:translate-x-1 transition-transform flex-shrink-0" />
             </button>
+            </>
           )}
 
           {/* Bulk action bar */}

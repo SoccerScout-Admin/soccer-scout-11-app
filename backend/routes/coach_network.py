@@ -40,6 +40,13 @@ async def get_network_benchmarks(current_user: dict = Depends(get_current_user))
     Returns aggregate metrics across all coaches/teams/players, plus the
     calling user's bucket on each metric.
     """
+    return await compute_benchmarks(current_user["id"])
+
+
+async def compute_benchmarks(user_id: str | None = None) -> dict:
+    """Reusable benchmark computation. user_id is optional — if provided, the
+    'you' section is populated; if None, only platform-wide aggregates are returned.
+    """
     # Total platform stats (coaches, teams, players, matches)
     total_coaches = await db.users.count_documents({})
     total_teams = await db.teams.count_documents({})
@@ -47,10 +54,10 @@ async def get_network_benchmarks(current_user: dict = Depends(get_current_user))
     total_clips = await db.clips.count_documents({})
     total_markers = await db.markers.count_documents({})
 
-    user_id = current_user["id"]
-    my_teams = await db.teams.count_documents({"user_id": user_id})
-    my_matches = await db.matches.count_documents({"user_id": user_id})
-    my_clips = await db.clips.count_documents({"user_id": user_id})
+    user_id = user_id  # may be None for the email digest path
+    my_teams = await db.teams.count_documents({"user_id": user_id}) if user_id else 0
+    my_matches = await db.matches.count_documents({"user_id": user_id}) if user_id else 0
+    my_clips = await db.clips.count_documents({"user_id": user_id}) if user_id else 0
 
     # Refuse to surface aggregates if there aren't enough coaches yet
     if total_coaches < K_ANON_THRESHOLD:
