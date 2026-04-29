@@ -123,7 +123,7 @@ const Dashboard = () => {
   };
 
   const copyShareLink = () => {
-    const url = `${window.location.origin}/shared/${sharingFolder.share_token}`;
+    const url = `${window.location.origin}/api/og/folder/${sharingFolder.share_token}`;
     try {
       navigator.clipboard.writeText(url).then(() => {
         setCopied(true);
@@ -501,9 +501,9 @@ const Dashboard = () => {
                 <p className="text-sm text-[#A3A3A3] mb-4">
                   Anyone with this link can view <strong className="text-white">{sharingFolder.name}</strong> and its matches, analyses, clips, and annotations — no login required.
                 </p>
-                <div className="flex items-center gap-2 mb-6">
+                <div className="flex items-center gap-2 mb-2">
                   <div className="flex-1 bg-[#0A0A0A] border border-white/10 text-[#007AFF] px-4 py-3 text-sm font-mono truncate select-all">
-                    {window.location.origin}/shared/{sharingFolder.share_token}
+                    {window.location.origin}/api/og/folder/{sharingFolder.share_token}
                   </div>
                   <button data-testid="copy-share-link-btn" onClick={copyShareLink}
                     className={`px-4 py-3 font-bold tracking-wider uppercase transition-colors flex items-center gap-2 text-sm ${
@@ -512,6 +512,14 @@ const Dashboard = () => {
                     {copied ? <><Check size={16} weight="bold" /> Copied</> : <><Copy size={16} /> Copy</>}
                   </button>
                 </div>
+                <div className="text-[10px] text-[#10B981] tracking-[0.15em] uppercase font-bold mb-3 flex items-center gap-1.5">
+                  <Check size={11} weight="bold" /> Smart link — unfurls with rich preview in WhatsApp, Slack, Twitter
+                </div>
+                <a data-testid="folder-preview-link" target="_blank" rel="noopener noreferrer"
+                  href={`${window.location.origin}/shared/${sharingFolder.share_token}`}
+                  className="block text-xs text-[#A3A3A3] hover:text-white underline underline-offset-2 mb-6">
+                  Open public folder in new tab →
+                </a>
                 <button data-testid="revoke-share-btn"
                   onClick={handleRevokeShare}
                   className="w-full bg-transparent border border-[#EF4444]/30 text-[#EF4444] py-2 text-xs font-bold tracking-wider uppercase hover:bg-[#EF4444]/10 transition-colors">

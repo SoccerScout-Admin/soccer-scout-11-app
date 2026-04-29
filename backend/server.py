@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 # ===== Import modular routes =====
 from routes.teams import router as teams_router
+from routes.og import router as og_router
 
 # ===== Storage: Connection Pooling + Retry for SSL resilience =====
 
@@ -2228,6 +2229,11 @@ async def generate_trimmed_analysis(input: TrimmedAnalysisRequest, current_user:
 _teams_api = APIRouter(prefix="/api")
 _teams_api.include_router(teams_router)
 app.include_router(_teams_api)
+
+# Mount OG share-link prerender router (folders + clips)
+_og_api = APIRouter(prefix="/api")
+_og_api.include_router(og_router)
+app.include_router(_og_api)
 
 # ===== Player Profile Pics =====
 

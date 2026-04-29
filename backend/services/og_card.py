@@ -186,3 +186,150 @@ def render_team_card(
     out = BytesIO()
     img.save(out, format="PNG", optimize=True)
     return out.getvalue()
+
+
+def render_folder_card(
+    folder_name: str,
+    coach_name: str = "",
+    match_count: int = 0,
+    recent_matches: Optional[List[str]] = None,
+) -> bytes:
+    """Render OG card for a shared match-film folder."""
+    img = Image.new("RGB", (W, H), BG_BOTTOM)
+    _gradient_bg(img)
+    draw = ImageDraw.Draw(img)
+
+    draw.rectangle([(0, 0), (8, H)], fill=ACCENT)
+
+    label_font = _load_font(FONT_BOLD, 22)
+    draw.text((64, 56), "MATCH FILM FOLDER", font=label_font, fill=ACCENT)
+
+    name_font = _fit_text(draw, folder_name, FONT_BOLD, W - 200, start_size=104, min_size=52)
+    draw.text((64, 110), folder_name, font=name_font, fill=WHITE)
+
+    name_bbox = draw.textbbox((64, 110), folder_name, font=name_font)
+    sub_y = name_bbox[3] + 22
+
+    sub_parts = [f"{match_count} {'Match' if match_count == 1 else 'Matches'}"]
+    if coach_name:
+        sub_parts.append(f"Coach {coach_name}")
+    sub_line = "  •  ".join(sub_parts)
+
+    sub_font = _load_font(FONT_REG, 32)
+    draw.text((64, sub_y), sub_line, font=sub_font, fill=SUBTLE)
+
+    # Recent match preview cards (rectangles)
+    if recent_matches:
+        card_y = H - 200
+        card_h = 100
+        gap = 16
+        max_show = 3
+        items = recent_matches[:max_show]
+        n = len(items)
+        # Compute width to fill remaining space evenly
+        total_w = W - 128
+        card_w = (total_w - gap * (n - 1)) // n if n > 0 else total_w
+        for i, label in enumerate(items):
+            x = 64 + i * (card_w + gap)
+            draw.rectangle((x, card_y, x + card_w, card_y + card_h),
+                           fill=(20, 20, 20), outline=(60, 60, 60), width=1)
+            draw.rectangle((x, card_y, x + 4, card_y + card_h), fill=ACCENT)
+            label_font2 = _load_font(FONT_BOLD, 22)
+            # Truncate label if too long
+            shown = label
+            while draw.textbbox((0, 0), shown, font=label_font2)[2] > card_w - 32 and len(shown) > 4:
+                shown = shown[:-2]
+            if shown != label:
+                shown = shown[:-1] + "…"
+            draw.text((x + 20, card_y + 38), shown, font=label_font2, fill=WHITE)
+
+    # Brand
+    brand_font = _load_font(FONT_BOLD, 22)
+    brand = "SOCCER SCOUT"
+    bw = draw.textbbox((0, 0), brand, font=brand_font)[2]
+    draw.text((W - bw - 64, H - 56), brand, font=brand_font, fill=WHITE)
+    draw.ellipse((W - bw - 84, H - 50, W - bw - 72, H - 38), fill=ACCENT)
+
+    out = BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
+def render_clip_card(
+    clip_title: str,
+    match_label: str = "",
+    coach_name: str = "",
+    duration_sec: float = 0.0,
+    clip_type: str = "highlight",
+) -> bytes:
+    """Render OG card for an individual shared clip."""
+    img = Image.new("RGB", (W, H), BG_BOTTOM)
+    _gradient_bg(img)
+    draw = ImageDraw.Draw(img)
+
+    draw.rectangle([(0, 0), (8, H)], fill=ACCENT)
+
+    # Type-coded label colour
+    type_color = {
+        "goal": (74, 222, 128),       # green
+        "save": (96, 165, 250),       # blue
+        "foul": (239, 68, 68),        # red
+        "card": (251, 191, 36),       # amber
+        "highlight": ACCENT,
+    }.get(clip_type.lower(), ACCENT)
+
+    label_font = _load_font(FONT_BOLD, 22)
+    type_label = clip_type.upper()
+    draw.text((64, 56), f"VIDEO CLIP  •  {type_label}", font=label_font, fill=type_color)
+
+    # Big play icon (triangle) on right — visual cue this is video
+    tri_size = 200
+    tri_cx = W - 160
+    tri_cy = H // 2 - 30
+    triangle = [
+        (tri_cx - tri_size // 2, tri_cy - tri_size // 2),
+        (tri_cx - tri_size // 2, tri_cy + tri_size // 2),
+        (tri_cx + tri_size // 2, tri_cy),
+    ]
+    # Outer ring
+    ring_r = tri_size + 30
+    draw.ellipse(
+        (tri_cx - ring_r // 2, tri_cy - ring_r // 2,
+         tri_cx + ring_r // 2, tri_cy + ring_r // 2),
+        outline=type_color, width=4,
+    )
+    draw.polygon(triangle, fill=type_color)
+
+    text_max_w = W - tri_cx - tri_size // 2 - 64 - 64
+    if text_max_w < 600:
+        text_max_w = 600
+    text_max_w = tri_cx - 64 - tri_size // 2 - 32
+
+    name_font = _fit_text(draw, clip_title, FONT_BOLD, text_max_w, start_size=88, min_size=40)
+    draw.text((64, 120), clip_title, font=name_font, fill=WHITE)
+
+    name_bbox = draw.textbbox((64, 120), clip_title, font=name_font)
+    sub_y = name_bbox[3] + 18
+
+    sub_parts = []
+    if match_label:
+        sub_parts.append(match_label)
+    if duration_sec > 0:
+        mins = int(duration_sec // 60)
+        secs = int(duration_sec % 60)
+        sub_parts.append(f"{mins}:{secs:02d}")
+    if coach_name:
+        sub_parts.append(f"Coach {coach_name}")
+    if sub_parts:
+        sub_font = _load_font(FONT_REG, 30)
+        draw.text((64, sub_y), "  •  ".join(sub_parts), font=sub_font, fill=SUBTLE)
+
+    # Brand
+    brand_font = _load_font(FONT_BOLD, 22)
+    brand = "SOCCER SCOUT"
+    draw.text((64, H - 56), brand, font=brand_font, fill=WHITE)
+    draw.ellipse((44, H - 50, 56, H - 38), fill=ACCENT)
+
+    out = BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue()

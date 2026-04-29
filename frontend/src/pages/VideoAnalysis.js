@@ -261,7 +261,7 @@ const VideoAnalysis = () => {
   };
 
   const copyClipShareLink = () => {
-    const url = `${window.location.origin}/clip/${sharingClip.share_token}`;
+    const url = `${window.location.origin}/api/og/clip/${sharingClip.share_token}`;
     try {
       navigator.clipboard.writeText(url).then(() => {
         setClipShareCopied(true);
@@ -284,7 +284,7 @@ const VideoAnalysis = () => {
   };
 
   const shareClipTo = (platform) => {
-    const url = `${window.location.origin}/clip/${sharingClip.share_token}`;
+    const url = `${window.location.origin}/api/og/clip/${sharingClip.share_token}`;
     const text = `${sharingClip.title} — Soccer Scout`;
     const links = {
       facebook: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`,
@@ -1125,9 +1125,9 @@ const VideoAnalysis = () => {
             </p>
 
             {/* Share URL */}
-            <div className="flex items-center gap-2 mb-5">
+            <div className="flex items-center gap-2 mb-2">
               <div className="flex-1 bg-[#0A0A0A] border border-white/10 text-[#007AFF] px-3 py-2.5 text-xs font-mono truncate select-all rounded">
-                {window.location.origin}/clip/{sharingClip.share_token}
+                {window.location.origin}/api/og/clip/{sharingClip.share_token}
               </div>
               <button data-testid="copy-clip-share-btn" onClick={copyClipShareLink}
                 className={`px-4 py-2.5 font-bold tracking-wider uppercase text-xs transition-colors rounded ${
@@ -1135,6 +1135,9 @@ const VideoAnalysis = () => {
                 }`}>
                 {clipShareCopied ? 'Copied!' : 'Copy'}
               </button>
+            </div>
+            <div className="text-[10px] text-[#10B981] tracking-[0.15em] uppercase font-bold mb-5 flex items-center gap-1.5">
+              ✓ Smart link — unfurls with rich preview in WhatsApp, Slack, Twitter
             </div>
 
             {/* Social Share Buttons */}
