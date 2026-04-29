@@ -105,6 +105,19 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Backend refactored: New route modules in /app/backend/routes/ (teams.py, players.py, clips.py, auth.py)
 - ffmpeg auto-installs at server startup if missing
 
+### Season Trends — Aggregate Coaching Dashboard (Complete - Apr 29, 2026)
+- New `routes/season_trends.py` — `POST /api/folders/{id}/season-trends` aggregates every match in a folder:
+  - **Per-match scoreline** inferred from `markers` (counts goals by team)
+  - **Record**: W / D / L counts
+  - **Goal stats**: GF, GA, GD, clip type totals
+  - **Recurring patterns**: top strengths + weaknesses across all matches' cached AI insights, ranked by frequency
+  - **Season Verdict** (when ≥2 matches have insights): one Gemini 2.5 Flash call synthesizes a season-level brief — `verdict + trends + focus_for_training` — from the per-match summaries.
+- Cached on the folder doc; `GET` returns cached.
+- New `SeasonTrends.js` page at `/folder/:id/trends` with: hero record grid (W/D/L/GF-GA/GD), Recharts bar chart of goals per match, gradient season-verdict card with patterns + training focus, side-by-side recurring strengths/weaknesses, match-by-match timeline with result badges.
+- Dashboard: gradient "Season Trends" CTA when a folder is filter-selected; folder context menu also has a quick link.
+- Verified end-to-end: backend produced full structured payload for the existing 2-match folder; screenshot confirms layout including empty-state messaging when individual match insights haven't been generated yet (turn-by-turn UX).
+- 23/23 regression sweep still passes.
+
 ### Match Insights + VideoAnalysis Decomposition + Processing Pipeline Extraction (Complete - Apr 29, 2026)
 
 **Match Insights — AI coaching brief**

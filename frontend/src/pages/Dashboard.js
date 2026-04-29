@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
-import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield } from '@phosphor-icons/react';
+import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield, ChartLineUp } from '@phosphor-icons/react';
 
 const Dashboard = () => {
   const [matches, setMatches] = useState([]);
@@ -336,6 +336,11 @@ const Dashboard = () => {
                               <ShareNetwork size={12} /> {folder.share_token ? 'Sharing On' : 'Share'}
                             </button>
                           )}
+                          <button data-testid={`folder-trends-${folder.id}-btn`}
+                            onClick={() => { navigate(`/folder/${folder.id}/trends`); setFolderMenuId(null); }}
+                            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[#A855F7] hover:bg-[#A855F7]/10">
+                            <ChartLineUp size={12} /> Season Trends
+                          </button>
                           <button data-testid={`delete-folder-${folder.id}-btn`}
                             onClick={() => { handleDeleteFolder(folder.id); setFolderMenuId(null); }}
                             className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[#EF4444] hover:bg-[#EF4444]/10">
@@ -362,6 +367,12 @@ const Dashboard = () => {
               </h2>
               <p className="text-[#A3A3A3] tracking-wide">{displayMatches.length} match{displayMatches.length !== 1 ? 'es' : ''}</p>
             </div>
+            {selectedFolderId && selectedFolderId !== '__none__' && (
+              <button data-testid="folder-trends-cta-btn" onClick={() => navigate(`/folder/${selectedFolderId}/trends`)}
+                className="flex items-center gap-2 bg-gradient-to-r from-[#A855F7] to-[#FBBF24] hover:opacity-90 text-black px-5 py-3 font-bold tracking-wider uppercase text-xs transition-opacity">
+                <ChartLineUp size={14} weight="bold" /> Season Trends
+              </button>
+            )}
             <button data-testid="create-match-btn" onClick={() => setShowCreateModal(true)}
               className="bg-[#007AFF] hover:bg-[#005bb5] text-white px-6 py-3 font-bold tracking-wider uppercase transition-colors flex items-center gap-2">
               <Plus size={24} weight="bold" /> New Match

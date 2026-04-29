@@ -16,6 +16,7 @@ import SharedPlayerProfile from './pages/SharedPlayerProfile';
 import SharedClipCollectionView from './pages/SharedClipCollectionView';
 import SharedClubView from './pages/SharedClubView';
 import MatchInsights from './pages/MatchInsights';
+import SeasonTrends from './pages/SeasonTrends';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
@@ -94,6 +95,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <MatchInsights />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/folder/:folderId/trends"
+            element={
+              <ProtectedRoute>
+                <SeasonTrends />
               </ProtectedRoute>
             }
           />
