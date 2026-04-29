@@ -7,6 +7,10 @@ import ShareReelModal from './components/ShareReelModal';
 import ShareClipModal from './components/ShareClipModal';
 import VideoPlayerWithMarkers from './components/VideoPlayerWithMarkers';
 import AnalysisTabs from './components/AnalysisTabs';
+import VideoAnalysisHeader from './components/VideoAnalysisHeader';
+import TrimPanel from './components/TrimPanel';
+import ClipsSidebar from './components/ClipsSidebar';
+import AnnotationsSidebar from './components/AnnotationsSidebar';
 
 const VideoAnalysis = () => {
   const { videoId } = useParams();
@@ -517,118 +521,19 @@ const VideoAnalysis = () => {
 
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-white" style={{ fontFamily: 'Inter, sans-serif' }}>
-      {/* Header */}
-      <header className="sticky top-0 z-50 bg-[#0A0A0A]/95 backdrop-blur-sm border-b border-white/5 px-6 py-3">
-        <div className="max-w-[1400px] mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <button data-testid="back-btn" onClick={() => navigate('/')}
-              className="p-2 rounded-lg hover:bg-white/5 transition-colors">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-            </button>
-            <div>
-              <h1 className="text-lg font-semibold" style={{ fontFamily: 'Space Grotesk' }}>
-                {match ? `${match.team_home} vs ${match.team_away}` : 'Video Analysis'}
-              </h1>
-              {match?.competition && <p className="text-xs text-[#888]">{match.competition} — {new Date(match.date + 'T00:00:00').toLocaleDateString()}</p>}
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            {isProcessed && (
-              <button data-testid="download-package-btn" onClick={handleDownloadHighlights}
-                className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#1A3A1A] text-[#4ADE80] text-xs font-medium hover:bg-[#1A4A1A] transition-colors">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-                Download Package
-              </button>
-            )}
-            <span className="text-xs text-[#666] bg-white/5 px-3 py-1.5 rounded-full">
-              {(videoMetadata.size / (1024*1024*1024)).toFixed(2)} GB
-            </span>
-          </div>
-        </div>
-      </header>
-
-      {/* Processing Banner */}
-      {isProcessing && (
-        <div data-testid="processing-banner" className="bg-gradient-to-r from-[#0C1A3D] to-[#0A0A0A] border-b border-[#1E3A6E]/30 px-6 py-4">
-          <div className="max-w-[1400px] mx-auto">
-            <div className="flex items-center gap-4">
-              <div className="w-8 h-8 rounded-full bg-[#007AFF]/20 flex items-center justify-center flex-shrink-0">
-                <div className="w-4 h-4 border-2 border-[#007AFF] border-t-transparent rounded-full animate-spin" />
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-medium text-white">
-                  {serverRestarted ? 'Server restarted — processing resumed automatically' : 'Processing your match video...'}
-                </p>
-                <p className="text-xs text-[#7AA2D4] mt-0.5">
-                  {processingStatus.processing_current
-                    ? `Running: ${processingLabel[processingStatus.processing_current] || processingStatus.processing_current}`
-                    : 'Preparing video for AI analysis'}
-                  {processingStatus.completed_types && processingStatus.completed_types.length > 0 && (
-                    <span className="text-[#4ADE80] ml-2">
-                      — {processingStatus.completed_types.length}/4 done
-                    </span>
-                  )}
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-lg font-bold text-[#007AFF]">{processingStatus.processing_progress || 0}%</p>
-              </div>
-            </div>
-            <div className="mt-3 h-1.5 bg-[#1A1A2E] rounded-full overflow-hidden">
-              <div className="h-full bg-[#007AFF] rounded-full transition-all duration-500"
-                style={{ width: `${processingStatus.processing_progress || 0}%` }} />
-            </div>
-            {/* Show completed types */}
-            <div className="flex items-center gap-4 mt-3">
-              {['tactical', 'player_performance', 'highlights', 'timeline_markers'].map(type => {
-                const isDone = processingStatus.completed_types?.includes(type);
-                const isCurrent = processingStatus.processing_current === type;
-                const isFailed = processingStatus.failed_types?.includes(type);
-                return (
-                  <div key={type} className="flex items-center gap-1.5 text-[10px]">
-                    {isDone ? (
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" strokeWidth="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                    ) : isCurrent ? (
-                      <div className="w-3 h-3 border border-[#007AFF] border-t-transparent rounded-full animate-spin" />
-                    ) : isFailed ? (
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
-                    ) : (
-                      <div className="w-3 h-3 rounded-full border border-[#333]" />
-                    )}
-                    <span className={isDone ? 'text-[#4ADE80]' : isCurrent ? 'text-[#007AFF]' : isFailed ? 'text-[#EF4444]' : 'text-[#555]'}>
-                      {processingLabel[type]}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {processingFailed && (
-        <div data-testid="processing-failed-banner" className="bg-[#1A0C0C] border-b border-[#6E1E1E]/30 px-6 py-4">
-          <div className="max-w-[1400px] mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
-              <div>
-                <p className="text-sm text-[#EF4444]">Processing encountered an issue</p>
-                <p className="text-xs text-[#888] mt-0.5">
-                  {processingStatus.processing_error && (processingStatus.processing_error.toLowerCase().includes('budget') || processingStatus.processing_error.toLowerCase().includes('quota') || processingStatus.processing_error.toLowerCase().includes('balance'))
-                    ? 'AI budget limit reached. Add balance in Profile > Universal Key to continue.'
-                    : processingStatus.completed_types?.length > 0
-                    ? `${processingStatus.completed_types.length}/4 analyses completed. ${processingStatus.failed_types?.length || 0} failed.`
-                    : processingStatus.processing_error || 'Some analyses may not have completed'}
-                </p>
-              </div>
-            </div>
-            <button data-testid="retry-processing-btn" onClick={handleReprocess}
-              className="px-4 py-2 rounded-full bg-[#EF4444]/10 text-[#EF4444] text-xs font-medium hover:bg-[#EF4444]/20 transition-colors">
-              {processingStatus.completed_types?.length > 0 ? 'Resume Failed' : 'Retry Processing'}
-            </button>
-          </div>
-        </div>
-      )}
+      <VideoAnalysisHeader
+        match={match}
+        videoMetadata={videoMetadata}
+        isProcessing={isProcessing}
+        isProcessed={isProcessed}
+        processingFailed={processingFailed}
+        processingStatus={processingStatus}
+        serverRestarted={serverRestarted}
+        processingLabel={processingLabel}
+        onBack={() => navigate('/')}
+        onDownloadHighlights={handleDownloadHighlights}
+        onReprocess={handleReprocess}
+      />
 
       <main className="max-w-[1400px] mx-auto px-6 py-6">
         {/* Data Integrity Warning */}
@@ -697,49 +602,18 @@ const VideoAnalysis = () => {
 
             {/* Trim Panel */}
             {showTrimPanel && (
-              <div data-testid="trim-panel" className="bg-[#111] rounded-lg border border-[#A855F7]/30 p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold" style={{ fontFamily: 'Space Grotesk' }}>Analyze Video Section</h3>
-                  <button data-testid="close-trim-panel" onClick={() => setShowTrimPanel(false)} className="text-[#666] hover:text-white">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                  </button>
-                </div>
-                <p className="text-xs text-[#888] mb-3">Select a time range to focus AI analysis on a specific section (e.g., first half, second half, a specific play).</p>
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div>
-                    <label className="block text-[10px] text-[#666] uppercase tracking-wider mb-1">Start Time</label>
-                    <div className="flex gap-2">
-                      <input data-testid="trim-start-input" type="number" step="1" min="0" max={videoDuration}
-                        value={trimStart} onChange={(e) => setTrimStart(Math.max(0, parseFloat(e.target.value) || 0))}
-                        className="flex-1 bg-white/5 rounded-lg text-white px-3 py-2 text-sm border border-white/10 focus:border-[#A855F7] focus:outline-none" />
-                      <button data-testid="trim-start-now-btn" onClick={() => setTrimStart(Math.floor(currentTimestamp))}
-                        className="px-3 py-2 rounded-lg bg-white/10 text-[#A855F7] text-xs font-medium">Now</button>
-                    </div>
-                    <span className="text-[10px] text-[#555]">{formatTime(trimStart)}</span>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] text-[#666] uppercase tracking-wider mb-1">End Time</label>
-                    <div className="flex gap-2">
-                      <input data-testid="trim-end-input" type="number" step="1" min="0" max={videoDuration}
-                        value={trimEnd} onChange={(e) => setTrimEnd(Math.min(videoDuration, parseFloat(e.target.value) || 0))}
-                        className="flex-1 bg-white/5 rounded-lg text-white px-3 py-2 text-sm border border-white/10 focus:border-[#A855F7] focus:outline-none" />
-                      <button data-testid="trim-end-now-btn" onClick={() => setTrimEnd(Math.floor(currentTimestamp))}
-                        className="px-3 py-2 rounded-lg bg-white/10 text-[#A855F7] text-xs font-medium">Now</button>
-                    </div>
-                    <span className="text-[10px] text-[#555]">{formatTime(trimEnd)}</span>
-                  </div>
-                </div>
-                <p className="text-xs text-[#A855F7] mb-3">Duration: {formatTime(Math.max(0, trimEnd - trimStart))}</p>
-                <div className="flex gap-2">
-                  {['tactical', 'player_performance', 'highlights'].map(type => (
-                    <button key={type} data-testid={`trim-analyze-${type}-btn`}
-                      onClick={() => handleTrimmedAnalysis(type)} disabled={analyzing || trimStart >= trimEnd}
-                      className="flex-1 px-3 py-2.5 rounded-lg bg-[#A855F7] hover:bg-[#9333EA] text-white text-xs font-medium transition-colors disabled:opacity-40">
-                      {analyzing ? 'Analyzing...' : processingLabel[type] || type}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <TrimPanel
+                trimStart={trimStart}
+                setTrimStart={setTrimStart}
+                trimEnd={trimEnd}
+                setTrimEnd={setTrimEnd}
+                videoDuration={videoDuration}
+                currentTimestamp={currentTimestamp}
+                analyzing={analyzing}
+                processingLabel={processingLabel}
+                onClose={() => setShowTrimPanel(false)}
+                onAnalyze={handleTrimmedAnalysis}
+              />
             )}
 
             {/* Clip Form */}
@@ -874,157 +748,28 @@ const VideoAnalysis = () => {
 
           {/* Right Sidebar: Clips & Annotations */}
           <div className="lg:col-span-4 space-y-4">
-            {/* Clips */}
-            <div className="bg-[#111] rounded-lg border border-white/10 p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-[#888]">
-                  Clips ({clips.length})
-                </h3>
-                {clips.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    {selectedClips.length > 0 && (
-                      <>
-                        <button data-testid="share-selected-reel-btn"
-                          onClick={() => { setCollectionTitle(''); setCollectionShare(null); setCollectionCopied(false); setCollectionModalOpen(true); }}
-                          className="text-[10px] text-[#A855F7] font-medium hover:text-[#C084FC]">
-                          Share {selectedClips.length} as Reel
-                        </button>
-                        <button data-testid="download-selected-zip-btn"
-                          onClick={() => handleDownloadZip(selectedClips)} disabled={downloadingZip}
-                          className="text-[10px] text-[#A855F7] font-medium hover:text-[#C084FC] disabled:opacity-50">
-                          {downloadingZip ? 'Zipping...' : `Download ${selectedClips.length} as ZIP`}
-                        </button>
-                      </>
-                    )}
-                    <button data-testid="download-all-zip-btn"
-                      onClick={() => handleDownloadZip(clips.map(c => c.id))} disabled={downloadingZip}
-                      className="text-[10px] text-[#4ADE80] font-medium hover:text-[#6AEE9A] disabled:opacity-50">
-                      {downloadingZip ? 'Zipping...' : 'Download All ZIP'}
-                    </button>
-                  </div>
-                )}
-              </div>
-              {clips.length === 0 ? (
-                <div className="text-center py-6">
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#333" strokeWidth="1.5" className="mx-auto mb-2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.12 15.88M14.47 14.48L20 20M8.12 8.12L12 12"/></svg>
-                  <p className="text-xs text-[#555]">No clips yet. Use the clip tool while watching.</p>
-                </div>
-              ) : (
-                <div className="space-y-2 max-h-[400px] overflow-y-auto">
-                  {clips.map(clip => (
-                    <div key={clip.id} data-testid={`clip-${clip.id}`}
-                      className={`rounded-lg p-3 hover:bg-white/[0.06] transition-colors group ${
-                        selectedClips.includes(clip.id) ? 'bg-[#A855F7]/10 border border-[#A855F7]/30' : 'bg-white/[0.03]'
-                      }`}>
-                      <div className="flex items-start gap-2">
-                        <input type="checkbox" data-testid={`select-clip-${clip.id}`}
-                          checked={selectedClips.includes(clip.id)}
-                          onChange={() => toggleClipSelection(clip.id)}
-                          className="mt-1 accent-[#A855F7] w-3.5 h-3.5 flex-shrink-0 cursor-pointer" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-white truncate">{clip.title}</p>
-                          <p className="text-[10px] text-[#666] mt-0.5">
-                            {formatTime(clip.start_time)} — {formatTime(clip.end_time)} · <span className="uppercase">{clip.clip_type}</span>
-                          </p>
-                        </div>
-                        <button data-testid={`delete-clip-${clip.id}-btn`} onClick={() => handleDeleteClip(clip.id)}
-                          className="text-[#444] hover:text-[#EF4444] opacity-0 group-hover:opacity-100 transition-opacity ml-2">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                        </button>
-                      </div>
-                      {clip.description && <p className="text-[10px] text-[#555] mt-1 line-clamp-2">{clip.description}</p>}
-                      {clip.player_ids && clip.player_ids.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {clip.player_ids.map(pid => {
-                            const player = players.find(p => p.id === pid);
-                            return player ? (
-                              <span key={pid} className="text-[9px] text-[#007AFF] bg-[#007AFF]/10 px-1 py-0.5 rounded">
-                                #{player.number || '?'} {player.name}
-                              </span>
-                            ) : null;
-                          })}
-                        </div>
-                      )}
-                      <div className="flex items-center gap-3 mt-2">
-                        <button data-testid={`play-clip-${clip.id}-btn`} onClick={() => playClip(clip)}
-                          className="flex items-center gap-1 text-[10px] text-[#007AFF] font-medium hover:text-[#0066DD]">
-                          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                          Play
-                        </button>
-                        <button data-testid={`download-clip-${clip.id}-btn`}
-                          onClick={() => handleDownloadClip(clip.id, clip.title)}
-                          disabled={downloadingClip === clip.id}
-                          className="flex items-center gap-1 text-[10px] text-[#4ADE80] font-medium hover:text-[#6AEE9A] disabled:opacity-50">
-                          {downloadingClip === clip.id ? (
-                            <><div className="w-2.5 h-2.5 border border-[#4ADE80] border-t-transparent rounded-full animate-spin" /> Extracting...</>
-                          ) : (
-                            <><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> Download MP4</>
-                          )}
-                        </button>
-                        <button data-testid={`tag-clip-${clip.id}-btn`}
-                          onClick={() => openTagModal(clip)}
-                          className="flex items-center gap-1 text-[10px] text-[#FBBF24] font-medium hover:text-[#FCD34D]">
-                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-                          {clip.player_ids?.length > 0 ? `Tags (${clip.player_ids.length})` : 'Tag'}
-                        </button>
-                        <button data-testid={`share-clip-${clip.id}-btn`}
-                          onClick={() => handleShareClip(clip)}
-                          className="flex items-center gap-1 text-[10px] text-[#A855F7] font-medium hover:text-[#C084FC]">
-                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-                          {clip.share_token ? 'Shared' : 'Share'}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Annotations */}
-            <div className="bg-[#111] rounded-lg border border-white/10 p-5">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-[#888] mb-4">
-                Annotations ({annotations.length})
-              </h3>
-              {annotations.length === 0 ? (
-                <div className="text-center py-6">
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#333" strokeWidth="1.5" className="mx-auto mb-2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-                  <p className="text-xs text-[#555]">No annotations yet. Add notes while watching.</p>
-                </div>
-              ) : (
-                <div className="space-y-2 max-h-[400px] overflow-y-auto">
-                  {annotations.map(ann => (
-                    <div key={ann.id} data-testid={`annotation-${ann.id}`}
-                      className="bg-white/[0.03] rounded-lg p-3 hover:bg-white/[0.06] transition-colors group">
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-mono text-[#007AFF] bg-[#007AFF]/10 px-1.5 py-0.5 rounded">
-                            {formatTime(ann.timestamp)}
-                          </span>
-                          <span className="text-[10px] text-[#555] uppercase">{ann.annotation_type.replace('_', ' ')}</span>
-                        </div>
-                        <button data-testid={`delete-annotation-${ann.id}-btn`} onClick={() => handleDeleteAnnotation(ann.id)}
-                          className="text-[#444] hover:text-[#EF4444] opacity-0 group-hover:opacity-100 transition-opacity">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                        </button>
-                      </div>
-                      <p className="text-xs text-[#CCC] mt-1.5">{ann.content}</p>
-                      {ann.player_id && (() => {
-                        const player = players.find(p => p.id === ann.player_id);
-                        return player ? (
-                          <span className="inline-flex items-center gap-1 mt-1 text-[10px] text-[#007AFF] bg-[#007AFF]/10 px-1.5 py-0.5 rounded">
-                            #{player.number || '?'} {player.name}
-                          </span>
-                        ) : null;
-                      })()}
-                      <button data-testid={`seek-annotation-${ann.id}-btn`} onClick={() => seekTo(ann.timestamp)}
-                        className="text-[10px] text-[#007AFF] font-medium mt-1.5 hover:text-[#0066DD]">
-                        Jump to moment
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <ClipsSidebar
+              clips={clips}
+              players={players}
+              selectedClips={selectedClips}
+              downloadingClip={downloadingClip}
+              downloadingZip={downloadingZip}
+              onToggleSelect={toggleClipSelection}
+              onShareReel={() => { setCollectionTitle(''); setCollectionShare(null); setCollectionCopied(false); setCollectionModalOpen(true); }}
+              onDownloadZipSelected={() => handleDownloadZip(selectedClips)}
+              onDownloadAllZip={() => handleDownloadZip(clips.map(c => c.id))}
+              onDeleteClip={handleDeleteClip}
+              onPlayClip={playClip}
+              onDownloadClip={handleDownloadClip}
+              onTagClip={openTagModal}
+              onShareClip={handleShareClip}
+            />
+            <AnnotationsSidebar
+              annotations={annotations}
+              players={players}
+              onDelete={handleDeleteAnnotation}
+              onSeek={seekTo}
+            />
           </div>
         </div>
       </main>

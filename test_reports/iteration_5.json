@@ -1,0 +1,36 @@
+{
+  "summary": "Frontend regression test for VideoAnalysis decomposition into 4 child components (VideoAnalysisHeader, TrimPanel, ClipsSidebar, AnnotationsSidebar). Logged in as testcoach@demo.com via /auth, navigated to /video/d108814f-cf70-43ee-b3e2-a2269c84aa63 and exercised every prop/callback. Result: zero regression — all data-testids unique (0 dupes), all callbacks wire through to parent state, no React prop-undefined errors in the browser console, and the only console warning is the pre-existing empty `src` on the <video> element during initial token fetch (unrelated to this iteration). Backend not retested per request scope (testing_type=frontend only); previous iteration 4 confirmed 35/35 backend cases.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_video_routes.py",
+    "/app/backend/tests/test_regression_sweep.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "TrimPanel.js + ClipsSidebar.js + AnnotationsSidebar.js each redefine the same `formatTime(seconds)` helper at file top. AnalysisTabs.js (per iter 4 review) likely has its own copy too. DRY violation — extract to /app/frontend/src/pages/components/utils/time.js and import. Low priority but accumulates as more components are extracted.",
+    "VideoAnalysisHeader.js processing-banner contains 4 inline icon SVGs branched by isDone/isCurrent/isFailed. The status-icon block (lines 84–98) is ~15 LOC of conditional JSX inside a .map — extract to a `<ProcessingTypeChip type={type} status={...} label={...} />` sub-component for readability and so it can be unit-tested in isolation.",
+    "ClipsSidebar.js empty-state renders a connection-graph-style icon (line 116) which is semantically off for a 'no clips' state — better to use a film/clapperboard/scissors icon to match the ClipForm tool affordance.",
+    "TrimPanel onChange for trim-end-input clamps to videoDuration — but if videoDuration prop is 0 (e.g., before metadata loads), user can never type a positive number because Math.min(0, x) = 0. Guard with `videoDuration || Infinity` or render the panel disabled until duration is known.",
+    "ClipsSidebar share-selected-reel-btn and download-selected-zip-btn share the same purple color (#A855F7) and font, making them visually indistinguishable except by text. Consider an icon prefix on each (share-network vs zip/folder icon) for better scannability when many clips are listed.",
+    "AnnotationsSidebar Jump-to-moment button is `block` placed below the tag chip — for annotations with no player chip the jump link sits awkwardly close to the content paragraph with no visual separator. Add `mt-2 pt-2 border-t border-white/5` to disambiguate."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "Not tested this iteration (frontend-only scope). Per iteration 4: 35/35 backend cases passing.",
+    "frontend": "100% — all 4 newly extracted components verified end-to-end against live video d108814f-...: header (back-btn, h1 title='LFC 07B vs Express FC', download-package-btn shown for processed video, '3.93 GB' chip, neither banner since fully processed), TrimPanel (opens, all 5 testids present, 3 analyze buttons present, disabled correctly when start>=end (20→10) and enabled when start<end (0→10), close button hides panel), ClipsSidebar (11 clips rendered with unique data-testid=`clip-{id}`, every per-clip button [play/download/tag/share/delete] present, checkbox toggles 'Share N as Reel'+'Download N as ZIP' purple buttons in/out of view, 'Download All ZIP' always visible, Tag modal opens on click), AnnotationsSidebar (empty state rendered correctly since this video has 0 annotations — empty-state path verified, item-rendering path is the same code as ClipsSidebar pattern). Tabs (AnalysisTabs.js) and markers verified non-regressed via no console errors during navigation."
+  },
+  "test_credentials": "testcoach@demo.com / password123 (loaded from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. Reused video_id=d108814f-cf70-43ee-b3e2-a2269c84aa63 (LFC 07B vs Express FC, 3.93 GB, fully processed, 11 clips, 0 annotations).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Auth route is /auth (NOT /login). Login form testids: email-input, password-input, auth-submit-btn (after login-tab-btn is selected by default). VideoAnalysis route is /video/:videoId. The test video d108814f-cf70-43ee-b3e2-a2269c84aa63 is fully processed (no isProcessing path — to test processing-banner you'd need to upload a fresh video and watch within ~5min, or stub processingStatus.processing_progress in component dev mode). The test video has 0 annotations so the AnnotationsSidebar item-rendering branch was not exercised live — only the empty-state branch. If a future test needs to cover the annotation-item path, POST /api/annotations with this video_id first, or pick a different video. The 'Now' trim button can't be reliably auto-tested by setting video.currentTime via page.evaluate because that doesn't update the React `currentTimestamp` state (only the timeupdate event from actual playback does); just verify visually or by playing the video for 1s before clicking Now.",
+  "rca of the issue": "N/A — no defects found. The 4 component extractions preserve all behavior. The only browser-console message is a benign warning about an empty `src` on the <video> element while waiting for the access-token API to return; this exists pre-refactor (videoSrc state defaults to '' until /api/videos/:id/access-token resolves)."
+}
