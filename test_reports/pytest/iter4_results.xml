@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="12" skipped="0" tests="35" time="15.039" timestamp="2026-04-29T22:03:40.445274+00:00" hostname="agent-env-71a126e7-ebd7-4add-81d0-147a3aeb2fff"><testcase classname="backend.tests.test_video_routes.TestVideoAccessToken" name="test_access_token_requires_auth" time="0.001"><failure message="requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/access-token': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/access-token?">backend/tests/test_video_routes.py:23: in test_access_token_requires_auth
+    r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/access-token")
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:73: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:59: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:575: in request
+    prep = self.prepare_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:484: in prepare_request
+    p.prepare(
+/root/.venv/lib/python3.11/site-packages/requests/models.py:367: in prepare
+    self.prepare_url(url, params)
+/root/.venv/lib/python3.11/site-packages/requests/models.py:438: in prepare_url
+    raise MissingSchema(
+E   requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/access-token': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/access-token?</failure></testcase><testcase classname="backend.tests.test_video_routes.TestVideoAccessToken" name="test_access_token_404_for_unknown_video" time="0.403"><failure message="requests.exceptions.MissingSchema: Invalid URL '/api/videos/not-a-real-video-id/access-token': No scheme supplied. Perhaps you meant https:///api/videos/not-a-real-video-id/access-token?">backend/tests/test_video_routes.py:27: in test_access_token_404_for_unknown_video
+    r = requests.get(f"{BASE_URL}/api/videos/not-a-real-video-id/access-token", headers=auth_headers)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:73: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:59: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:575: in request
+    prep = self.prepare_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:484: in prepare_request
+    p.prepare(
+/root/.venv/lib/python3.11/site-packages/requests/models.py:367: in prepare
+    self.prepare_url(url, params)
+/root/.venv/lib/python3.11/site-packages/requests/models.py:438: in prepare_url
+    raise MissingSchema(
+E   requests.exceptions.MissingSchema: Invalid URL '/api/videos/not-a-real-video-id/access-token': No scheme supplied. Perhaps you meant https:///api/videos/not-a-real-video-id/access-token?</failure></testcase><testcase classname="backend.tests.test_video_routes.TestVideoAccessToken" name="test_access_token_returns_valid_jwt" time="0.001"><failure message="requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/access-token': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/access-token?">backend/tests/test_video_routes.py:31: in test_access_token_returns_valid_jwt
+    r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/access-token", headers=auth_headers)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:73: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:59: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:575: in request
+    prep = self.prepare_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:484: in prepare_request
+    p.prepare(
+/root/.venv/lib/python3.11/site-packages/requests/models.py:367: in prepare
+    self.prepare_url(url, params)
+/root/.venv/lib/python3.11/site-packages/requests/models.py:438: in prepare_url
+    raise MissingSchema(
+E   requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/access-token': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/access-token?</failure></testcase><testcase classname="backend.tests.test_video_routes.TestVideoMetadata" name="test_metadata_requires_auth" time="0.000"><failure message="requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/metadata': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/metadata?">backend/tests/test_video_routes.py:50: in test_metadata_requires_auth
+    r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/metadata")
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:73: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:59: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:575: in request
+    prep = self.prepare_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:484: in prepare_request
+    p.prepare(
+/root/.venv/lib/python3.11/site-packages/requests/models.py:367: in prepare
+    self.prepare_url(url, params)
+/root/.venv/lib/python3.11/site-packages/requests/models.py:438: in prepare_url
+    raise MissingSchema(
+E   requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/metadata': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/metadata?</failure></testcase><testcase classname="backend.tests.test_video_routes.TestVideoMetadata" name="test_metadata_404_unknown" time="0.000"><failure message="requests.exceptions.MissingSchema: Invalid URL '/api/videos/not-a-real-vid/metadata': No scheme supplied. Perhaps you meant https:///api/videos/not-a-real-vid/metadata?">backend/tests/test_video_routes.py:54: in test_metadata_404_unknown
+    r = requests.get(f"{BASE_URL}/api/videos/not-a-real-vid/metadata", headers=auth_headers)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:73: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:59: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:575: in request
+    prep = self.prepare_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:484: in prepare_request
+    p.prepare(
+/root/.venv/lib/python3.11/site-packages/requests/models.py:367: in prepare
+    self.prepare_url(url, params)
+/root/.venv/lib/python3.11/site-packages/requests/models.py:438: in prepare_url
+    raise MissingSchema(
+E   requests.exceptions.MissingSchema: Invalid URL '/api/videos/not-a-real-vid/metadata': No scheme supplied. Perhaps you meant https:///api/videos/not-a-real-vid/metadata?</failure></testcase><testcase classname="backend.tests.test_video_routes.TestVideoMetadata" name="test_metadata_schema_and_no_large_fields" time="0.000"><failure message="requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/metadata': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/metadata?">backend/tests/test_video_routes.py:58: in test_metadata_schema_and_no_large_fields
+    r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/metadata", headers=auth_headers)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:73: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:59: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:575: in request
+    prep = self.prepare_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:484: in prepare_request
+    p.prepare(
+/root/.venv/lib/python3.11/site-packages/requests/models.py:367: in prepare
+    self.prepare_url(url, params)
+/root/.venv/lib/python3.11/site-packages/requests/models.py:438: in prepare_url
+    raise MissingSchema(
+E   requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/metadata': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/metadata?</failure></testcase><testcase classname="backend.tests.test_video_routes.TestVideoMetadata" name="test_metadata_includes_chunk_integrity_when_chunked" time="0.000"><failure message="requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/metadata': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/metadata?">backend/tests/test_video_routes.py:72: in test_metadata_includes_chunk_integrity_when_chunked
+    r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/metadata", headers=auth_headers)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:73: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:59: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:575: in request
+    prep = self.prepare_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:484: in prepare_request
+    p.prepare(
+/root/.venv/lib/python3.11/site-packages/requests/models.py:367: in prepare
+    self.prepare_url(url, params)
+/root/.venv/lib/python3.11/site-packages/requests/models.py:438: in prepare_url
+    raise MissingSchema(
+E   requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/metadata': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/metadata?</failure></testcase><testcase classname="backend.tests.test_video_routes.TestVideoProcessingStatus" name="test_processing_status_requires_auth" time="0.000"><failure message="requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/processing-status': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/processing-status?">backend/tests/test_video_routes.py:90: in test_processing_status_requires_auth
+    r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/processing-status")
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:73: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:59: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:575: in request
+    prep = self.prepare_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:484: in prepare_request
+    p.prepare(
+/root/.venv/lib/python3.11/site-packages/requests/models.py:367: in prepare
+    self.prepare_url(url, params)
+/root/.venv/lib/python3.11/site-packages/requests/models.py:438: in prepare_url
+    raise MissingSchema(
+E   requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/processing-status': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/processing-status?</failure></testcase><testcase classname="backend.tests.test_video_routes.TestVideoProcessingStatus" name="test_processing_status_404_unknown" time="0.000"><failure message="requests.exceptions.MissingSchema: Invalid URL '/api/videos/not-real/processing-status': No scheme supplied. Perhaps you meant https:///api/videos/not-real/processing-status?">backend/tests/test_video_routes.py:94: in test_processing_status_404_unknown
+    r = requests.get(f"{BASE_URL}/api/videos/not-real/processing-status", headers=auth_headers)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:73: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:59: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:575: in request
+    prep = self.prepare_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:484: in prepare_request
+    p.prepare(
+/root/.venv/lib/python3.11/site-packages/requests/models.py:367: in prepare
+    self.prepare_url(url, params)
+/root/.venv/lib/python3.11/site-packages/requests/models.py:438: in prepare_url
+    raise MissingSchema(
+E   requests.exceptions.MissingSchema: Invalid URL '/api/videos/not-real/processing-status': No scheme supplied. Perhaps you meant https:///api/videos/not-real/processing-status?</failure></testcase><testcase classname="backend.tests.test_video_routes.TestVideoProcessingStatus" name="test_processing_status_payload_shape" time="0.000"><failure message="requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/processing-status': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/processing-status?">backend/tests/test_video_routes.py:98: in test_processing_status_payload_shape
+    r = requests.get(
+/root/.venv/lib/python3.11/site-packages/requests/api.py:73: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:59: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:575: in request
+    prep = self.prepare_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:484: in prepare_request
+    p.prepare(
+/root/.venv/lib/python3.11/site-packages/requests/models.py:367: in prepare
+    self.prepare_url(url, params)
+/root/.venv/lib/python3.11/site-packages/requests/models.py:438: in prepare_url
+    raise MissingSchema(
+E   requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/processing-status': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/processing-status?</failure></testcase><testcase classname="backend.tests.test_video_routes.TestVideoProcessingStatus" name="test_processing_status_reflects_completed_analyses" time="0.000"><failure message="requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/processing-status': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/processing-status?">backend/tests/test_video_routes.py:122: in test_processing_status_reflects_completed_analyses
+    r = requests.get(
+/root/.venv/lib/python3.11/site-packages/requests/api.py:73: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:59: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:575: in request
+    prep = self.prepare_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:484: in prepare_request
+    p.prepare(
+/root/.venv/lib/python3.11/site-packages/requests/models.py:367: in prepare
+    self.prepare_url(url, params)
+/root/.venv/lib/python3.11/site-packages/requests/models.py:438: in prepare_url
+    raise MissingSchema(
+E   requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/processing-status': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/processing-status?</failure></testcase><testcase classname="backend.tests.test_video_routes.TestNoDuplicateRoute" name="test_no_410_gone" time="0.000"><failure message="requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/access-token': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/access-token?">backend/tests/test_video_routes.py:138: in test_no_410_gone
+    r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/{ep}", headers=auth_headers)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:73: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:59: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:575: in request
+    prep = self.prepare_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:484: in prepare_request
+    p.prepare(
+/root/.venv/lib/python3.11/site-packages/requests/models.py:367: in prepare
+    self.prepare_url(url, params)
+/root/.venv/lib/python3.11/site-packages/requests/models.py:438: in prepare_url
+    raise MissingSchema(
+E   requests.exceptions.MissingSchema: Invalid URL '/api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/access-token': No scheme supplied. Perhaps you meant https:///api/videos/d108814f-cf70-43ee-b3e2-a2269c84aa63/access-token?</failure></testcase><testcase classname="backend.tests.test_regression_sweep.TestClipTaggingAndProfile" name="test_patch_clip_player_ids_and_appears_in_profile" time="2.552" /><testcase classname="backend.tests.test_regression_sweep.TestClipTaggingAndProfile" name="test_patch_clip_unknown_id_returns_404" time="0.122" /><testcase classname="backend.tests.test_regression_sweep.TestClipTaggingAndProfile" name="test_profile_requires_auth" time="0.145" /><testcase classname="backend.tests.test_regression_sweep.TestPlayerShare" name="test_player_share_toggle_and_public_sanitized" time="0.417" /><testcase classname="backend.tests.test_regression_sweep.TestPlayerShare" name="test_shared_player_bad_token" time="0.149" /><testcase classname="backend.tests.test_regression_sweep.TestTeamShare" name="test_team_share_toggle_and_public_sanitized" time="0.428" /><testcase classname="backend.tests.test_regression_sweep.TestTeamShare" name="test_shared_team_bad_token" time="0.120" /><testcase classname="backend.tests.test_regression_sweep.TestMultiTeam" name="test_add_player_to_additional_team_other_season_ok" time="0.425" /><testcase classname="backend.tests.test_regression_sweep.TestMultiTeam" name="test_season_cap_enforced_on_add" time="1.187" /><testcase classname="backend.tests.test_regression_sweep.TestMultiTeam" name="test_delete_player_from_team_keeps_record" time="1.029" /><testcase classname="backend.tests.test_regression_sweep.TestMultiTeam" name="test_eligible_players_endpoint_and_at_cap_flag" time="1.425" /><testcase classname="backend.tests.test_regression_sweep.TestPromote" name="test_promote_clones_team_and_appends_team_id_to_roster" time="1.632" /><testcase classname="backend.tests.test_regression_sweep.TestPromote" name="test_promote_same_season_rejected" time="0.349" /><testcase classname="backend.tests.test_regression_sweep.TestClipCollections" name="test_create_list_share_and_delete" time="0.598" /><testcase classname="backend.tests.test_regression_sweep.TestClipCollections" name="test_create_with_unknown_clip_ids_returns_400" time="0.115" /><testcase classname="backend.tests.test_regression_sweep.TestOGEndpoints" name="test_og_player_html_and_image" time="0.885" /><testcase classname="backend.tests.test_regression_sweep.TestOGEndpoints" name="test_og_team_html_and_image" time="0.944" /><testcase classname="backend.tests.test_regression_sweep.TestOGEndpoints" name="test_og_clip_collection_html_and_image" time="0.609" /><testcase classname="backend.tests.test_regression_sweep.TestOGEndpoints" name="test_og_clip_html_and_image" time="0.646" /><testcase classname="backend.tests.test_regression_sweep.TestOGEndpoints" name="test_og_folder_bad_token_404" time="0.128" /><testcase classname="backend.tests.test_regression_sweep.TestOGEndpoints" name="test_og_clip_bad_token_404" time="0.150" /><testcase classname="backend.tests.test_regression_sweep.TestOGEndpoints" name="test_og_team_bad_token_404" time="0.141" /><testcase classname="backend.tests.test_regression_sweep.TestOGEndpoints" name="test_og_clip_collection_bad_token_404" time="0.119" /></testsuite></testsuites>

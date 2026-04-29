@@ -59,6 +59,7 @@ from routes.insights import router as insights_router
 from routes.season_trends import router as season_trends_router
 from routes.player_trends import router as player_trends_router
 from routes.coach_network import router as coach_network_router
+from routes.videos import router as videos_router
 
 # ===== Storage: Connection Pooling + Retry for SSL resilience =====
 
@@ -813,20 +814,6 @@ async def finalize_chunked_upload(upload_id: str, total_chunks: int, current_use
 
 # ===== Video Serving (streaming with Range support) =====
 
-@api_router.get("/videos/{video_id}/access-token")
-async def get_video_access_token(video_id: str, current_user: dict = Depends(get_current_user)):
-    """Generate a short-lived access token for video streaming (prevents exposing main JWT in URLs)"""
-    video = await db.videos.find_one({"id": video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0, "id": 1})
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-    # Short-lived token (5 min) specifically for this video
-    import time
-    video_token = jwt.encode(
-        {"user_id": current_user["id"], "video_id": video_id, "exp": int(time.time()) + 300, "type": "video_access"},
-        JWT_SECRET, algorithm="HS256"
-    )
-    return {"token": video_token}
-
 @api_router.get("/videos/{video_id}")
 async def get_video(video_id: str, request: Request, token: str = None, authorization: str = Header(None)):
     """Serve video with streaming and HTTP Range support. Auth via header or ?token= query param."""
@@ -1086,33 +1073,6 @@ async def restore_video(video_id: str, current_user: dict = Depends(get_current_
     )
     return {"status": "restored", "video_id": video_id}
 
-
-@api_router.get("/videos/{video_id}/metadata")
-async def get_video_metadata(video_id: str, current_user: dict = Depends(get_current_user)):
-    video = await db.videos.find_one({"id": video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0})
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-    # Don't send chunk_paths in metadata (too large for large uploads)
-    result = {k: v for k, v in video.items() if k not in ("chunk_paths", "chunk_sizes", "chunk_backends")}
-    # Add data integrity check for chunked videos
-    if video.get("is_chunked"):
-        chunk_paths = video.get("chunk_paths", {})
-        chunk_backends = video.get("chunk_backends", {})
-        total = video.get("total_chunks", len(chunk_paths))
-        available = 0
-        for i in range(total):
-            path = chunk_paths.get(str(i))
-            if not path:
-                continue
-            backend = chunk_backends.get(str(i), "storage")
-            if backend == "filesystem" and not os.path.exists(path):
-                continue
-            available += 1
-        result["chunks_available"] = available
-        result["chunks_total"] = total
-        result["data_integrity"] = "full" if available == total else ("partial" if available > 0 else "unavailable")
-    
-    return result
 
 # ===== Auto-Processing (Hudl/Veo-like) =====
 
@@ -1523,40 +1483,6 @@ async def prepare_video_segments_720p(video: dict) -> tuple:
         raise
 
 # ===== AI Analysis Endpoints =====
-
-@api_router.get("/videos/{video_id}/processing-status")
-async def get_processing_status(video_id: str, current_user: dict = Depends(get_current_user)):
-    """Polling endpoint for frontend to check processing progress"""
-    video = await db.videos.find_one(
-        {"id": video_id, "user_id": current_user["id"]},
-        {"_id": 0, "chunk_paths": 0, "chunk_sizes": 0, "chunk_backends": 0}
-    )
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-    
-    # Check which analysis types are completed
-    completed_types = []
-    failed_types = []
-    analyses = await db.analyses.find(
-        {"video_id": video_id, "user_id": current_user["id"]},
-        {"_id": 0, "analysis_type": 1, "status": 1}
-    ).to_list(10)
-    for a in analyses:
-        if a.get("status") == "completed":
-            completed_types.append(a["analysis_type"])
-        elif a.get("status") == "failed":
-            failed_types.append(a["analysis_type"])
-    
-    return {
-        "processing_status": video.get("processing_status", "none"),
-        "processing_progress": video.get("processing_progress", 0),
-        "processing_current": video.get("processing_current"),
-        "processing_error": video.get("processing_error"),
-        "processing_completed_at": video.get("processing_completed_at"),
-        "completed_types": completed_types,
-        "failed_types": failed_types,
-        "server_boot_id": SERVER_BOOT_ID
-    }
 
 @api_router.post("/videos/{video_id}/reprocess")
 async def reprocess_video(video_id: str, current_user: dict = Depends(get_current_user)):
@@ -2218,7 +2144,7 @@ _pp_api.include_router(player_profile_router)
 app.include_router(_pp_api)
 
 # Mount Folders, Matches, Annotations, Analysis, Insights (CRUD-style routers)
-for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router):
+for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router, videos_router):
     _api = APIRouter(prefix="/api")
     _api.include_router(r)
     app.include_router(_api)

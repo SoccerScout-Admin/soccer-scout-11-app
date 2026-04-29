@@ -1,0 +1,39 @@
+{
+  "summary": "Regression test for two structural refactors: (a) backend — extracted 3 endpoints into /app/backend/routes/videos.py; (b) frontend — extracted VideoAnalysis tabs into AnalysisTabs.js. Wrote new /app/backend/tests/test_video_routes.py (12 cases) covering access-token JWT shape + 5-min TTL, metadata schema + chunk integrity fields, processing-status payload shape + completed/failed/server_boot_id. Re-ran the existing /app/backend/tests/test_regression_sweep.py (23 cases). Total: 35/35 passing. Frontend verified end-to-end via Playwright against video d108814f-...: all 5 tabs (overview/tactical/player_performance/highlights/timeline) render with correct data-testids and content, regenerate button visible on completed tactical, 10 timeline events rendered, click-to-seek confirmed (video.currentTime jumped 0 → 17 after clicking the 0:17 event), green dots (#4ADE80) on tactical/players/highlights tabs and yellow dot (#FFD700) on timeline tab. Zero behavior change vs pre-refactor.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_video_routes.py",
+    "/app/backend/tests/test_regression_sweep.py",
+    "/app/test_reports/pytest/iter4_video_routes.xml",
+    "/app/test_reports/pytest/iter4_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/videos.py _get_server_boot_id uses a lazy `import server` inside the handler. Works, but reads a module attribute at every request — small overhead. Consider caching the value in a module-level variable on first call, or passing SERVER_BOOT_ID in via app.state at startup to avoid the repeated import lookup.",
+    "routes/videos.py get_video_metadata iterates os.path.exists per chunk (up to total_chunks) synchronously in the request path. For the test video that's 403 stat calls on the overlay FS per metadata poll; the frontend polls this during processing. Consider aggregating the integrity check (e.g., compare len(chunk_paths) to total and only stat-check on a sampled subset, or cache the integrity flag once computed since chunk_paths is immutable after upload).",
+    "routes/videos.py get_processing_status projects {_id:0, analysis_type:1, status:1} but then does .to_list(10) — if a video somehow had more than 10 analyses across types the 11th+ would be silently dropped. Unlikely given the 4 analysis types, but worth making explicit (cap at 20 or remove the limit).",
+    "AnalysisTabs.js defines getAnalysis twice — once inside OverviewTab and once in the parent AnalysisTabs. Minor DRY issue; extract to a shared helper.",
+    "AnalysisTabs.js: the TimelineTab scrollable list has max-h-[500px] hard-coded. On tall desktops this wastes space; consider max-h-[70vh] or making it dynamic relative to the viewer height."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_video_routes.py (new — 12 cases)"
+  ],
+  "success_rate": {
+    "backend": "100% (35/35 — 12 new video-route cases + 23 existing regression sweep)",
+    "frontend": "100% (all 5 tabs, seek, indicators verified)"
+  },
+  "test_credentials": "testcoach@demo.com / password123 (loaded from /app/memory/test_credentials.md)",
+  "seed_data_creation": "No new seed data. Used existing video_id=d108814f-cf70-43ee-b3e2-a2269c84aa63 for both backend endpoint tests and frontend tab verification.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Video-route regression lives at /app/backend/tests/test_video_routes.py. Run from /app with: REACT_APP_BACKEND_URL=https://video-scout-11.preview.emergentagent.com python -m pytest backend/tests/test_video_routes.py backend/tests/test_regression_sweep.py -v. Notes for next agent: (1) conftest.py has a hardcoded URL fallback that masks missing env; always export REACT_APP_BACKEND_URL before running to match prod behavior. (2) Frontend route for VideoAnalysis is /video/:videoId (SINGULAR, not /videos/...). (3) The legacy /app/backend/tests/test_shared_folders.py still has 3 stale cases depending on revoked share token 7c7fa97e-e60 (flagged since iteration_3, not fixed here). (4) All 3 new endpoints are currently served ONLY by the new module — the 410-Gone shim is gone and duplicates in server.py have been removed, confirmed via test_no_410_gone passing.",
+  "rca of the issue": "N/A — no defects. Both refactors are behavior-preserving. The only test iteration friction was that REACT_APP_BACKEND_URL must be exported into the shell for pytest (conftest has a default but the new test file did not); adding `REACT_APP_BACKEND_URL=... pytest ...` resolved immediately."
+}
