@@ -184,7 +184,10 @@ async def send_test(current_user: dict = Depends(get_current_user)):
 
 @router.post("/coach-pulse/send-weekly")
 async def send_weekly(current_user: dict = Depends(get_current_user)):
-    """Idempotent per-week blast to all active subscribers."""
+    """Idempotent per-week blast to all active subscribers. Admin/owner only."""
+    role = (current_user.get("role") or "").lower()
+    if role not in ("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Only admin/owner can trigger the weekly blast")
     network_ready, network = await _network_payload()
     week_start = _week_start().isoformat()
     cursor = db.coach_pulse_subscriptions.find({"is_active": True}, {"_id": 0})

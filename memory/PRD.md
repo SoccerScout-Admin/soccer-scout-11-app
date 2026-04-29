@@ -45,6 +45,21 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### Coach Pulse Weekly Email Digest (Complete - Apr 29, 2026)
+- New `routes/coach_pulse.py` (175 lines) — 6 endpoints:
+  - `GET /api/coach-pulse/subscription` (auto-creates doc + returns is_active/last_sent/email)
+  - `POST /api/coach-pulse/subscribe` + `POST /api/coach-pulse/unsubscribe` (auth-gated toggle)
+  - `GET /api/coach-pulse/preview` (renders authenticated HTML preview)
+  - `POST /api/coach-pulse/send-test` (live Resend send to current user)
+  - `POST /api/coach-pulse/send-weekly` (admin-only blast with idempotency: skips users already sent this ISO week)
+  - `GET /api/coach-pulse/unsubscribe/{token}` (public token-based opt-out from email footer)
+- New `services/coach_pulse_email.py` (130 lines) — pure-string HTML template (table layout, inline CSS, email-client compatible). Personal stats grid + Coach Network anonymized section (top 5 weaknesses, top 5 strengths, position bars, recruit-level distribution). Network section gracefully degrades to "unlocks at 3+ coaches" callout when `network_ready=false`. Text fields capped at 120 chars to prevent layout-blowing.
+- Refactored `routes/coach_network.py` to expose `compute_benchmarks(user_id?)` so coach_pulse can call it without going through the auth dep.
+- Resend SDK integrated via `asyncio.to_thread` for non-blocking calls. RESEND_API_KEY + SENDER_EMAIL added to `/app/backend/.env`.
+- New `pages/components/CoachPulseCard.js` (130 lines) — Dashboard card with cyan envelope icon, Subscribe/Subscribed toggle, Preview button (Blob-URL pattern with Bearer auth), Send Test button with status chip. Sits above the existing Coach Network CTA on `/`.
+- 16 pytest cases in `/app/backend/tests/test_coach_pulse.py` (subscription auto-create, subscribe/unsubscribe round-trip, preview HTML content, public unsubscribe valid+invalid token, send-test graceful 502, send-weekly admin-gate (403 for coach role), email template unit tests for both ready/not-ready paths). **80/80 across full backend test suite**.
+- Verified end-to-end: HTML renders correctly with all sections, Subscribe toggle flips correctly, Resend integration works (sandbox-policy 502 surfaces gracefully in UI).
+
 ### Coach Annotation Templates (Complete - Apr 29, 2026)
 - New `routes/annotation_templates.py` (113 lines) — 4 endpoints scoped per-user + per annotation_type:
   - `GET /api/annotation-templates[?annotation_type=note|tactical|key_moment]` — sorted by usage_count desc + created_at asc; lazy-seeds 10 default phrases on first call (3 note + 4 tactical + 3 key_moment).
@@ -347,11 +362,14 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Re-upload degraded videos (LFC vs Express 3%, LFC07BvsAYSO 8% data remaining) — filesystem chunks lost on container restart, requires user action
 
 ### Future / Backlog
+- **Admin role assignment** — currently no flow to promote a user to `admin`/`owner`. The `/coach-pulse/send-weekly` blast endpoint requires this role, so an admin-promotion mechanism is needed before the weekly blast can run.
+- **Resend domain verification** — Once a custom domain is verified at resend.com/domains, swap `SENDER_EMAIL` away from `onboarding@resend.dev` so coach pulse emails can deliver to all subscribers (not just the Resend account owner).
+- **APScheduler-based weekly cron** — currently `/send-weekly` is manual. Add a scheduled job that hits this endpoint every Monday 8am UTC with admin auth.
 - Full extraction of AI auto-processing pipeline (`run_auto_processing`, `prepare_video_sample`, FFmpeg multi-segment compression) from `server.py` into `services/processing.py` — DEFERRED due to high regression risk on the core AI-pipeline / chunked-upload coupling
-- Dedicated "Manage Templates" modal once a coach exceeds 6 saved templates (current overflow shows "N saved" hint)
-- Bulk-share clips picker on Dashboard (already covered in VideoAnalysis sidebar; cross-match version is nice-to-have)
-- Season stats dashboard per player (aggregate stats across teams/seasons)
-- Surface position-breakdown comparison on TeamRoster (network %s vs your team %s)
+- Dedicated "Manage Templates" modal once a coach exceeds 6 saved templates
+- Bulk-share clips picker on Dashboard (cross-match version)
+- Season stats dashboard per player (aggregate across teams/seasons)
+- Position-breakdown comparison on TeamRoster (network %s vs your team %s)
 
 ## Test Credentials
 - Email: testcoach@demo.com

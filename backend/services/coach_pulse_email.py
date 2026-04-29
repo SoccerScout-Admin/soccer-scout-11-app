@@ -12,6 +12,11 @@ def _escape(s: Optional[str]) -> str:
     return escape(s or "", quote=True)
 
 
+def _safe_text(s, limit: int = 120) -> str:
+    """Trim untrusted text fields before escaping into the email layout."""
+    return (s or "").strip()[:limit]
+
+
 def _li(text: str, count: Optional[int] = None) -> str:
     badge = (
         f'<span style="display:inline-block;background:#A855F7;color:white;font-size:10px;padding:2px 6px;'
@@ -20,7 +25,7 @@ def _li(text: str, count: Optional[int] = None) -> str:
     )
     return (
         f'<li style="padding:6px 0;color:#222;line-height:1.45;">'
-        f'<span>{_escape(text)}</span>{badge}</li>'
+        f'<span>{_escape(_safe_text(text))}</span>{badge}</li>'
     )
 
 
@@ -28,7 +33,7 @@ def _bar_row(label: str, count: int, total: int, color: str) -> str:
     pct = round((count / total) * 100) if total else 0
     return (
         '<tr>'
-        f'<td style="font-size:13px;color:#333;padding:6px 8px 4px 0;width:160px;vertical-align:top;">{_escape(label)}</td>'
+        f'<td style="font-size:13px;color:#333;padding:6px 8px 4px 0;width:160px;vertical-align:top;">{_escape(_safe_text(label, 40))}</td>'
         '<td style="padding:6px 0 4px 0;vertical-align:top;">'
         '<table cellpadding="0" cellspacing="0" border="0" style="width:100%;">'
         '<tr>'

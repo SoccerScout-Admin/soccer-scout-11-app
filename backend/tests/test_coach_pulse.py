@@ -137,16 +137,12 @@ class TestSendWeekly:
         r = requests.post(f"{BASE_URL}/api/coach-pulse/send-weekly")
         assert r.status_code == 401
 
-    def test_send_weekly_returns_counts(self, auth_headers):
-        # Ensure user is unsubscribed to avoid hitting Resend quota
+    def test_send_weekly_requires_admin(self, auth_headers):
+        # testcoach has role='coach' so should be 403 even when authenticated
         requests.post(f"{BASE_URL}/api/coach-pulse/unsubscribe", headers=auth_headers)
         r = requests.post(f"{BASE_URL}/api/coach-pulse/send-weekly", headers=auth_headers)
-        assert r.status_code == 200
-        data = r.json()
-        assert "sent" in data
-        assert "skipped" in data
-        assert isinstance(data["sent"], int)
-        assert isinstance(data["skipped"], int)
+        assert r.status_code == 403
+        assert "admin" in r.json()["detail"].lower()
 
 
 # --- Unit tests for render_coach_pulse_email -----------------------------
