@@ -18,6 +18,7 @@ import SharedClubView from './pages/SharedClubView';
 import MatchInsights from './pages/MatchInsights';
 import SeasonTrends from './pages/SeasonTrends';
 import PlayerSeasonTrends from './pages/PlayerSeasonTrends';
+import CoachNetwork from './pages/CoachNetwork';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
@@ -128,6 +129,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <TeamRoster />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/coach-network"
+            element={
+              <ProtectedRoute>
+                <CoachNetwork />
               </ProtectedRoute>
             }
           />

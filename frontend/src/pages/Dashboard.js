@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
-import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield, ChartLineUp } from '@phosphor-icons/react';
+import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield, ChartLineUp, Globe } from '@phosphor-icons/react';
 
 const Dashboard = () => {
   const [matches, setMatches] = useState([]);
@@ -247,6 +247,10 @@ const Dashboard = () => {
               className="flex items-center gap-2 px-3 py-1.5 text-xs text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors border border-white/10 font-bold uppercase tracking-wider">
               <Shield size={16} /> Clubs & Teams
             </button>
+            <button data-testid="coach-network-nav-btn" onClick={() => navigate('/coach-network')}
+              className="flex items-center gap-2 px-3 py-1.5 text-xs text-[#A855F7] hover:text-white hover:bg-[#A855F7]/15 transition-colors border border-[#A855F7]/30 font-bold uppercase tracking-wider">
+              <Globe size={16} weight="bold" /> Coach Network
+            </button>
             <div className="text-right">
               <p className="text-sm text-[#A3A3A3]">{user?.name}</p>
               <p className="text-xs text-[#A3A3A3] uppercase tracking-wider">{user?.role}</p>
@@ -385,6 +389,22 @@ const Dashboard = () => {
               {selectionMode ? 'Done' : 'Select'}
             </button>
           </div>
+
+          {/* Coach Network CTA Card — appears when not in selection mode */}
+          {!selectionMode && (
+            <button data-testid="coach-network-cta-card" onClick={() => navigate('/coach-network')}
+              className="w-full mb-6 group flex items-center gap-4 bg-gradient-to-r from-[#1B0F2E] via-[#0F1A2E] to-[#0A0A0A] border border-[#A855F7]/30 hover:border-[#A855F7]/60 hover:from-[#2A1547] transition-all px-5 py-4 text-left">
+              <div className="w-12 h-12 bg-[#A855F7]/15 border border-[#A855F7]/30 flex items-center justify-center flex-shrink-0">
+                <Globe size={24} weight="bold" className="text-[#A855F7]" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[10px] font-bold tracking-[0.3em] uppercase text-[#A855F7] mb-1">Coach Network</div>
+                <div className="text-base font-bold text-white truncate">See how your coaching stacks up — anonymized</div>
+                <div className="text-xs text-[#A3A3A3] mt-0.5 truncate">Platform benchmarks · player position trends · recruiter-level distribution</div>
+              </div>
+              <CaretRight size={20} className="text-[#A855F7] group-hover:translate-x-1 transition-transform flex-shrink-0" />
+            </button>
+          )}
 
           {/* Bulk action bar */}
           {selectionMode && (

@@ -45,6 +45,17 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### Coach Network — Anonymized Platform Benchmarks (Complete - Apr 29, 2026)
+- Backend `routes/coach_network.py` exposes `GET /api/coach-network/benchmarks` with k-anonymity threshold (≥3 coaches). Returns platform stats, per-coach distributions, position breakdown, recruit-level distribution, and the calling user's percentile bucket on matches/clips. Cross-coach themes (strengths/weaknesses) only surface when ≥3 coaches have hit the same pattern.
+- Frontend `pages/CoachNetwork.js` at `/coach-network`: privacy-first banner, 5-card platform stats grid, "Your bucket on the platform" gradient card with percentile pills, Recharts position-bar chart, recruiter-level pie chart, side-by-side common-strengths/weaknesses panels.
+- Wired into `App.js` as a protected route + Dashboard nav button (purple accent, header) + dashboard CTA card ("See how your coaching stacks up — anonymized") on the main content area.
+- Verified end-to-end: backend returns full ready=true payload with 3-coach seed, frontend renders all sections correctly, percentile bucketing math verified.
+
+### VideoAnalysis Decomposition — Video Player + Markers Strip (Complete - Apr 29, 2026)
+- New `pages/components/VideoPlayerWithMarkers.js` (98 lines) — `forwardRef`-based child holding the `<video>` element, AI timeline markers strip (color-coded buttons positioned at `time/duration%`), and the markers legend. Parent retains direct ref control via forwarded ref so all `videoRef.current.currentTime` / `.play()` calls keep working unchanged.
+- VideoAnalysis.js: 1266 → 1231 lines (35-line reduction; removed inline marker color map + legend entries that now live in the child).
+- Verified: video src loads correctly, markers legend displays accurate counts (Shots/Saves/Fouls/Chances), 23/23 regression sweep still passes.
+
 ### Core Features (Complete)
 - JWT authentication (register/login)
 - Match CRUD with folder assignment
@@ -302,7 +313,8 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Season stats dashboard per player (aggregate stats across matches)
 - Batch share multiple clips at once (checkbox selection in VideoAnalysis.js → single shareable link)
 - Refactor remaining `server.py` (matches, folders, analysis, videos) into route modules
-- Decompose `VideoAnalysis.js` (~1176 lines) into Video Player + Timeline child components
+- Decompose `VideoAnalysis.js` (~1231 lines) — Timeline strip + Video Player extracted; Tactical/Players/Highlights/Timeline tabs still inline
+- Full extraction of AI auto-processing pipeline (`run_auto_processing`, `prepare_video_sample`, FFmpeg multi-segment compression) from `server.py` into `services/processing.py` — DEFERRED due to high regression risk on the core AI-pipeline / chunked-upload coupling
 
 ## Test Credentials
 - Email: testcoach@demo.com
