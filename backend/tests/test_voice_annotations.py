@@ -284,7 +284,8 @@ class TestMissingKeyPath:
         va = importlib.import_module("routes.voice_annotations")
         from fastapi import HTTPException
 
-        monkeypatch.setattr(va, "EMERGENT_KEY", None, raising=True)
+        # Per-request env lookup — clear EMERGENT_LLM_KEY in os.environ
+        monkeypatch.delenv("EMERGENT_LLM_KEY", raising=False)
 
         with pytest.raises(HTTPException) as ei:
             asyncio.get_event_loop().run_until_complete(va._transcribe(b"\x00" * 100, "v.wav"))

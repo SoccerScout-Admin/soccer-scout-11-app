@@ -19,6 +19,9 @@ class Annotation(BaseModel):
     annotation_type: str
     content: str
     position: Optional[dict] = None
+    source: Optional[str] = None
+    transcript: Optional[str] = None
+    classification_confidence: Optional[float] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

@@ -10,6 +10,7 @@ Flow:
 from __future__ import annotations
 import os
 import io
+import re
 import uuid
 import json
 import logging
@@ -23,8 +24,14 @@ from routes.auth import get_current_user
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
 ALLOWED_TYPES = {"note", "tactical", "key_moment"}
+
+_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+
+def _emergent_key() -> Optional[str]:
+    """Read the env var on each request so key rotation doesn't require a restart."""
+    return os.environ.get("EMERGENT_LLM_KEY")
 
 
 class VoiceAnnotationResponse(BaseModel):
@@ -42,10 +49,11 @@ async def _transcribe(audio_bytes: bytes, filename: str) -> str:
     """Run Whisper transcription in a worker thread (blocking SDK)."""
     from emergentintegrations.llm.openai import OpenAISpeechToText
 
-    if not EMERGENT_KEY:
+    key = _emergent_key()
+    if not key:
         raise HTTPException(status_code=503, detail="Whisper not configured (EMERGENT_LLM_KEY missing)")
 
-    stt = OpenAISpeechToText(api_key=EMERGENT_KEY)
+    stt = OpenAISpeechToText(api_key=key)
     file_obj = io.BytesIO(audio_bytes)
     file_obj.name = filename  # SDK uses the .name attr to detect format
     try:
@@ -60,14 +68,20 @@ async def _classify(transcript: str) -> tuple[str, float]:
     """Classify transcript into note/tactical/key_moment via Gemini.
 
     Returns (annotation_type, confidence). Falls back to 'note' on any error.
+    Logs the failure category at WARNING level so ops can spot Gemini outages.
     """
     if not transcript.strip():
+        return "note", 0.0
+
+    key = _emergent_key()
+    if not key:
+        logger.warning("classify fallback: EMERGENT_LLM_KEY missing")
         return "note", 0.0
 
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
         chat = LlmChat(
-            api_key=EMERGENT_KEY,
+            api_key=key,
             session_id=f"voice-classify-{uuid.uuid4()}",
             system_message=(
                 "You are a soccer coaching assistant. Classify a coach's voice annotation "
@@ -81,15 +95,19 @@ async def _classify(transcript: str) -> tuple[str, float]:
         ).with_model("gemini", "gemini-2.5-flash")
         msg = UserMessage(text=f'Classify this annotation: "{transcript}"')
         raw = await chat.send_message(msg)
-        # Strip code fences if present
-        cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        parsed = json.loads(cleaned)
+        # Robustly strip markdown code-fences (regex, not lstrip-charset)
+        cleaned = _FENCE_RE.sub("", raw.strip()).strip()
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError as je:
+            logger.warning("classify fallback: gemini returned non-JSON (%s) — first 80 chars: %r", je, raw[:80])
+            return "note", 0.0
         atype = parsed.get("type", "note")
         if atype not in ALLOWED_TYPES:
             atype = "note"
         return atype, float(parsed.get("confidence", 0.5))
     except Exception as e:
-        logger.info("classify fallback (note) — %s", e)
+        logger.warning("classify fallback: %s — %s", type(e).__name__, str(e)[:120])
         return "note", 0.0
 
 

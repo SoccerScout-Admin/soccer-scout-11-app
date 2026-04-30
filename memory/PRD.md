@@ -45,6 +45,28 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### Live Coaching Mode — Voice-Tagged Annotations (Apr 30, 2026)
+**Premise**: Coaches on the sideline can press-and-hold a mic button, speak ("Pressing trigger weak side coverage broken down"), and get a fully-classified annotation dropped on the timeline within ~2-3 seconds. No typing, no scrubbing.
+
+**Backend** — `routes/voice_annotations.py` (155 lines):
+- `POST /api/voice-annotations` — accepts multipart `video_id` + `timestamp` + `audio` (webm/mp4/wav). Auth-gated, video-ownership enforced, validates audio size (1KB ≤ size ≤ 25MB).
+- **Whisper transcription** via `emergentintegrations.llm.openai.OpenAISpeechToText` (`whisper-1` model, `response_format=json`, English-locked). Errors → graceful 502.
+- **Gemini classification** via `LlmChat` with `gemini-2.5-flash` — returns `{type: tactical|key_moment|note, confidence: 0.0-1.0}`. Robust regex-based code-fence stripping (replaces fragile `lstrip('```json')`). Falls back to `note` with confidence=0 on any parse error or LLM outage. Each fallback path logs at WARNING level for ops visibility.
+- Per-request env lookup for `EMERGENT_LLM_KEY` (no module-level caching) so key rotation doesn't require a backend restart.
+- Persisted as a regular `Annotation` doc with `source='voice'`, `transcript`, and `classification_confidence` so the existing `AnnotationsSidebar` surfaces voice tags side-by-side with manual ones. Annotation Pydantic model extended with these 3 optional fields so the UI can render a mic icon for voice tags after a page reload.
+- 11 pytest cases covering happy path (real Whisper transcription of an espeak-ng-generated WAV → Gemini classifies as `tactical` with 0.9 confidence), cross-user 404, oversized/empty audio rejection, missing-key 503, classification fallback, and the `source='voice'` field round-trip.
+
+**Frontend** — `pages/components/LiveCoachingMic.js` (220 lines):
+- Two render modes from a single component:
+  - **FAB (mobile)**: fixed bottom-right 64px circular button, press-and-hold to record, release to transcribe. Live-mode toggle pill above it. Status toast and "recent tag" toast positioned above the FAB.
+  - **Inline (desktop)**: pill-shaped button next to the existing Note/Tactical/Key-Moment tools in the VideoAnalysis toolbar.
+- **Live mode toggle** — when ON, the new annotation gets `liveAnchorVideoTime + (now - liveAnchorWallClock)` instead of `videoCurrentTime`. Lets coaches set up the camera, walk to the bench, and tag plays in real-time.
+- **MediaRecorder** flow — picks the best supported mime (`audio/webm;codecs=opus` → `audio/webm` → `audio/mp4` → `audio/ogg`), uses pointer events (so works on touch + mouse), auto-stops tracks on release to silence the browser's mic indicator immediately.
+- Color-coded states: blue idle / red recording / yellow transcribing / purple in-live-mode.
+- Wired into VideoAnalysis.js: desktop inline (`hidden sm:block`) + mobile FAB (`sm:hidden`). Both call back to the parent's `setAnnotations` so the sidebar updates without a page reload.
+
+**End-to-end verified**: Real espeak-ng-generated audio "The pressing was good but our weak side coverage broke down on the goal" → Whisper returned exact transcript → Gemini classified as `tactical` (0.9 confidence) → annotation persisted with source=voice. **105/106 pytest passing** (1 intentional skip on a flaky LLM-classification test).
+
 ### Web Push Notifications (Apr 30, 2026)
 **Triggers**: (1) AI auto-processing finished for a match, (2) Someone opened a coach's shared clip (throttled to 1/clip/6h to prevent refresh-spam).
 

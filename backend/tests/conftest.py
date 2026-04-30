@@ -1,6 +1,12 @@
 import pytest
 import requests
 import os
+import sys
+
+# Allow tests that import backend modules directly (e.g. routes.voice_annotations)
+_BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://video-scout-11.preview.emergentagent.com').rstrip('/')
 
