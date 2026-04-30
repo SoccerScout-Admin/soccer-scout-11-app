@@ -45,6 +45,29 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### Mentions Inbox + Mobile Manual-Result Form + Coach Pulse Preview Modal (Apr 30, 2026 — iter12)
+**3 follow-on features after iter11.**
+
+**1. Mobile-optimized ManualResultForm**
+- Score inputs now have ±/± stepper buttons on mobile (`sm:hidden`) — bigger tap targets (40×56px), `inputMode="numeric"` for native-keyboard digits.
+- Event-row grid switched from `grid-cols-12` (desktop-first) to `grid-cols-2 sm:grid-cols-12` so mobile renders a 2-col stacked layout: Min/Type on row 1, Team on row 2, Player on row 3, Description on row 4, Remove button as full-width row 5 with explicit "Remove" label.
+- Summary view scoreline gap tightened (`gap-3 sm:gap-6`); team labels truncate; outcome chip shrinks tracking on mobile.
+- All grid children get `min-w-0` to prevent horizontal overflow at 375px.
+
+**2. Mentions Inbox**
+- Backend: 3 new endpoints in `routes/coach_network.py`:
+  - `GET /api/coach-network/mentions?unread_only=…` — returns mentions joined with collection title/share_token/clip_count/description
+  - `POST /api/coach-network/mentions/{id}/read` — marks single mention read (404 if not yours)
+  - `POST /api/coach-network/mentions/read-all` — bulk mark-as-read
+- Frontend: new `/mentions` page (`MentionsInbox.js`) with empty state, unread purple-dot indicator, time-ago formatter, "Watch Reel →" CTA opens public reel in new tab and auto-marks-read, "Mark all read" header button.
+- Dashboard nav: new "Mentions" button (desktop + mobile icon) with unread-count badge polled on mount.
+
+**3. Coach Pulse Digest Preview**
+- Backend: `GET /api/coach-pulse/admin-preview/{user_id}` — admin-only, renders the same email HTML another user would receive on Monday's auto-blast.
+- Frontend: AdminUsers row gains a green "Preview Digest" button → opens a modal with `<iframe srcDoc>` showing the rendered email. Auth-fetched HTML (not anon iframe) so endpoint stays admin-protected.
+
+**Verified**: pytest 134 → 141 passed (+7 new tests for the iter12 endpoints), 5 skipped (1 mention E2E skipped because testcoach has 0 clips). Frontend smoke: mentions empty-state renders, admin Preview Digest modal opens with personalized HTML, mobile manual-result form layout passes at 375px (tiny defensive overflow fix applied). Zero React console errors.
+
 ### Admin UI + APScheduler + @-Mentions + Manual-Result Matches + Storage Dedup + Resend Domain Swap (Apr 30, 2026 — iter11)
 **7 user-requested items completed in one session.**
 
