@@ -237,36 +237,45 @@ const Dashboard = () => {
 
   return (
     <div className="min-h-screen bg-[#0A0A0A]">
-      <header className="sticky top-0 z-50 bg-[#0A0A0A] border-b border-white/10 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Play size={32} weight="fill" className="text-[#007AFF]" />
-            <h1 className="text-3xl font-bold" style={{ fontFamily: 'Bebas Neue' }}>SOCCER SCOUT</h1>
+      <header className="sticky top-0 z-50 bg-[#0A0A0A] border-b border-white/10 px-4 sm:px-6 py-3 sm:py-4">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <Play size={28} weight="fill" className="text-[#007AFF] flex-shrink-0 sm:w-8 sm:h-8" />
+            <h1 className="text-xl sm:text-3xl font-bold truncate" style={{ fontFamily: 'Bebas Neue' }}>SOCCER SCOUT</h1>
           </div>
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-2 sm:gap-6 flex-shrink-0">
             <button data-testid="clubs-nav-btn" onClick={() => navigate('/clubs')}
-              className="flex items-center gap-2 px-3 py-1.5 text-xs text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors border border-white/10 font-bold uppercase tracking-wider">
+              className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-xs text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors border border-white/10 font-bold uppercase tracking-wider">
               <Shield size={16} /> Clubs & Teams
             </button>
             <button data-testid="coach-network-nav-btn" onClick={() => navigate('/coach-network')}
-              className="flex items-center gap-2 px-3 py-1.5 text-xs text-[#A855F7] hover:text-white hover:bg-[#A855F7]/15 transition-colors border border-[#A855F7]/30 font-bold uppercase tracking-wider">
+              className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-xs text-[#A855F7] hover:text-white hover:bg-[#A855F7]/15 transition-colors border border-[#A855F7]/30 font-bold uppercase tracking-wider">
               <Globe size={16} weight="bold" /> Coach Network
             </button>
-            <div className="text-right">
+            {/* Mobile icon-only versions */}
+            <button data-testid="clubs-nav-btn-mobile" onClick={() => navigate('/clubs')} aria-label="Clubs & Teams"
+              className="sm:hidden p-2 text-[#A3A3A3] hover:text-white border border-white/10">
+              <Shield size={18} />
+            </button>
+            <button data-testid="coach-network-nav-btn-mobile" onClick={() => navigate('/coach-network')} aria-label="Coach Network"
+              className="sm:hidden p-2 text-[#A855F7] border border-[#A855F7]/30">
+              <Globe size={18} weight="bold" />
+            </button>
+            <div className="hidden md:block text-right">
               <p className="text-sm text-[#A3A3A3]">{user?.name}</p>
               <p className="text-xs text-[#A3A3A3] uppercase tracking-wider">{user?.role}</p>
             </div>
-            <button data-testid="logout-btn" onClick={handleLogout}
+            <button data-testid="logout-btn" onClick={handleLogout} aria-label="Logout"
               className="p-2 hover:bg-[#1F1F1F] transition-colors border border-white/10">
-              <SignOut size={24} className="text-[#A3A3A3]" />
+              <SignOut size={20} className="text-[#A3A3A3]" />
             </button>
           </div>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-6 py-8 flex gap-6">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 flex flex-col lg:flex-row gap-4 lg:gap-6">
         {/* Folder Sidebar */}
-        <aside className="w-64 flex-shrink-0" data-testid="folder-sidebar">
+        <aside className="w-full lg:w-64 lg:flex-shrink-0" data-testid="folder-sidebar">
           <div className="bg-[#141414] border border-white/10 p-4">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3]">Folders</h3>
@@ -522,8 +531,8 @@ const Dashboard = () => {
 
       {/* Create Match Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
-          <div className="bg-[#141414] border border-white/10 w-full max-w-lg p-8">
+        <div className="fixed inset-0 bg-black/80 overflow-y-auto z-50 p-4 sm:p-6" data-testid="create-match-modal">
+          <div className="bg-[#141414] border border-white/10 w-full max-w-lg p-6 sm:p-8 mx-auto my-4 sm:my-8">
             <h3 className="text-3xl font-bold mb-6" style={{ fontFamily: 'Bebas Neue' }}>Create New Match</h3>
             <form onSubmit={handleCreateMatch} className="space-y-4">
               <div>
@@ -568,8 +577,8 @@ const Dashboard = () => {
 
       {/* Folder Create/Edit Modal */}
       {showFolderModal && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
-          <div className="bg-[#141414] border border-white/10 w-full max-w-md p-8">
+        <div className="fixed inset-0 bg-black/80 overflow-y-auto z-50 p-4 sm:p-6" data-testid="folder-modal">
+          <div className="bg-[#141414] border border-white/10 w-full max-w-md p-6 sm:p-8 mx-auto my-4 sm:my-8">
             <h3 className="text-3xl font-bold mb-6" style={{ fontFamily: 'Bebas Neue' }}>
               {editingFolder ? 'Edit Folder' : 'New Folder'}
             </h3>
@@ -621,8 +630,8 @@ const Dashboard = () => {
 
       {/* Share Modal */}
       {showShareModal && sharingFolder && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
-          <div className="bg-[#141414] border border-white/10 w-full max-w-md p-8">
+        <div className="fixed inset-0 bg-black/80 overflow-y-auto z-50 p-4 sm:p-6" data-testid="share-folder-modal">
+          <div className="bg-[#141414] border border-white/10 w-full max-w-md p-6 sm:p-8 mx-auto my-4 sm:my-8">
             <div className="flex items-center gap-3 mb-6">
               <ShareNetwork size={28} className="text-[#4ADE80]" />
               <h3 className="text-3xl font-bold" style={{ fontFamily: 'Bebas Neue' }}>Share Folder</h3>

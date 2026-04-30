@@ -17,9 +17,9 @@ const TagPlayersModal = ({
   if (!taggingClip) return null;
   return (
     <div data-testid="tag-modal-overlay" onClick={() => !savingTags && setTaggingClip(null)}
-      className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center px-4">
+      className="fixed inset-0 bg-black/70 z-[200] p-4 sm:flex sm:items-center sm:justify-center overflow-y-auto">
       <div onClick={(e) => e.stopPropagation()}
-        className="bg-[#141414] border border-white/10 max-w-lg w-full max-h-[80vh] flex flex-col rounded-lg">
+        className="bg-[#141414] border border-white/10 max-w-lg w-full max-h-[90vh] sm:max-h-[80vh] flex flex-col rounded-lg mx-auto my-4 sm:my-0">
         <div className="p-5 border-b border-white/10">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">

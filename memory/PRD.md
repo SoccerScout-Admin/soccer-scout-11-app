@@ -45,6 +45,30 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### Mobile Responsiveness Fix (Apr 29, 2026) — Critical bug fix
+**User report**: "Create buttons are not working. Modal opens but does not create (nothing happens). Mobile Chrome browser."
+
+**Root cause**: Dashboard layout was NOT mobile-responsive. On 390px mobile viewport:
+- Document width was 619px (70% wider than viewport) → horizontal scroll
+- Sidebar (`w-64 flex-shrink-0`) forced 256px even on mobile → main content squeezed off-screen
+- Modal's inner `<div>` rendered at `x=-205` in bounding_box terms (mostly off-screen)
+- When the virtual keyboard opened for input, the submit button went below the fold and was unreachable
+
+**Fixes applied**:
+- Dashboard layout → `flex flex-col lg:flex-row` (stacks sidebar above main content on mobile)
+- Folder sidebar → `w-full lg:w-64 lg:flex-shrink-0` (full-width on mobile)
+- Dashboard header → responsive: full Clubs/Coach-Network buttons on `sm+`, icon-only mobile versions on smaller screens
+- All 9 modals across Dashboard / ClubManager / TeamRoster / ShareClipModal / ShareReelModal / TagPlayersModal → replaced `flex items-center justify-center` with `overflow-y-auto` + `mx-auto my-4 sm:my-8` so tall modals scroll within themselves and the submit button is always reachable above the mobile keyboard
+- ClubManager header + inline Club form → mobile-responsive (buttons wrap to new row below input on small screens)
+
+**Verified end-to-end on 390x844 viewport**:
+- `docOverflow: 0` (was `619`)
+- Create Match modal renders at `x=16, width=358` (was `x=-205, width=256`)
+- POST /api/matches → 200, modal closes
+- POST /api/folders → 200, modal closes
+- POST /api/clubs → 200, inline form closes
+- 80/80 backend regression tests still passing
+
 ### Coach Pulse Weekly Email Digest (Complete - Apr 29, 2026)
 - New `routes/coach_pulse.py` (175 lines) — 6 endpoints:
   - `GET /api/coach-pulse/subscription` (auto-creates doc + returns is_active/last_sent/email)

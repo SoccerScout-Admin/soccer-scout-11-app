@@ -343,9 +343,9 @@ const TeamRoster = () => {
       {/* Add Existing Player Modal */}
       {showAddExisting && (
         <div data-testid="existing-modal-overlay" onClick={() => setShowAddExisting(false)}
-          className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center px-4">
+          className="fixed inset-0 bg-black/70 z-[100] overflow-y-auto p-4 sm:flex sm:items-center sm:justify-center">
           <div onClick={(e) => e.stopPropagation()}
-            className="bg-[#141414] border border-white/10 max-w-2xl w-full max-h-[80vh] flex flex-col">
+            className="bg-[#141414] border border-white/10 max-w-2xl w-full max-h-[90vh] sm:max-h-[80vh] flex flex-col mx-auto my-4 sm:my-0">
             <div className="p-6 border-b border-white/10 flex items-start justify-between">
               <div>
                 <h3 className="text-xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
@@ -424,9 +424,9 @@ const TeamRoster = () => {
       {/* Share Modal */}
       {shareModalOpen && (
         <div data-testid="share-modal-overlay" onClick={() => setShareModalOpen(false)}
-          className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center px-4">
+          className="fixed inset-0 bg-black/70 z-[100] overflow-y-auto p-4 sm:flex sm:items-center sm:justify-center">
           <div onClick={(e) => e.stopPropagation()}
-            className="bg-[#141414] border border-white/10 max-w-lg w-full p-6">
+            className="bg-[#141414] border border-white/10 max-w-lg w-full p-6 mx-auto my-4 sm:my-0">
             <div className="flex items-start justify-between mb-4">
               <div>
                 <h3 className="text-xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>

@@ -10,8 +10,8 @@ const ShareClipModal = ({
 }) => {
   if (!sharingClip) return null;
   return (
-    <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
-      <div className="bg-[#141414] border border-white/10 w-full max-w-md p-8 rounded-lg">
+    <div className="fixed inset-0 bg-black/80 overflow-y-auto z-50 p-4 sm:p-6">
+      <div className="bg-[#141414] border border-white/10 w-full max-w-md p-6 sm:p-8 rounded-lg mx-auto my-4 sm:my-8">
         <div className="flex items-center gap-3 mb-5">
           <ShareNetwork size={24} weight="bold" className="text-[#A855F7]" />
           <h3 className="text-2xl font-bold" style={{ fontFamily: 'Bebas Neue' }}>Share Clip</h3>

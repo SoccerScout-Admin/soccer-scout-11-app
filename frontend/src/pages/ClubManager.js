@@ -252,46 +252,48 @@ const ClubManager = () => {
 
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-white">
-      <header className="sticky top-0 z-50 bg-[#0A0A0A] border-b border-white/10 px-6 py-4">
-        <div className="max-w-5xl mx-auto flex items-center gap-4">
+      <header className="sticky top-0 z-50 bg-[#0A0A0A] border-b border-white/10 px-4 sm:px-6 py-3 sm:py-4">
+        <div className="max-w-5xl mx-auto flex items-center gap-3 sm:gap-4">
           <button data-testid="back-to-dashboard-btn" onClick={() => navigate('/')}
-            className="p-2 hover:bg-[#1F1F1F] transition-colors border border-white/10">
-            <ArrowLeft size={24} />
+            className="p-2 hover:bg-[#1F1F1F] transition-colors border border-white/10 flex-shrink-0">
+            <ArrowLeft size={20} />
           </button>
-          <div>
-            <h1 className="text-3xl font-bold" style={{ fontFamily: 'Bebas Neue' }}>Club & Team Management</h1>
-            <p className="text-xs text-[#A3A3A3] tracking-wider">Organize your clubs, teams, and seasons</p>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xl sm:text-3xl font-bold truncate" style={{ fontFamily: 'Bebas Neue' }}>Club & Team Management</h1>
+            <p className="text-[10px] sm:text-xs text-[#A3A3A3] tracking-wider hidden sm:block">Organize your clubs, teams, and seasons</p>
           </div>
-          <div className="ml-auto">
+          <div className="flex-shrink-0">
             <button data-testid="add-club-btn" onClick={() => { setShowClubForm(true); setEditingClub(null); setClubName(''); }}
-              className="flex items-center gap-2 bg-[#007AFF] hover:bg-[#005bb5] text-white px-5 py-2.5 font-bold tracking-wider uppercase text-xs transition-colors">
-              <Plus size={16} weight="bold" /> Add Club
+              className="flex items-center gap-2 bg-[#007AFF] hover:bg-[#005bb5] text-white px-3 sm:px-5 py-2 sm:py-2.5 font-bold tracking-wider uppercase text-xs transition-colors">
+              <Plus size={16} weight="bold" /> <span className="hidden sm:inline">Add Club</span>
             </button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
         {/* Club Form */}
         {showClubForm && (
           <form onSubmit={handleSaveClub} data-testid="club-form"
-            className="bg-[#141414] border border-white/10 p-6">
+            className="bg-[#141414] border border-white/10 p-5 sm:p-6">
             <h3 className="text-sm font-bold uppercase tracking-wider text-white mb-4">
               {editingClub ? 'Edit Club' : 'New Soccer Club'}
             </h3>
-            <div className="flex gap-3">
+            <div className="flex flex-col sm:flex-row gap-3">
               <input data-testid="club-name-input" type="text" value={clubName}
                 onChange={(e) => setClubName(e.target.value)}
                 placeholder="e.g., Lakeshore FC" autoFocus
                 className="flex-1 bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none" required />
-              <button data-testid="submit-club-btn" type="submit"
-                className="bg-[#007AFF] hover:bg-[#005bb5] text-white px-6 py-3 font-bold tracking-wider uppercase text-xs transition-colors">
-                {editingClub ? 'Save' : 'Create'}
-              </button>
-              <button type="button" onClick={() => { setShowClubForm(false); setEditingClub(null); }}
-                className="px-4 py-3 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors text-xs font-bold uppercase">
-                Cancel
-              </button>
+              <div className="flex gap-3">
+                <button data-testid="submit-club-btn" type="submit"
+                  className="flex-1 sm:flex-none bg-[#007AFF] hover:bg-[#005bb5] text-white px-6 py-3 font-bold tracking-wider uppercase text-xs transition-colors">
+                  {editingClub ? 'Save' : 'Create'}
+                </button>
+                <button type="button" onClick={() => { setShowClubForm(false); setEditingClub(null); }}
+                  className="flex-1 sm:flex-none px-4 py-3 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors text-xs font-bold uppercase">
+                  Cancel
+                </button>
+              </div>
             </div>
           </form>
         )}
@@ -420,9 +422,9 @@ const ClubManager = () => {
       {/* Club Share Modal */}
       {shareClub && (
         <div data-testid="club-share-overlay" onClick={() => setShareClub(null)}
-          className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center px-4">
+          className="fixed inset-0 bg-black/70 z-[100] overflow-y-auto p-4 sm:flex sm:items-center sm:justify-center">
           <div onClick={(e) => e.stopPropagation()}
-            className="bg-[#141414] border border-white/10 max-w-lg w-full p-6">
+            className="bg-[#141414] border border-white/10 max-w-lg w-full p-6 mx-auto my-4 sm:my-0">
             <div className="flex items-start justify-between mb-4">
               <div>
                 <h3 className="text-xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
@@ -483,9 +485,9 @@ const ClubManager = () => {
       {/* Promote Modal */}
       {promoteTarget && (
         <div data-testid="promote-modal-overlay" onClick={() => !promoting && setPromoteTarget(null)}
-          className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center px-4">
+          className="fixed inset-0 bg-black/70 z-[100] overflow-y-auto p-4 sm:flex sm:items-center sm:justify-center">
           <form onClick={(e) => e.stopPropagation()} onSubmit={handlePromote}
-            className="bg-[#141414] border border-white/10 max-w-lg w-full p-6">
+            className="bg-[#141414] border border-white/10 max-w-lg w-full p-6 mx-auto my-4 sm:my-0">
             <div className="flex items-center gap-3 mb-2">
               <ArrowsClockwise size={22} className="text-[#10B981]" weight="bold" />
               <h3 className="text-2xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>

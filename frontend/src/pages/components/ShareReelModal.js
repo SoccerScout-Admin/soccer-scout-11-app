@@ -16,9 +16,9 @@ const ShareReelModal = ({
   if (!collectionModalOpen) return null;
   return (
     <div data-testid="reel-modal-overlay" onClick={() => !creatingCollection && setCollectionModalOpen(false)}
-      className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center px-4">
+      className="fixed inset-0 bg-black/70 z-[200] overflow-y-auto p-4 sm:flex sm:items-center sm:justify-center">
       <div onClick={(e) => e.stopPropagation()}
-        className="bg-[#141414] border border-white/10 max-w-lg w-full p-6 rounded-lg">
+        className="bg-[#141414] border border-white/10 max-w-lg w-full p-6 rounded-lg mx-auto my-4 sm:my-0">
         <div className="flex items-center gap-2 mb-2">
           <FilmStrip size={22} weight="bold" className="text-[#A855F7]" />
           <h3 className="text-2xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
