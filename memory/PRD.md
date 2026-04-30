@@ -45,6 +45,19 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### PWA (Progressive Web App) + Admin Promotion (Apr 30, 2026)
+- **testcoach@demo.com promoted to `admin`** role via mongosh so `/api/coach-pulse/send-weekly` can be triggered. Verified endpoint returns `{sent: 0, skipped: 0}` as expected (no active subscribers yet).
+- **PWA manifest** at `/manifest.json` — name "Soccer Scout", `display: standalone`, portrait-primary orientation, brand colors `#0A0A0A`/`#007AFF`, 2 app shortcuts (New Match + Coach Network).
+- **App icons** generated via Pillow (backend dep reused): `favicon.png` (64px), `apple-touch-icon.png` (180px), `icon-192.png`, `icon-512.png` — all marked `any maskable` for safe zone cropping on Android.
+- **Service worker** at `/service-worker.js` — minimal pass-through (no response caching) just to satisfy the installability requirement. Videos and AI analyses must always be fresh.
+- **index.html updated** — new title "Soccer Scout — AI Match Analysis for Coaches", updated theme-color, manifest link, Apple PWA meta tags (`apple-mobile-web-app-capable`, status-bar-style, title), `viewport-fit=cover` for modern phones.
+- **`components/PWAInstallPrompt.js`** — non-intrusive bottom-right prompt with two flows:
+  - Chrome/Edge/Android: captures `beforeinstallprompt`, shows an "Install" button that triggers the native UA prompt
+  - iOS Safari: fallback hint ("tap Share → Add to Home Screen") with phosphor icons since iOS has no programmatic install
+  - Dismissals remembered in `localStorage` for 14 days — never nags
+- Service worker registered in App.js via `navigator.serviceWorker.register()` (only in production builds to avoid dev-server conflicts).
+- Manifest, icons, SW all verified serving at `200 OK`.
+
 ### Mobile Responsiveness Fix (Apr 29, 2026) — Critical bug fix
 **User report**: "Create buttons are not working. Modal opens but does not create (nothing happens). Mobile Chrome browser."
 

@@ -19,6 +19,7 @@ import MatchInsights from './pages/MatchInsights';
 import SeasonTrends from './pages/SeasonTrends';
 import PlayerSeasonTrends from './pages/PlayerSeasonTrends';
 import CoachNetwork from './pages/CoachNetwork';
+import PWAInstallPrompt from './components/PWAInstallPrompt';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
@@ -49,9 +50,19 @@ function App() {
     setIsAuthenticated(!!token);
   }, []);
 
+  // Register service worker so the app is installable
+  useEffect(() => {
+    if ('serviceWorker' in navigator && process.env.NODE_ENV === 'production') {
+      navigator.serviceWorker.register('/service-worker.js').catch(() => {
+        // Silently ignore; SW is nice-to-have for installability
+      });
+    }
+  }, []);
+
   return (
     <div className="App">
       <BrowserRouter>
+        <PWAInstallPrompt />
         <Routes>
           <Route path="/auth" element={<AuthPage setIsAuthenticated={setIsAuthenticated} />} />
           <Route
