@@ -1,0 +1,54 @@
+{
+  "summary": "Backend testing for Live Coaching voice-annotations (Whisper + Gemini). Created /app/backend/tests/test_voice_annotations.py with 11 test cases covering auth gating, cross-user 404 isolation, empty/oversized audio rejection, real Whisper+Gemini end-to-end (using /tmp/voice.wav), source='voice' surfacing in GET annotations, in-process classify-fallback unit tests, and Whisper missing-key 503 path. 10/11 PASS, 1 intentionally skipped (in-process monkeypatch cannot propagate to remote uvicorn — covered by the dedicated in-process unit tests instead). Full backend regression: 105/106 pass + 1 skipped — no regressions vs prior 95/95 baseline.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/annotations/video/{video_id}",
+        "issue": "The Annotation Pydantic model in routes/annotations.py has no `source` field and uses ConfigDict(extra='ignore'), so the persisted `source: 'voice'` is stripped from API responses. The voice annotation IS surfaced alongside manual ones (spec satisfied), but the frontend cannot tell voice from manual annotations from this endpoint — only via the immediate POST /api/voice-annotations response. If AnnotationsSidebar wants a mic icon next to voice items after a page reload, add `source: Optional[str] = None` to the Annotation model."
+      },
+      {
+        "endpoint": "POST /api/voice-annotations",
+        "issue": "Spec mentioned GET /api/annotations/{video_id} but the actual route is /api/annotations/video/{video_id}. Not a code bug — just calling out the path discrepancy in the spec."
+      },
+      {
+        "endpoint": "POST /api/voice-annotations",
+        "issue": "Audio size validated AFTER fully reading bytes into memory (`audio.read()` then check len > 25MB). A malicious 25MB+ upload is fully buffered before the 413 is returned. Consider streaming + early termination or relying on FastAPI's `max_request_size` middleware. Low priority — Whisper limit aligns and current behaviour is correct, just memory-inefficient."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_voice_annotations.py",
+    "/app/test_reports/pytest/iter9_voice.xml",
+    "/app/test_reports/pytest/iter9_full.xml"
+  ],
+  "action_items": [
+    "(Optional, minor) Add `source: Optional[str] = None` to the Annotation Pydantic model in /app/backend/routes/annotations.py so GET /api/annotations/video/{video_id} surfaces source='voice' for downstream UI differentiation. Without this, voice-vs-manual differentiation only works on the immediate POST response, not on subsequent reloads.",
+    "(Optional) Document the GET endpoint as /api/annotations/video/{video_id} (not /api/annotations/{video_id} as in the original spec) in any future feature briefs.",
+    "(Cosmetic) routes/voice_annotations.py:85 — the chained `.lstrip('```json').lstrip('```').rstrip('```')` is fragile because lstrip/rstrip strips characters not substrings. e.g. lstrip('```json') would strip any leading combo of `,j,s,o,n. Replace with: `if cleaned.startswith('```'): cleaned = cleaned.split('```',2)[1].lstrip('json').strip(); if cleaned.endswith('```'): cleaned = cleaned[:-3].strip()` or use a regex. Currently works for well-formed Gemini output but could mis-trim edge cases."
+  ],
+  "critical_code_review_comments": [
+    "[CORRECTNESS] routes/voice_annotations.py:85 strips markdown code-fences using lstrip/rstrip with a multi-char arg. lstrip('```json') treats the arg as a CHARACTER SET, not a substring — it removes any leading combo of backtick, j, s, o, n. For well-formed Gemini responses this happens to work, but a transcript starting with 'jsonp' would be mangled if echoed in the response. Recommend regex r'^```(?:json)?\\s*' / r'\\s*```$' or split-based parsing.",
+    "[ARCHITECTURE] routes/annotations.py:Annotation model uses ConfigDict(extra='ignore') and lacks `source` and `transcript` and `classification_confidence` fields. The voice annotation is persisted with these extras, but they are stripped on read. This violates the principle of least surprise — the GET endpoint silently loses fields that the POST /voice-annotations endpoint returns. Either: (a) add the missing fields to Annotation, or (b) document explicitly that voice-specific fields are only available on the immediate POST response.",
+    "[OBSERVABILITY] _classify swallows ALL exceptions (including network errors, auth errors, timeouts) and silently falls back to 'note'/0.0. This is correct defensive behaviour but makes Gemini outages invisible. Consider emitting a structured log with the error category (json-decode vs network vs auth) so ops can distinguish 'malformed response' from 'API down'. logger.info is also too low — these should be logger.warning.",
+    "[MEMORY] audio.read() loads the full 25MB into RAM before the size check. Under concurrent load this can OOM the worker. Recommend reading in chunks or trusting FastAPI's max_request_size middleware to cap at upload-time.",
+    "[MINOR] EMERGENT_KEY captured at module-import time (line 26). If the env var rotates without a server restart, the cached value is stale. Re-read on each request OR explicitly document that EMERGENT_LLM_KEY is hot-reload-unsafe."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_voice_annotations.py (NEW — 11 tests, 5 test classes covering auth/validation, real-LLM E2E, in-process classify fallback, missing-key path)"
+  ],
+  "success_rate": {
+    "backend": "100% — 10/10 actively-run voice-annotation tests pass (1 in-process patch test correctly skipped because the monkeypatch can't propagate to the remote uvicorn process — equivalent coverage provided by TestUnitClassifyFallback). Full regression 105/106 pass + 1 skip = no regressions vs prior 95/95 baseline."
+  },
+  "test_credentials": "testcoach@demo.com / password123 (admin). Cross-user 404 test creates throwaway voice_test_<uuid>@demo.com user via /api/auth/register on each run.",
+  "seed_data_creation": "Created 4 voice annotations during E2E run on video d108814f-cf70-43ee-b3e2-a2269c84aa63 — cleaned up via db.annotations.delete_many({'video_id': ..., 'source': 'voice'}) after the run (4 deleted). Throwaway secondary user accumulates 1 user per run (harmless, ~tiny). No persistent dirty data left.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Voice-annotation backend is solid. The single skipped test (TestErrorPaths::test_classify_fallback_on_malformed_json) is intentional — it monkeypatches the in-process LlmChat but the request hits the remote preview URL, so the patch doesn't propagate. Equivalent coverage is provided by TestUnitClassifyFallback which calls _classify directly in-process. The /tmp/voice.wav fixture (espeak-ng generated, 174KB) was already present and produces the expected tactical classification with confidence 0.9. If next testing agent needs to test additional scenarios, they can regenerate fresh audio via `espeak-ng 'TEXT' -w /tmp/file.wav`. Frontend testing was NOT in scope (testing_type='backend only').",
+  "rca of the issue": "No critical issues found. The single minor design concern is that the Annotation Pydantic model strips the `source` field from GET responses — discussed in backend_issues.minor and action_items. This is a deliberate-but-suboptimal choice in routes/annotations.py:Annotation rather than a regression."
+}

@@ -63,6 +63,7 @@ from routes.videos import router as videos_router
 from routes.annotation_templates import router as annotation_templates_router
 from routes.coach_pulse import router as coach_pulse_router
 from routes.push_notifications import router as push_notifications_router
+from routes.voice_annotations import router as voice_annotations_router
 
 # ===== Storage: Connection Pooling + Retry for SSL resilience =====
 
@@ -2159,7 +2160,7 @@ _pp_api.include_router(player_profile_router)
 app.include_router(_pp_api)
 
 # Mount Folders, Matches, Annotations, Analysis, Insights (CRUD-style routers)
-for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router, videos_router, annotation_templates_router, coach_pulse_router, push_notifications_router):
+for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router, videos_router, annotation_templates_router, coach_pulse_router, push_notifications_router, voice_annotations_router):
     _api = APIRouter(prefix="/api")
     _api.include_router(r)
     app.include_router(_api)

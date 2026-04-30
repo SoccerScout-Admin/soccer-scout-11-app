@@ -12,6 +12,7 @@ import TrimPanel from './components/TrimPanel';
 import ClipsSidebar from './components/ClipsSidebar';
 import AnnotationsSidebar from './components/AnnotationsSidebar';
 import AnnotationForm from './components/AnnotationForm';
+import LiveCoachingMic from './components/LiveCoachingMic';
 
 const VideoAnalysis = () => {
   const { videoId } = useParams();
@@ -590,6 +591,15 @@ const VideoAnalysis = () => {
                   {label}
                 </button>
               ))}
+              {/* Inline Live Coaching mic (desktop) */}
+              <div className="hidden sm:block">
+                <LiveCoachingMic
+                  videoId={videoId}
+                  videoCurrentTime={currentTimestamp}
+                  isMobile={false}
+                  onAnnotationAdded={(ann) => setAnnotations((prev) => [ann, ...prev])}
+                />
+              </div>
               <div className="ml-auto">
                 <button data-testid="trim-analyze-btn"
                   onClick={() => { setShowTrimPanel(!showTrimPanel); setTrimStart(0); setTrimEnd(Math.floor(videoDuration)); }}
@@ -793,6 +803,16 @@ const VideoAnalysis = () => {
         handleAiSuggest={handleAiSuggest}
         players={players}
       />
+
+      {/* Mobile FAB — Live Coaching mic */}
+      <div className="sm:hidden">
+        <LiveCoachingMic
+          videoId={videoId}
+          videoCurrentTime={currentTimestamp}
+          isMobile={true}
+          onAnnotationAdded={(ann) => setAnnotations((prev) => [ann, ...prev])}
+        />
+      </div>
     </div>
   );
 };
