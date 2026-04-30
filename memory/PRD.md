@@ -1,5 +1,22 @@
 # Soccer Scout - Product Requirements Document
 
+## What's Been Implemented
+
+### React Page Refactor — Dashboard / MatchDetail / VideoAnalysis (Apr 30, 2026 — iter13)
+**Long-term-maintainability cleanup. Pure frontend decomposition — no behavior changes, no API changes.**
+
+**Line-count reductions** (2229 → 1294, **-42%**):
+- `Dashboard.js`: 750 → 373 (**-50%**)
+- `MatchDetail.js`: 646 → 336 (**-48%**)
+- `VideoAnalysis.js`: 835 → 585 (**-30%**)
+
+**14 new focused components + 1 hook module** under `/app/frontend/src/pages/components/`:
+- Dashboard: `DashboardHeader.js`, `FolderSidebar.js`, `MatchCard.js`, `CreateMatchModal.js`, `FolderFormModal.js`, `ShareFolderModal.js`, `BulkActionBar.js`
+- MatchDetail: `UploadPanel.js`, `DeletedVideosDrawer.js`, `ConfirmReuploadModal.js`, `RosterSection.js`
+- VideoAnalysis: `ClipCreateForm.js`, `VideoToolbar.js`, `DataIntegrityBanner.js`, `hooks/useClipActions.js` (exports `useClipShare`, `useClipCollection`, `useClipTagging` — encapsulating ~150 lines of state + handlers pulled out of VideoAnalysis)
+
+**Verified**: testing_agent_v3_fork iter13 — 97% (31/32 testids verified), login → dashboard → folder CRUD → match CRUD → match detail → roster (add-player + csv-import) → admin/mentions/non-existent-video all render without React crashes or missing-testid regressions. Test artefacts seeded and cleaned. Lint clean.
+
 ## Problem Statement
 Build a site to upload soccer match videos for in-depth game analysis. Features include video uploading, match creation, AI analysis of gameplay, manual annotations, video clipping/trimming, and downloadable highlights.
 
