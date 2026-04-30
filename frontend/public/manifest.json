@@ -1,6 +1,6 @@
 {
-  "name": "Soccer Scout",
-  "short_name": "Soccer Scout",
+  "name": "Soccer Scout 11",
+  "short_name": "Scout 11",
   "description": "AI-powered soccer match video analysis, player tracking, and highlights — built for coaches.",
   "start_url": "/",
   "display": "standalone",

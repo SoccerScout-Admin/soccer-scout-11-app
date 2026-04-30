@@ -66,13 +66,13 @@ def _render_mention_email(
       </td></tr>
       <tr><td style="padding:20px 28px;border-top:1px solid rgba(255,255,255,0.08);">
         <p style="color:#666;font-size:11px;line-height:1.5;margin:0;">
-          You received this because {mentioner_name} mentioned you on a Soccer Scout reel.
+          You received this because {mentioner_name} mentioned you on a Soccer Scout 11 reel.
           Replies aren't monitored — reply to {mentioner_name} directly.
         </p>
       </td></tr>
     </table>
     <p style="color:#444;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;margin:16px 0 0;">
-      Powered by Soccer Scout
+      Powered by Soccer Scout 11
     </p>
   </td></tr>
 </table>

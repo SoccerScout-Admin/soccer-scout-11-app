@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
-import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield, ChartLineUp, Globe, UploadSimple, At } from '@phosphor-icons/react';
+import { Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield, ChartLineUp, Globe, UploadSimple, At } from '@phosphor-icons/react';
 import CoachPulseCard from './components/CoachPulseCard';
 
 const Dashboard = () => {
@@ -249,8 +249,8 @@ const Dashboard = () => {
       <header className="sticky top-0 z-50 bg-[#0A0A0A] border-b border-white/10 px-4 sm:px-6 py-3 sm:py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <Play size={28} weight="fill" className="text-[#007AFF] flex-shrink-0 sm:w-8 sm:h-8" />
-            <h1 className="text-xl sm:text-3xl font-bold truncate" style={{ fontFamily: 'Bebas Neue' }}>SOCCER SCOUT</h1>
+            <img src="/logo-mark-96.png" alt="Soccer Scout 11" data-testid="dashboard-logo"
+              className="h-7 sm:h-9 w-auto flex-shrink-0" />
           </div>
           <div className="flex items-center gap-2 sm:gap-6 flex-shrink-0">
             <button data-testid="clubs-nav-btn" onClick={() => navigate('/clubs')}

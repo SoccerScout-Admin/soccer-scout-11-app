@@ -75,7 +75,7 @@ async def send_test(current_user: dict = Depends(get_current_user)):
     """Send a ping to all of the current user's registered devices."""
     result = await send_to_user(
         user_id=current_user["id"],
-        title="Soccer Scout — test push",
+        title="Soccer Scout 11 — test push",
         body="Push notifications are working. You'll be notified when AI analysis finishes.",
         url="/",
     )

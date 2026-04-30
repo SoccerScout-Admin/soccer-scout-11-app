@@ -38,7 +38,7 @@ def _og_html(title: str, description: str, og_image_url: str, spa_url: str) -> s
     <meta property="og:type" content="article" />
     <meta property="og:title" content="{e_title}" />
     <meta property="og:description" content="{e_desc}" />
-    <meta property="og:site_name" content="Soccer Scout" />
+    <meta property="og:site_name" content="Soccer Scout 11" />
     <meta property="og:image" content="{e_img}" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
@@ -77,7 +77,7 @@ async def og_folder(share_token: str, request: Request):
     title = f"{folder['name']} — Match Film"
     description = (
         f"{match_count} {'match' if match_count == 1 else 'matches'} of game film, "
-        f"AI analysis, and clips shared by {coach} on Soccer Scout."
+        f"AI analysis, and clips shared by {coach} on Soccer Scout 11."
     )
     spa_url = f"/shared/{share_token}"
     image_url = f"{_public_base(request)}/api/og/folder/{share_token}/image.png"
@@ -145,7 +145,7 @@ async def og_clip(share_token: str, request: Request):
     title = " — ".join(title_parts)
     description = (
         f"{mins}:{secs:02d} clip of {clip.get('clip_type', 'highlight')} "
-        f"shared by {coach} on Soccer Scout."
+        f"shared by {coach} on Soccer Scout 11."
     )
     spa_url = f"/clip/{share_token}"
     image_url = f"{_public_base(request)}/api/og/clip/{share_token}/image.png"
@@ -204,7 +204,7 @@ async def og_clip_collection(share_token: str, request: Request):
 
     title = coll.get("title") or f"{n} Clips"
     description = (
-        f"A reel of {n} game-film clip{'s' if n != 1 else ''} curated by {coach} on Soccer Scout."
+        f"A reel of {n} game-film clip{'s' if n != 1 else ''} curated by {coach} on Soccer Scout 11."
     )
     spa_url = f"/clips/{share_token}"
     image_url = f"{_public_base(request)}/api/og/clip-collection/{share_token}/image.png"
@@ -278,7 +278,7 @@ async def og_player(share_token: str, request: Request):
     )
     description = (
         f"Player dossier for {name}. {clip_count} clip{'s' if clip_count != 1 else ''} "
-        f"on Soccer Scout, shared by {coach}."
+        f"on Soccer Scout 11, shared by {coach}."
     )
 
     spa_url = f"/shared-player/{share_token}"
@@ -367,7 +367,7 @@ async def og_club(share_token: str, request: Request):
     title = club["name"]
     description = (
         f"{team_count} team{'s' if team_count != 1 else ''} across the seasons. "
-        f"Public club home shared by {coach} on Soccer Scout."
+        f"Public club home shared by {coach} on Soccer Scout 11."
     )
     spa_url = f"/shared-club/{share_token}"
     image_url = f"{_public_base(request)}/api/og/club/{share_token}/image.png"

@@ -173,7 +173,7 @@ def render_team_card(
 
     # Bottom-right brand
     brand_font = _load_font(FONT_BOLD, 22)
-    brand = "SOCCER SCOUT"
+    brand = "SOCCER SCOUT 11"
     bbox = draw.textbbox((0, 0), brand, font=brand_font)
     bw = bbox[2] - bbox[0]
     draw.text((W - bw - 64, H - 56), brand, font=brand_font, fill=WHITE)
@@ -246,7 +246,7 @@ def render_folder_card(
 
     # Brand
     brand_font = _load_font(FONT_BOLD, 22)
-    brand = "SOCCER SCOUT"
+    brand = "SOCCER SCOUT 11"
     bw = draw.textbbox((0, 0), brand, font=brand_font)[2]
     draw.text((W - bw - 64, H - 56), brand, font=brand_font, fill=WHITE)
     draw.ellipse((W - bw - 84, H - 50, W - bw - 72, H - 38), fill=ACCENT)
@@ -327,7 +327,7 @@ def render_clip_card(
 
     # Brand
     brand_font = _load_font(FONT_BOLD, 22)
-    brand = "SOCCER SCOUT"
+    brand = "SOCCER SCOUT 11"
     draw.text((64, H - 56), brand, font=brand_font, fill=WHITE)
     draw.ellipse((44, H - 50, 56, H - 38), fill=ACCENT)
 
@@ -455,7 +455,7 @@ def render_player_card(
                   font=coach_font, fill=(120, 120, 120))
 
     brand_font = _load_font(FONT_BOLD, 22)
-    brand = "SOCCER SCOUT"
+    brand = "SOCCER SCOUT 11"
     bw = draw.textbbox((0, 0), brand, font=brand_font)[2]
     draw.text((W - bw - 64, H - 56), brand, font=brand_font, fill=WHITE)
     draw.ellipse((W - bw - 84, H - 50, W - bw - 72, H - 38), fill=ACCENT)

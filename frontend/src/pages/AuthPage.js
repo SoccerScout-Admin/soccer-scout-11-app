@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API } from '../App';
-import { Play, User, Lock, Envelope } from '@phosphor-icons/react';
+import { User, Lock, Envelope } from '@phosphor-icons/react';
 
 const AuthPage = ({ setIsAuthenticated }) => {
   const [isLogin, setIsLogin] = useState(true);
@@ -47,10 +47,8 @@ const AuthPage = ({ setIsAuthenticated }) => {
     <div className="min-h-screen flex items-center justify-center p-6" style={{ background: 'linear-gradient(to bottom, #0A0A0A 0%, #141414 100%)' }}>
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="flex items-center justify-center mb-4">
-            <Play size={48} weight="fill" className="text-[#007AFF]" />
-          </div>
-          <h1 className="text-5xl font-bold mb-2" style={{ fontFamily: 'Bebas Neue' }}>SOCCER SCOUT</h1>
+          <img src="/logo-mark-256.png" alt="Soccer Scout 11" data-testid="auth-logo"
+            className="mx-auto h-24 sm:h-28 w-auto mb-4 drop-shadow-[0_0_28px_rgba(0,122,255,0.35)]" />
           <p className="text-[#A3A3A3] text-sm tracking-wide">AI-Powered Match Analysis Platform</p>
         </div>
 

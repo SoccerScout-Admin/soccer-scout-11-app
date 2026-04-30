@@ -228,7 +228,7 @@ async def og_team_preview(share_token: str, request: Request):
     <meta property="og:type" content="profile" />
     <meta property="og:title" content="{e_title}" />
     <meta property="og:description" content="{e_desc}" />
-    <meta property="og:site_name" content="Soccer Scout" />
+    <meta property="og:site_name" content="Soccer Scout 11" />
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="{e_title}" />
