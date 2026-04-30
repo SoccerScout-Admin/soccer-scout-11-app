@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { API, getAuthHeader } from '../../App';
-import { Trophy, Plus, Trash, Check, ClipboardText, PencilSimple, X } from '@phosphor-icons/react';
+import { Trophy, Plus, Trash, Check, ClipboardText, PencilSimple, X, ShareNetwork } from '@phosphor-icons/react';
+import ShareRecapModal from './ShareRecapModal';
 
 const EVENT_TYPES = [
   { key: 'goal', label: 'Goal', color: '#10B981' },
@@ -29,6 +30,8 @@ const ManualResultForm = ({ match, players, onSaved }) => {
   const [quickGoalFlash, setQuickGoalFlash] = useState(null);
   const [finishing, setFinishing] = useState(false);
   const [aiSummary, setAiSummary] = useState(null);
+  const [shareRecapOpen, setShareRecapOpen] = useState(false);
+  const [recapShareToken, setRecapShareToken] = useState(null);
 
   /**
    * Live-match logging helper: a single tap on the Home/Away Goal buttons bumps
@@ -73,7 +76,11 @@ const ManualResultForm = ({ match, players, onSaved }) => {
     } catch { /* 404 = none yet */ }
     // Load any existing AI summary so we don't re-generate on every page load
     if (match.insights?.summary) setAiSummary(match.insights.summary);
-  }, [match.id, match.insights?.summary]);
+    // Track pre-existing share token so the Share button reflects current state
+    if (match.manual_result?.recap_share_token) {
+      setRecapShareToken(match.manual_result.recap_share_token);
+    }
+  }, [match.id, match.insights?.summary, match.manual_result?.recap_share_token]);
 
   useEffect(() => { loadExisting(); }, [loadExisting]);
 
@@ -265,13 +272,24 @@ const ManualResultForm = ({ match, players, onSaved }) => {
 
         {aiSummary && (
           <div data-testid="ai-recap" className="mt-4 bg-gradient-to-br from-[#1B0F2E] to-[#0A0A0A] border border-[#A855F7]/30 p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-7 h-7 bg-[#A855F7]/15 border border-[#A855F7]/30 flex items-center justify-center flex-shrink-0">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="#A855F7">
-                  <path d="M12 2L9.91 8.26L2 9.27L7.91 14.14L6.18 22L12 18.27L17.82 22L16.09 14.14L22 9.27L14.09 8.26L12 2Z"/>
-                </svg>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 bg-[#A855F7]/15 border border-[#A855F7]/30 flex items-center justify-center flex-shrink-0">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="#A855F7">
+                    <path d="M12 2L9.91 8.26L2 9.27L7.91 14.14L6.18 22L12 18.27L17.82 22L16.09 14.14L22 9.27L14.09 8.26L12 2Z"/>
+                  </svg>
+                </div>
+                <div className="text-[10px] tracking-[0.2em] uppercase text-[#A855F7] font-bold">AI Match Recap</div>
               </div>
-              <div className="text-[10px] tracking-[0.2em] uppercase text-[#A855F7] font-bold">AI Match Recap</div>
+              <button data-testid="share-recap-btn" onClick={() => setShareRecapOpen(true)}
+                className={`flex items-center gap-1.5 text-[10px] font-bold tracking-wider uppercase px-2.5 py-1.5 border transition-colors ${
+                  recapShareToken
+                    ? 'bg-[#10B981]/15 text-[#10B981] border-[#10B981]/30 hover:bg-[#10B981]/25'
+                    : 'bg-[#A855F7]/15 text-[#A855F7] border-[#A855F7]/30 hover:bg-[#A855F7]/25'
+                }`}>
+                <ShareNetwork size={12} weight="bold" />
+                {recapShareToken ? 'Sharing On' : 'Share'}
+              </button>
             </div>
             <p className="text-sm text-[#E5E5E5] leading-relaxed whitespace-pre-wrap">{aiSummary}</p>
           </div>
@@ -282,6 +300,10 @@ const ManualResultForm = ({ match, players, onSaved }) => {
             {error}
           </div>
         )}
+
+        <ShareRecapModal open={shareRecapOpen} matchId={match.id} initialToken={recapShareToken}
+          onClose={() => setShareRecapOpen(false)}
+          onTokenChange={setRecapShareToken} />
       </div>
     );
   }

@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 from db import db
-from services.og_card import render_folder_card, render_clip_card, render_player_card
+from services.og_card import render_folder_card, render_clip_card, render_player_card, render_match_recap_card
 from services.storage import get_object_sync
 
 router = APIRouter()
@@ -183,6 +183,93 @@ async def og_clip_image(share_token: str):
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=300"},
     )
+
+
+
+# ===== Match Recap OG =====
+
+@router.get("/og/match-recap/{share_token}")
+async def og_match_recap(share_token: str, request: Request):
+    """HTML page with OG meta tags so WhatsApp/Slack/Twitter unfurl the recap card."""
+    match = await db.matches.find_one(
+        {"manual_result.recap_share_token": share_token},
+        {"_id": 0},
+    )
+    if not match:
+        return HTMLResponse(
+            "<html><body><h1>Recap Unavailable</h1></body></html>",
+            status_code=404,
+        )
+    mr = match.get("manual_result") or {}
+    insights = match.get("insights") or {}
+    owner = await db.users.find_one({"id": match["user_id"]}, {"_id": 0, "name": 1})
+    coach = (owner or {}).get("name", "Coach")
+    _ = coach  # reserved for future subtitle use in the unfurl HTML
+    title = f"{match['team_home']} {mr.get('home_score', 0)}-{mr.get('away_score', 0)} {match['team_away']}"
+    if match.get("competition"):
+        title += f" — {match['competition']}"
+    description = (insights.get("summary") or "Final whistle. AI match recap.")[:280]
+    spa_url = f"/match-recap/{share_token}"
+    image_url = f"{_public_base(request)}/api/og/match-recap/{share_token}/image.png"
+    return HTMLResponse(_og_html(title, description, image_url, spa_url))
+
+
+@router.get("/og/match-recap/{share_token}/image.png")
+async def og_match_recap_image(share_token: str):
+    match = await db.matches.find_one(
+        {"manual_result.recap_share_token": share_token},
+        {"_id": 0},
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="Not found")
+    mr = match.get("manual_result") or {}
+    insights = match.get("insights") or {}
+    owner = await db.users.find_one({"id": match["user_id"]}, {"_id": 0, "name": 1})
+    coach = (owner or {}).get("name", "")
+
+    png = await run_in_threadpool(
+        render_match_recap_card,
+        match["team_home"],
+        match["team_away"],
+        mr.get("home_score", 0),
+        mr.get("away_score", 0),
+        match.get("competition") or "",
+        coach,
+        insights.get("summary") or "",
+        mr.get("outcome", "D"),
+    )
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+@router.get("/match-recap/public/{share_token}")
+async def get_public_match_recap(share_token: str):
+    """JSON fetch endpoint for the React SPA route /match-recap/{token}."""
+    match = await db.matches.find_one(
+        {"manual_result.recap_share_token": share_token},
+        {"_id": 0},
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="Recap not found or sharing was revoked")
+    mr = match.get("manual_result") or {}
+    insights = match.get("insights") or {}
+    owner = await db.users.find_one({"id": match["user_id"]}, {"_id": 0, "name": 1})
+    return {
+        "team_home": match["team_home"],
+        "team_away": match["team_away"],
+        "home_score": mr.get("home_score", 0),
+        "away_score": mr.get("away_score", 0),
+        "outcome": mr.get("outcome", "D"),
+        "date": match.get("date"),
+        "competition": match.get("competition") or "",
+        "coach_name": (owner or {}).get("name", ""),
+        "summary": insights.get("summary") or "",
+        "key_events": mr.get("key_events", []),
+        "finished_at": mr.get("finished_at"),
+    }
 
 
 

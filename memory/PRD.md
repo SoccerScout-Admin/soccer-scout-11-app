@@ -2,6 +2,24 @@
 
 ## What's Been Implemented
 
+### Share Recap — OG Card + Public Page (Apr 30, 2026 — iter20)
+
+**Shareable AI match recaps.** A new `Share` button appears on the AI Recap card once a match is finished. One tap generates a public link with a rich preview image (team names, big scoreline, WIN/LOSS/DRAW chip, first 3 lines of the AI narrative, Soccer Scout 11 lockup) that unfurls in WhatsApp, Slack, Twitter, iMessage.
+
+**Backend**:
+- `services/og_card.py::render_match_recap_card` — new ~100-line renderer matching the aesthetic of `render_folder_card` / `render_clip_card`. Left accent strip color follows outcome (green W / red L / amber D). Clamps long recaps to 3 lines with ellipsis.
+- `POST /api/matches/{id}/share-recap` (auth) — idempotent toggle. First call returns `{status: "shared", share_token}`; second call revokes. 400 if no AI recap yet, 404 if match not found.
+- `GET /api/og/match-recap/{token}` — public HTML unfurl with og:title / og:image / og:description meta tags.
+- `GET /api/og/match-recap/{token}/image.png` — public PNG (1200×630) with Cache-Control 300s.
+- `GET /api/match-recap/public/{token}` — public JSON feed (excludes `user_id` to avoid leaking owner info).
+
+**Frontend**:
+- New public SPA route `/match-recap/:shareToken` → `SharedMatchRecap.js` — full-width hero with outcome-tinted accent, big scoreline, AI recap block, and goal timeline. No auth required.
+- New `ShareRecapModal.js` — Enable Share flow: explanatory copy → button → share-token UI with copy, 3-channel share (WhatsApp, Twitter, Email) with pre-filled messages, and Revoke.
+- Wired Share button into the AI Recap card inside `ManualResultForm.js`. Button changes color to green "Sharing On" when active.
+
+**Verified**: **8 new pytest cases** covering 400-when-no-summary, share-toggle, 404-unknown-match, OG HTML meta-tag presence, PNG binary validity, public-JSON payload schema + no user_id leak, revoke-invalidates-URL, long-recap rendering. Live screenshot from `/match-recap/{token}` shows the full public page rendering correctly with AI narrative + WIN chip + goal timeline. Lint clean.
+
 ### Finish Match → AI Recap + Ben Buursma Promotion (Apr 30, 2026 — iter19)
 
 **Finish Match (1-tap AI recap)**

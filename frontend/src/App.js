@@ -15,6 +15,7 @@ import PlayerProfile from './pages/PlayerProfile';
 import SharedPlayerProfile from './pages/SharedPlayerProfile';
 import SharedClipCollectionView from './pages/SharedClipCollectionView';
 import SharedClubView from './pages/SharedClubView';
+import SharedMatchRecap from './pages/SharedMatchRecap';
 import MatchInsights from './pages/MatchInsights';
 import SeasonTrends from './pages/SeasonTrends';
 import PlayerSeasonTrends from './pages/PlayerSeasonTrends';
@@ -117,6 +118,7 @@ function App() {
           <Route path="/clips/:shareToken" element={<SharedClipCollectionView />} />
           <Route path="/shared-player/:shareToken" element={<SharedPlayerProfile />} />
           <Route path="/shared-club/:shareToken" element={<SharedClubView />} />
+          <Route path="/match-recap/:shareToken" element={<SharedMatchRecap />} />
           <Route
             path="/player/:playerId"
             element={

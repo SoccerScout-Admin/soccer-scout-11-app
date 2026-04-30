@@ -506,3 +506,106 @@ def render_player_card(
     out = BytesIO()
     img.save(out, format="PNG", optimize=True)
     return out.getvalue()
+
+
+
+def render_match_recap_card(
+    team_home: str,
+    team_away: str,
+    home_score: int,
+    away_score: int,
+    competition: str = "",
+    coach_name: str = "",
+    recap_text: str = "",
+    outcome: str = "D",
+) -> bytes:
+    """Render OG card for a finished match recap.
+
+    Layout: left strip accent + label "MATCH RECAP", big team-vs-team title,
+    centered scoreline (Bebas-style), one-line meta, and a clamped recap excerpt.
+    """
+    img = Image.new("RGB", (W, H), BG_BOTTOM)
+    _gradient_bg(img)
+    draw = ImageDraw.Draw(img)
+
+    # Left accent strip — green for win, red for loss, amber for draw (from home's perspective)
+    accent = (16, 185, 129) if outcome == "W" else (239, 68, 68) if outcome == "L" else (251, 191, 36)
+    draw.rectangle([(0, 0), (8, H)], fill=accent)
+
+    # Label
+    label_font = _load_font(FONT_BOLD, 22)
+    draw.text((64, 56), "MATCH RECAP", font=label_font, fill=accent)
+
+    # Team-vs-team title
+    matchup = f"{team_home} vs {team_away}"
+    title_font = _fit_text(draw, matchup, FONT_BOLD, W - 200, start_size=72, min_size=36)
+    draw.text((64, 102), matchup, font=title_font, fill=WHITE)
+    title_bbox = draw.textbbox((64, 102), matchup, font=title_font)
+    title_bottom = title_bbox[3]
+
+    # Score row — big and proud
+    score_font = _load_font(FONT_BOLD, 96)
+    score_text = f"{home_score} – {away_score}"
+    score_bbox = draw.textbbox((0, 0), score_text, font=score_font)
+    score_w = score_bbox[2] - score_bbox[0]
+    score_x = 64
+    score_y = title_bottom + 24
+    draw.text((score_x, score_y), score_text, font=score_font, fill=WHITE)
+
+    # Outcome chip beside the score
+    outcome_label = {"W": "WIN", "L": "LOSS", "D": "DRAW"}.get(outcome, "—")
+    chip_font = _load_font(FONT_BOLD, 24)
+    chip_bbox = draw.textbbox((0, 0), outcome_label, font=chip_font)
+    chip_w = chip_bbox[2] - chip_bbox[0] + 32
+    chip_h = 44
+    chip_x = score_x + score_w + 32
+    chip_y = score_y + 36
+    draw.rectangle(
+        (chip_x, chip_y, chip_x + chip_w, chip_y + chip_h),
+        fill=accent,
+    )
+    draw.text((chip_x + 16, chip_y + 8), outcome_label, font=chip_font, fill=(0, 0, 0))
+
+    # Meta line (competition · coach)
+    meta_parts = []
+    if competition:
+        meta_parts.append(competition)
+    if coach_name:
+        meta_parts.append(f"Coach {coach_name}")
+    meta_y = score_y + 110
+    if meta_parts:
+        meta_font = _load_font(FONT_REG, 26)
+        draw.text((64, meta_y), "  •  ".join(meta_parts), font=meta_font, fill=SUBTLE)
+        meta_y += 40
+
+    # Recap excerpt — wrap to 2-3 lines, ending with ellipsis if truncated
+    if recap_text:
+        recap_font = _load_font(FONT_REG, 24)
+        max_w = W - 128
+        words = recap_text.split()
+        lines = []
+        current = ""
+        for w in words:
+            test = (current + " " + w).strip()
+            if draw.textbbox((0, 0), test, font=recap_font)[2] <= max_w:
+                current = test
+            else:
+                if current:
+                    lines.append(current)
+                current = w
+            if len(lines) >= 3:
+                break
+        if current and len(lines) < 3:
+            lines.append(current)
+        # If we ran out of words mid-flight, append ellipsis to last line
+        if len(lines) >= 3 and current and current != lines[-1]:
+            lines[-1] = lines[-1].rstrip(".,;: ") + "…"
+        for i, line in enumerate(lines[:3]):
+            draw.text((64, meta_y + i * 32), line, font=recap_font, fill=(220, 220, 220))
+
+    # Brand lockup (bottom-right)
+    _paste_brand_lockup(img)
+
+    out = BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue()

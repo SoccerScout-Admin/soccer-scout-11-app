@@ -344,6 +344,45 @@ async def unlock_match(
     return {"status": "unlocked"}
 
 
+@router.post("/matches/{match_id}/share-recap")
+async def share_recap(
+    match_id: str, current_user: dict = Depends(get_current_user),
+):
+    """Generate (or revoke) a shareable token for the AI match recap.
+
+    Idempotent: calling twice toggles the share. The token unlocks
+    `GET /api/og/match-recap/{token}` and its image variant for crawler unfurls
+    (WhatsApp/Slack/Twitter) and a public web view.
+    """
+    import secrets
+    match = await db.matches.find_one(
+        {"id": match_id, "user_id": current_user["id"]}, {"_id": 0},
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    if not (match.get("insights") or {}).get("summary"):
+        raise HTTPException(
+            status_code=400,
+            detail="No AI recap to share — finish the match first to generate one.",
+        )
+
+    existing_token = (match.get("manual_result") or {}).get("recap_share_token")
+    if existing_token:
+        # Revoke
+        await db.matches.update_one(
+            {"id": match_id},
+            {"$unset": {"manual_result.recap_share_token": ""}},
+        )
+        return {"status": "revoked"}
+
+    token = secrets.token_urlsafe(16)
+    await db.matches.update_one(
+        {"id": match_id},
+        {"$set": {"manual_result.recap_share_token": token}},
+    )
+    return {"status": "shared", "share_token": token}
+
+
 # ===== Bulk match operations =====
 
 
