@@ -45,6 +45,31 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### Post-Game Spoken Summary + Auto-Reel from Voice Key Moments (Apr 30, 2026)
+**Premise**: At the final whistle, a coach taps a button, dictates a 30-90 second recap, and gets a polished match summary saved to MongoDB — plus optionally builds a shareable highlight reel from every voice-tagged key_moment with one click.
+
+**Backend** — `routes/spoken_summary.py` (200 lines):
+- `POST /api/matches/{match_id}/spoken-summary` — multipart audio upload. Whisper transcribes, persists to `match.insights.summary` + keeps original at `match.insights.spoken_transcript`. Same audio-validation rules as voice-annotations (1KB-25MB, all common codecs).
+- `POST /api/matches/{match_id}/spoken-summary/polish` — re-runs the saved spoken transcript through Gemini 2.5 Flash with a "clean it up while preserving every observation, fix grammar, remove filler" prompt. Saves polished version as the new `summary`. Tracks `summary_source` (spoken_raw vs spoken_polished) and timestamps so coaches can audit the chain.
+- `POST /api/matches/{match_id}/auto-reel` — finds all voice-source key_moment annotations, creates a clip per moment (configurable ±N seconds window, default 5/7), bundles into a `clip_collection` with a 12-char `share_token`. Idempotent: if a clip with the same start time already exists from a previous auto-reel run, reuses it (`skipped_existing` counter in the response).
+- Per-request env lookup for `EMERGENT_LLM_KEY` (consistent with voice_annotations pattern). Robust regex code-fence stripping for Gemini polish output.
+
+**Frontend** — `pages/components/SpokenSummaryPanel.js` (240 lines):
+- Two-card panel that renders at the top of `MatchInsights`:
+  - **Spoken Summary** card (purple) — Start Recording → Stop & Save (red, animate-pulse) → Transcribing (yellow + sparkle spinner) → AI Polish button (cyan with lightning icon)
+  - **Auto Highlight Reel** card (green) — Build Reel → "N clips bundled" result card → Copy share link button (with `Check` confirm state)
+- `hasVoiceKeyMoments` prop pre-disables the Auto-reel button when no qualifying tags exist (with helpful inline text: "Tag key moments via the Live Coaching mic in Video Analysis first, then come back.")
+- Raw transcript collapsible card appears below the recording controls so the coach can review what Whisper heard before clicking polish — dismissible with X icon
+- `onSummaryUpdated` callback updates the MatchInsights' "Verdict" section live without page reload
+- Wired into `MatchInsights.js` — fetches `/annotations/video/{video_id}` to count voice key_moments and gate the Build Reel button accordingly
+
+**End-to-end verified** with real espeak-ng audio:
+- Raw transcript: "Today was a tough match against Express FC. Our boys came out flat in the first half but really stepped it up in the second..."
+- Gemini-polished: "Today's match against Express FC proved to be a challenging contest for our squad. The team started the first half with a noticeable lack of intensity, appearing flat on the pitch. However, there was a significant improvement in the second half..." (coherent 3-paragraph summary, professional tone, every observation preserved)
+- Auto-reel: 2 voice key_moments → 2 clips bundled → shareable collection link
+
+**Testing**: 105/106 backend tests still passing (1 intentional skip on flaky LLM test). Frontend smoke verified visually.
+
 ### Live Coaching Mode — Voice-Tagged Annotations (Apr 30, 2026)
 **Premise**: Coaches on the sideline can press-and-hold a mic button, speak ("Pressing trigger weak side coverage broken down"), and get a fully-classified annotation dropped on the timeline within ~2-3 seconds. No typing, no scrubbing.
 

@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
 import { ArrowLeft, Sparkle, ArrowsClockwise, TrendUp, TrendDown, Trophy, Lightbulb, Clock, Warning, Globe } from '@phosphor-icons/react';
+import SpokenSummaryPanel from './components/SpokenSummaryPanel';
 
 // Common soccer-domain stop-words that would inflate fuzzy matches across very different statements.
 const STOP_WORDS = new Set([
@@ -38,6 +39,7 @@ const MatchInsights = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [networkBenchmarks, setNetworkBenchmarks] = useState(null);
+  const [voiceKeyMomentsCount, setVoiceKeyMomentsCount] = useState(0);
 
   useEffect(() => {
     const load = async () => {
@@ -53,6 +55,16 @@ const MatchInsights = () => {
           const bench = await axios.get(`${API}/coach-network/benchmarks`, { headers: getAuthHeader() });
           if (bench.data?.ready) setNetworkBenchmarks(bench.data);
         } catch { /* not enough coaches yet */ }
+        // Count voice key_moments to enable/disable Auto-reel button
+        try {
+          if (m.data?.video_id) {
+            const annsRes = await axios.get(`${API}/annotations/video/${m.data.video_id}`, { headers: getAuthHeader() });
+            const voiceKM = (annsRes.data || []).filter(
+              (a) => a.source === 'voice' && a.annotation_type === 'key_moment'
+            ).length;
+            setVoiceKeyMomentsCount(voiceKM);
+          }
+        } catch { /* noop */ }
       } catch (err) {
         setError('Match not found');
       } finally {
@@ -123,6 +135,14 @@ const MatchInsights = () => {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-10 space-y-10">
+        <SpokenSummaryPanel
+          matchId={matchId}
+          hasVoiceKeyMoments={voiceKeyMomentsCount > 0}
+          onSummaryUpdated={(newSummary) =>
+            setInsights((prev) => prev ? { ...prev, summary: newSummary } : prev)
+          }
+        />
+
         {!insights && !generating && (
           <div data-testid="insights-empty" className="text-center py-20 border border-dashed border-white/10">
             <Sparkle size={56} weight="fill" className="text-[#A855F7] mx-auto mb-4" />
