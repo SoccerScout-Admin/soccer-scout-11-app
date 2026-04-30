@@ -45,6 +45,28 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### Admin UI + APScheduler + @-Mentions + Manual-Result Matches + Storage Dedup + Resend Domain Swap (Apr 30, 2026 — iter11)
+**7 user-requested items completed in one session.**
+
+**1. Resend sender email swap** → `SENDER_EMAIL` env → `bb@soccerscout11.com`. User added the DKIM record to DNS; propagation may take up to 48h.
+
+**2. APScheduler weekly cron** → `AsyncIOScheduler` started in `server.py` `@app.on_event("startup")`. Fires every **Monday 08:00 UTC** with 1-hour misfire grace. Re-uses `run_weekly_blast()` (refactored out of the HTTP endpoint) so both manual admin trigger and cron path hit the same idempotent logic (dedupes per ISO week via `last_sent_at`).
+
+**3. `services/storage.py` dedup** → All storage primitives (`create_storage_session`, `put_object_sync`, `get_object_sync`, `store_chunk`, `read_chunk_data`, `StorageCircuitBreaker`, etc.) now live ONLY in `services/storage.py`. `server.py` re-exports them (no code duplication). server.py: 1995 → 1900 lines.
+
+**4. Admin-promotion UI** → New `/admin/users` page (admin-only). Lists all users with role chips (OWNER/ADMIN/ANALYST/COACH), activity counters (matches/clips), and Promote/Demote buttons. Backend: `routes/admin.py` with `GET /api/admin/users` (search by `q`) and `POST /api/admin/users/{id}/role`. Self-demotion blocked if last admin. Only owners can change owner roles.
+
+**5. localStorage PII cleanup + token revalidation** → The `user` blob now stores ONLY `{id, name, role}` (email removed). On App mount, `/api/auth/me` is called to verify the token is still valid and refresh role — clears storage on 401 so stale sessions don't linger. Supports role changes taking effect without logout/login.
+
+**6. @-Mentions in clip-reel share flow** → New `GET /api/coach-network/mentionable-coaches?q=…` returns all coaches on the platform with name/email/activity flags, sorted active-first. `ShareReelModal` adds a description field + searchable autocomplete dropdown + chip UI for mentioned coaches. On collection creation, each mentioned coach gets a Resend email with a branded template ("@ Mention", title, description blockquote, "Watch the reel →" CTA) linking to `/clips/{share_token}`. `services/clip_mentions.py` handles email dispatch + `clip_mentions` collection records (deduped per collection/coach so edits don't re-spam).
+
+**7. Manual-result matches (games without video)** → Backend: `PUT/GET/DELETE /api/matches/{id}/manual-result` with `home_score`, `away_score`, `key_events: [{type, minute, team, player_id?, description}]`, `notes`. Auto-computes `outcome: W/D/L`. `Match` model exposes `has_manual_result` + `manual_result` fields. Frontend: `ManualResultForm` component in `pages/components/` shows scoreline inputs, key-event editor (player dropdown scoped to rostered players by team), and coach notes. Renders above the upload panel in MatchDetail when no video is attached. Dashboard cards without video show "No Video — Manual Result 3-1 W" badge.
+**Season Trends integration**: manual-result matches are INCLUDED in season aggregates. `per_match` entries now have `source: "manual" | "video" | "pending"`. `totals` includes `matches_with_video` + `matches_with_manual_result`. Goal events from manual-result increment the `clip_type_totals.goal` counter.
+
+**Bug fix during iter11**: GET `/api/matches/{id}/manual-result` was returning 404 after DELETE because `find_one` with inclusion projection returns `{}` which is falsy. Fixed via `if match is None` check + explicit `id: 1` in projection.
+
+**Verified**: pytest 116 baseline + 17 new tests pass (133 passed total + 4 skipped). 1 iter11 bug caught & fixed by testing agent. Frontend smoke: AdminUsers (61 users), ManualResultForm render/save, ShareReelModal autocomplete, Dashboard manual-result badge, localStorage cleanup, /auth/me revalidation, APScheduler startup log — all confirmed. Zero React console errors, zero key warnings.
+
 ### Code Quality Report Cleanup + Pipeline Extraction (Apr 30, 2026)
 **Two refactors completed in the same session (user chose option c).**
 
@@ -484,10 +506,11 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - Re-upload degraded videos (LFC vs Express 3%, LFC07BvsAYSO 8% data remaining) — filesystem chunks lost on container restart, requires user action
 
 ### Future / Backlog
-- **Admin role assignment** — currently no flow to promote a user to `admin`/`owner`. The `/coach-pulse/send-weekly` blast endpoint requires this role, so an admin-promotion mechanism is needed before the weekly blast can run.
-- **Resend domain verification** — Once a custom domain is verified at resend.com/domains, swap `SENDER_EMAIL` away from `onboarding@resend.dev` so coach pulse emails can deliver to all subscribers (not just the Resend account owner).
-- **APScheduler-based weekly cron** — currently `/send-weekly` is manual. Add a scheduled job that hits this endpoint every Monday 8am UTC with admin auth.
-- Deduplicate `services/storage.py` vs server.py's storage functions (server.py still has its own copies of `put_object_sync`, `get_object_sync`, `read_chunk_data`, etc. — works but is redundant; low-risk cleanup)
+- **Coach Pulse email delivery** — depends on Resend DNS propagation for `soccerscout11.com`. Until the DKIM TXT record is verified at resend.com/domains, emails to non-account-owners will bounce. Check `resend.com/domains` status.
+- **Mentions inbox** — currently mention emails are one-way. Future: show mentioned coaches a "You were mentioned on 3 reels" inbox in Coach Network UI (collection already stored in `clip_mentions`).
+- **Manual match events from mobile** — the current `ManualResultForm` is desktop-first. Could use a mobile-optimized quick-entry ("tap to add goal at current time") for coaches entering during matches on phones.
+- **APScheduler persistence** — currently using in-memory scheduler. On restart, missed jobs with >1h gap would be dropped (misfire_grace_time=3600). For reliability, consider a MongoDB job store so pending jobs survive restarts.
+- Resend custom domain verification polling (auto-notify when DNS is verified)
 - Address remaining "Insecure localStorage" and "Expensive JSX Computation" items from the Code Quality Report
 - Dedicated "Manage Templates" modal once a coach exceeds 6 saved templates
 - Bulk-share clips picker on Dashboard (cross-match version)

@@ -167,9 +167,9 @@ async def get_manual_result(
 ):
     match = await db.matches.find_one(
         {"id": match_id, "user_id": current_user["id"]},
-        {"_id": 0, "manual_result": 1},
+        {"_id": 0, "id": 1, "manual_result": 1},
     )
-    if not match:
+    if match is None:
         raise HTTPException(status_code=404, detail="Match not found")
     return match.get("manual_result") or {}
 
