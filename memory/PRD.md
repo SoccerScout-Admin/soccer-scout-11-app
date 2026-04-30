@@ -45,6 +45,27 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### Web Push Notifications (Apr 30, 2026)
+**Triggers**: (1) AI auto-processing finished for a match, (2) Someone opened a coach's shared clip (throttled to 1/clip/6h to prevent refresh-spam).
+
+**Backend**:
+- `services/push_notifications.py` (75 lines) — `send_to_user(user_id, title, body, url)`. Wraps `pywebpush` with `asyncio.to_thread`. Auto-prunes 410/404 (expired) subscriptions from MongoDB. Lazy-loads VAPID private key from PEM file once and caches it.
+- `routes/push_notifications.py` (76 lines) — 5 endpoints: GET `/push/vapid-key` (public), POST `/push/subscribe` (Pydantic-validated upsert keyed on endpoint), POST `/push/unsubscribe`, GET `/push/subscriptions` (count only), POST `/push/send-test`.
+- VAPID keys generated locally with `py_vapid` + `cryptography`. Public key (87-char base64url) in `.env`, private PEM at `/app/backend/vapid_private.pem` (mode 600).
+- **Integration hooks**: `server.py` `run_auto_processing` fires push when video transitions to `processing_status='completed'`. `server.py` `get_shared_clip_detail` fires throttled push to clip owner on each public view (records `last_view_notify_at` on the clip doc to enforce 6h throttle).
+- 15 pytest cases in `/app/backend/tests/test_push_notifications.py` (subscribe-upsert, cross-user isolation, unknown-endpoint delete, mocked send_to_user 410-prune, mocked send-test failure handling, auto-processing hook fired with correct args, shared-clip-view hook + throttle, configured/unconfigured states). **95/95 passing.**
+
+**Frontend**:
+- `/utils/push.js` (115 lines) — pure browser-API helpers: `isPushSupported()`, `isIosButNotInstalled()`, `requestPushPermission()`, `subscribeToPush()`, `unsubscribeFromPush()`, `sendTestPush()`, `getSubscriptionCount()`. Handles permission states cleanly (granted/denied/default).
+- `CoachPulseCard.js` — added a second row beneath the email subscribe with BellSlash/BellRinging icon + "Push notifications" + Enable/Enabled toggle. Auto-fires a confirmation push on first enable. iOS-not-installed users see a hint instead of a non-functional button.
+- `service-worker.js` rewritten with `push` (renders notification with icon/body/data.url tag) and `notificationclick` (focuses existing client → `client.navigate(url)` or opens new window) handlers.
+- App.js — service worker registration now runs in all envs (was production-only) so dev/staging users can opt into push too.
+
+**Known caveats**:
+- Push only works on HTTPS (preview/prod URL satisfies this; localhost dev does not).
+- iOS Safari requires the PWA to be installed (added to home screen) before push subscriptions are allowed — the UI surfaces this requirement in-place.
+- Resend sandbox + push are independent — both can be enabled per-coach.
+
 ### PWA (Progressive Web App) + Admin Promotion (Apr 30, 2026)
 - **testcoach@demo.com promoted to `admin`** role via mongosh so `/api/coach-pulse/send-weekly` can be triggered. Verified endpoint returns `{sent: 0, skipped: 0}` as expected (no active subscribers yet).
 - **PWA manifest** at `/manifest.json` — name "Soccer Scout", `display: standalone`, portrait-primary orientation, brand colors `#0A0A0A`/`#007AFF`, 2 app shortcuts (New Match + Coach Network).

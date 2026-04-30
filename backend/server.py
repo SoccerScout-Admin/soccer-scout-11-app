@@ -2191,6 +2191,31 @@ async def get_shared_clip_detail(share_token: str):
     players = []
     if clip.get("player_ids"):
         players = await db.players.find({"id": {"$in": clip["player_ids"]}}, {"_id": 0, "id": 1, "name": 1, "number": 1, "profile_pic_url": 1}).to_list(20)
+
+    # Fire push notification to the clip owner (throttled: max 1 per clip per 6h)
+    try:
+        from services.push_notifications import send_to_user as _send_push
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        last_notified = clip.get("last_view_notify_at")
+        now = _dt.now(_tz.utc)
+        throttle_ok = not last_notified or (
+            now - _dt.fromisoformat(str(last_notified).replace("Z", "+00:00"))
+        ) > _td(hours=6)
+        if throttle_ok:
+            clip_title = (clip.get("title") or "Shared clip")[:60]
+            await _send_push(
+                user_id=clip["user_id"],
+                title="Someone watched your clip",
+                body=f'"{clip_title}" was just opened.',
+                url=f"/clip/{share_token}",
+            )
+            await db.clips.update_one(
+                {"share_token": share_token},
+                {"$set": {"last_view_notify_at": now.isoformat()}},
+            )
+    except Exception as _e:
+        logger.info("push notify (clip view) skipped: %s", _e)
+
     return {"clip": clip, "match": match, "owner": owner.get("name") if owner else "Coach", "players": players}
 
 # ===== Auto-clip from AI Markers =====

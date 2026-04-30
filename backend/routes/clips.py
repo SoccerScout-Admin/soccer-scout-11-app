@@ -94,26 +94,9 @@ async def get_shared_clip(share_token: str):
     if clip.get("player_ids"):
         players = await db.players.find({"id": {"$in": clip["player_ids"]}}, {"_id": 0, "id": 1, "name": 1, "number": 1, "profile_pic_url": 1}).to_list(20)
 
-    # Fire push notification to the clip owner (throttled: max 1/clip/6h to avoid refresh spam)
-    try:
-        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-        last_notified = clip.get("last_view_notify_at")
-        now = _dt.now(_tz.utc)
-        throttle_ok = not last_notified or (
-            now - _dt.fromisoformat(last_notified.replace("Z", "+00:00"))
-        ) > _td(hours=6)
-        if throttle_ok:
-            from services.push_notifications import send_to_user
-            title = "Someone watched your clip"
-            clip_title = (clip.get("title") or "Shared clip")[:60]
-            body = f'"{clip_title}" was just opened.'
-            await send_to_user(clip["user_id"], title, body, url=f"/clip/{share_token}")
-            await db.clips.update_one(
-                {"share_token": share_token},
-                {"$set": {"last_view_notify_at": now.isoformat()}},
-            )
-    except Exception:
-        pass  # Notifications are best-effort; never block the public clip view
+    # NOTE: push-on-view hook lives in server.py's get_shared_clip_detail (which is the
+    # actively-mounted handler). This routes/clips.py file is currently NOT mounted via
+    # include_router; keeping it as the canonical home for future clip-route migration.
 
     return {
         "clip": clip,

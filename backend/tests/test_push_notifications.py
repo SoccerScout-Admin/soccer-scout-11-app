@@ -100,9 +100,10 @@ class TestPushCRUD:
         c2 = api_client.get(f"{BASE_URL}/api/push/subscriptions", headers=auth_headers).json()["count"]
         assert c2 == c0
 
-    def test_unsubscribe_missing_endpoint_returns_400(self, api_client, auth_headers):
+    def test_unsubscribe_missing_endpoint_returns_422(self, api_client, auth_headers):
+        # FastAPI Pydantic validation returns 422 for missing required fields
         r = api_client.post(f"{BASE_URL}/api/push/unsubscribe", json={}, headers=auth_headers)
-        assert r.status_code == 400
+        assert r.status_code == 422
 
     def test_unsubscribe_unknown_endpoint_deletes_zero(self, api_client, auth_headers):
         r = api_client.post(f"{BASE_URL}/api/push/unsubscribe",

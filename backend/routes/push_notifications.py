@@ -23,6 +23,10 @@ class SubscribeInput(BaseModel):
     keys: PushKeys
 
 
+class UnsubscribeInput(BaseModel):
+    endpoint: str = Field(..., min_length=10, max_length=500)
+
+
 @router.get("/push/vapid-key")
 async def get_vapid_public_key():
     """Public endpoint — frontend needs this to call pushManager.subscribe()."""
@@ -52,12 +56,9 @@ async def subscribe(input: SubscribeInput, current_user: dict = Depends(get_curr
 
 
 @router.post("/push/unsubscribe")
-async def unsubscribe(input: dict, current_user: dict = Depends(get_current_user)):
-    endpoint = (input or {}).get("endpoint")
-    if not endpoint:
-        raise HTTPException(status_code=400, detail="endpoint required")
+async def unsubscribe(input: UnsubscribeInput, current_user: dict = Depends(get_current_user)):
     result = await db.push_subscriptions.delete_one(
-        {"endpoint": endpoint, "user_id": current_user["id"]}
+        {"endpoint": input.endpoint, "user_id": current_user["id"]}
     )
     return {"deleted": result.deleted_count}
 
