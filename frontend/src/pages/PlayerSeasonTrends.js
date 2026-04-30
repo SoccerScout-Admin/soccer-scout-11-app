@@ -66,7 +66,7 @@ const PlayerSeasonTrends = () => {
       }
     };
     load();
-  }, [playerId, teamId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [playerId, teamId]);
 
   const handleGenerate = async () => {
     setGenerating(true); setError(null);
@@ -218,7 +218,7 @@ const PlayerSeasonTrends = () => {
                   </div>
                   <ul className="space-y-2 text-sm text-white">
                     {data.report.team_role.strengths_for_team.map((s, i) => (
-                      <li key={i} className="flex gap-2"><span className="text-[#10B981] flex-shrink-0">+</span><span>{s}</span></li>
+                      <li key={`tstr-${i}-${s?.slice?.(0, 32) || ''}`} className="flex gap-2"><span className="text-[#10B981] flex-shrink-0">+</span><span>{s}</span></li>
                     ))}
                   </ul>
                 </div>
@@ -229,7 +229,7 @@ const PlayerSeasonTrends = () => {
                   </div>
                   <ul className="space-y-2 text-sm text-white">
                     {data.report.team_role.opportunities_for_team.map((o, i) => (
-                      <li key={i} className="flex gap-2"><span className="text-[#FBBF24] flex-shrink-0">→</span><span>{o}</span></li>
+                      <li key={`topp-${i}-${o?.slice?.(0, 32) || ''}`} className="flex gap-2"><span className="text-[#FBBF24] flex-shrink-0">→</span><span>{o}</span></li>
                     ))}
                   </ul>
                 </div>
@@ -274,7 +274,7 @@ const PlayerSeasonTrends = () => {
                   <div className="text-[10px] tracking-wider uppercase text-[#A3A3A3] mb-3">Scout Attributes</div>
                   <div className="space-y-3">
                     {data.report.recruiter_view.scout_attributes.map((a, i) => (
-                      <div key={i} data-testid={`attribute-${i}`}>
+                      <div key={`attr-${a.attribute || i}`} data-testid={`attribute-${i}`}>
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-xs font-semibold text-white">{a.attribute}</span>
                           <span className="text-xs text-[#FBBF24] font-bold tracking-wider">{a.rating}/10</span>
@@ -298,7 +298,7 @@ const PlayerSeasonTrends = () => {
                   <h3 className="text-xs font-bold tracking-wider uppercase text-[#10B981] mb-2">Where they excel</h3>
                   <ul className="space-y-2 text-sm text-white">
                     {data.report.recruiter_view.where_they_excel.map((e, i) => (
-                      <li key={i} className="flex gap-2"><span className="text-[#10B981] flex-shrink-0">★</span><span>{e}</span></li>
+                      <li key={`excel-${i}-${e?.slice?.(0, 32) || ''}`} className="flex gap-2"><span className="text-[#10B981] flex-shrink-0">★</span><span>{e}</span></li>
                     ))}
                   </ul>
                 </div>
@@ -306,7 +306,7 @@ const PlayerSeasonTrends = () => {
                   <h3 className="text-xs font-bold tracking-wider uppercase text-[#EF4444] mb-2">Development priorities</h3>
                   <ul className="space-y-2 text-sm text-white">
                     {data.report.recruiter_view.development_priorities.map((d, i) => (
-                      <li key={i} className="flex gap-2"><span className="text-[#EF4444] flex-shrink-0">!</span><span>{d}</span></li>
+                      <li key={`devp-${i}-${d?.slice?.(0, 32) || ''}`} className="flex gap-2"><span className="text-[#EF4444] flex-shrink-0">!</span><span>{d}</span></li>
                     ))}
                   </ul>
                 </div>
@@ -328,7 +328,7 @@ const PlayerSeasonTrends = () => {
                 </p>
                 <div className="space-y-3">
                   {data.report.next_level_checklist.milestones.map((m, i) => (
-                    <div key={i} data-testid={`milestone-${i}`}
+                    <div key={`mile-${i}-${m.milestone?.slice?.(0, 32) || ''}`} data-testid={`milestone-${i}`}
                       className="bg-[#0A0A0A] border border-white/10 p-4 flex items-start gap-4">
                       <div className="w-8 h-8 rounded-full bg-[#10B981]/15 border border-[#10B981]/30 flex items-center justify-center flex-shrink-0">
                         <span className="text-sm font-bold text-[#10B981]" style={{ fontFamily: 'Bebas Neue' }}>{i + 1}</span>
@@ -363,7 +363,7 @@ const PlayerSeasonTrends = () => {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {data.report.recommended_drills.map((d, i) => (
-                    <div key={i} data-testid={`drill-${i}`}
+                    <div key={`drill-${i}-${d?.slice?.(0, 32) || ''}`} data-testid={`drill-${i}`}
                       className="bg-[#141414] border border-white/10 p-4 flex items-start gap-3 hover:border-[#FBBF24]/40 transition-colors">
                       <span className="text-2xl font-bold text-[#FBBF24] flex-shrink-0" style={{ fontFamily: 'Bebas Neue' }}>
                         {String(i + 1).padStart(2, '0')}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
@@ -44,11 +44,36 @@ const MatchDetail = () => {
     }
   };
 
+  const fetchMatch = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/matches/${matchId}`, { headers: getAuthHeader() });
+      setMatch(response.data);
+    } catch (err) {
+      console.error('Failed to fetch match:', err);
+    }
+  }, [matchId]);
+
+  const fetchPlayers = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/players/match/${matchId}`, { headers: getAuthHeader() });
+      setPlayers(response.data);
+    } catch (err) {
+      console.error('Failed to fetch players:', err);
+    }
+  }, [matchId]);
+
+  const fetchTeams = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/teams`, { headers: getAuthHeader() });
+      setTeams(response.data);
+    } catch (err) { console.error('Failed to fetch teams:', err); }
+  }, []);
+
   useEffect(() => {
     fetchMatch();
     fetchPlayers();
     fetchTeams();
-  }, [matchId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fetchMatch, fetchPlayers, fetchTeams]);
 
   // Fetch video processing status when match has a video
   useEffect(() => {
@@ -79,31 +104,6 @@ const MatchDetail = () => {
     } finally {
       setDeleting(false);
     }
-  };
-
-  const fetchMatch = async () => {
-    try {
-      const response = await axios.get(`${API}/matches/${matchId}`, { headers: getAuthHeader() });
-      setMatch(response.data);
-    } catch (err) {
-      console.error('Failed to fetch match:', err);
-    }
-  };
-
-  const fetchPlayers = async () => {
-    try {
-      const response = await axios.get(`${API}/players/match/${matchId}`, { headers: getAuthHeader() });
-      setPlayers(response.data);
-    } catch (err) {
-      console.error('Failed to fetch players:', err);
-    }
-  };
-
-  const fetchTeams = async () => {
-    try {
-      const response = await axios.get(`${API}/teams`, { headers: getAuthHeader() });
-      setTeams(response.data);
-    } catch (err) { console.error('Failed to fetch teams:', err); }
   };
 
   const handleAddPlayer = async (e) => {

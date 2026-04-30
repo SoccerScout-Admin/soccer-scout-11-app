@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
@@ -69,25 +69,24 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const user = getCurrentUser();
 
-  useEffect(() => { fetchMatches(); fetchFolders(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const fetchMatches = async () => {
+  const fetchMatches = useCallback(async () => {
     try {
       const response = await axios.get(`${API}/matches`, { headers: getAuthHeader() });
       setMatches(response.data);
     } catch (err) { console.error('Failed to fetch matches:', err); }
-  };
+  }, []);
 
-  const fetchFolders = async () => {
+  const fetchFolders = useCallback(async () => {
     try {
       const response = await axios.get(`${API}/folders`, { headers: getAuthHeader() });
       setFolders(response.data);
-      // Auto-expand all folders on first load
       const expanded = {};
       response.data.forEach(f => { expanded[f.id] = true; });
       setExpandedFolders(prev => ({ ...expanded, ...prev }));
     } catch (err) { console.error('Failed to fetch folders:', err); }
-  };
+  }, []);
+
+  useEffect(() => { fetchMatches(); fetchFolders(); }, [fetchMatches, fetchFolders]);
 
   const handleCreateMatch = async (e) => {
     e.preventDefault();

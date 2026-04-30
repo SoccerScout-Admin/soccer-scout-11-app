@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API } from '../App';
@@ -15,11 +15,7 @@ const SharedView = () => {
   const [loading, setLoading] = useState(true);
   const videoRef = useRef(null);
 
-  useEffect(() => {
-    fetchFolder();
-  }, [shareToken]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const fetchFolder = async () => {
+  const fetchFolder = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/shared/${shareToken}`);
       setFolderData(res.data);
@@ -28,7 +24,11 @@ const SharedView = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [shareToken]);
+
+  useEffect(() => {
+    fetchFolder();
+  }, [fetchFolder]);
 
   const openMatch = async (matchId) => {
     setSelectedMatch(matchId);

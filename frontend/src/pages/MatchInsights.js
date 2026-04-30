@@ -186,7 +186,7 @@ const MatchInsights = () => {
                   {insights.strengths.map((s, i) => {
                     const match = networkBenchmarks?.common_strengths_across_coaches?.find((n) => fuzzyMatchPattern(s, n.text));
                     return (
-                      <li key={i} className="text-white leading-relaxed flex gap-2 flex-wrap">
+                      <li key={`mstr-${i}-${s?.slice?.(0, 32) || ''}`} className="text-white leading-relaxed flex gap-2 flex-wrap">
                         <span className="text-[#10B981] flex-shrink-0">+</span>
                         <span className="flex-1">{s}{match && <NetworkChip count={match.count} kind={`strength-${i}`} />}</span>
                       </li>
@@ -203,7 +203,7 @@ const MatchInsights = () => {
                   {insights.weaknesses.map((w, i) => {
                     const match = networkBenchmarks?.common_weaknesses_across_coaches?.find((n) => fuzzyMatchPattern(w, n.text));
                     return (
-                      <li key={i} className="text-white leading-relaxed flex gap-2 flex-wrap">
+                      <li key={`mwk-${i}-${w?.slice?.(0, 32) || ''}`} className="text-white leading-relaxed flex gap-2 flex-wrap">
                         <span className="text-[#EF4444] flex-shrink-0">−</span>
                         <span className="flex-1">{w}{match && <NetworkChip count={match.count} kind={`weakness-${i}`} />}</span>
                       </li>
@@ -221,7 +221,7 @@ const MatchInsights = () => {
               </div>
               <div className="space-y-2">
                 {insights.coaching_points.map((p, i) => (
-                  <div key={i} data-testid={`coaching-${i}`}
+                  <div key={`cpt-${i}-${p?.slice?.(0, 32) || ''}`} data-testid={`coaching-${i}`}
                     className="bg-[#141414] border border-white/10 p-4 flex items-start gap-3">
                     <span className="text-2xl font-bold text-[#FBBF24] flex-shrink-0" style={{ fontFamily: 'Bebas Neue' }}>
                       {String(i + 1).padStart(2, '0')}
@@ -241,7 +241,7 @@ const MatchInsights = () => {
                 </div>
                 <div className="space-y-2">
                   {insights.key_moments.map((m, i) => (
-                    <div key={i} data-testid={`moment-${i}`}
+                    <div key={`mmt-${m.time ?? i}-${i}`} data-testid={`moment-${i}`}
                       className="bg-[#141414] border border-white/10 p-4 flex items-start gap-4 hover:border-[#007AFF]/40 transition-colors">
                       <div className="flex items-center gap-1.5 text-[#007AFF] font-bold tracking-wider text-sm flex-shrink-0">
                         <Clock size={14} weight="bold" />

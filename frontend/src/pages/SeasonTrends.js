@@ -173,7 +173,7 @@ const SeasonTrends = () => {
                     <div className="text-xs tracking-wider uppercase text-[#A855F7] mb-2">Patterns Emerging</div>
                     <ul className="space-y-1.5 text-sm">
                       {data.season_verdict.trends.map((t, i) => (
-                        <li key={i} className="text-[#E5E5E5]">• {t}</li>
+                        <li key={`trend-${i}-${t?.slice?.(0, 32) || ''}`} className="text-[#E5E5E5]">• {t}</li>
                       ))}
                     </ul>
                   </div>
@@ -183,7 +183,7 @@ const SeasonTrends = () => {
                     <div className="text-xs tracking-wider uppercase text-[#FBBF24] mb-2">Focus For Training</div>
                     <ul className="space-y-1.5 text-sm">
                       {data.season_verdict.focus_for_training.map((f, i) => (
-                        <li key={i} className="text-[#E5E5E5]">→ {f}</li>
+                        <li key={`focus-${i}-${f?.slice?.(0, 32) || ''}`} className="text-[#E5E5E5]">→ {f}</li>
                       ))}
                     </ul>
                   </div>
@@ -203,7 +203,7 @@ const SeasonTrends = () => {
                 ) : (
                   <ul className="space-y-2 text-sm">
                     {data.recurring_strengths.map((s, i) => (
-                      <li key={i} className="text-white flex justify-between gap-2">
+                      <li key={`strength-${s.text?.slice?.(0, 48) || i}`} className="text-white flex justify-between gap-2">
                         <span className="flex-1">{s.text}</span>
                         <span className="text-[10px] text-[#10B981] tracking-wider uppercase font-bold">{s.count}x</span>
                       </li>
@@ -221,7 +221,7 @@ const SeasonTrends = () => {
                 ) : (
                   <ul className="space-y-2 text-sm">
                     {data.recurring_weaknesses.map((w, i) => (
-                      <li key={i} className="text-white flex justify-between gap-2">
+                      <li key={`weakness-${w.text?.slice?.(0, 48) || i}`} className="text-white flex justify-between gap-2">
                         <span className="flex-1">{w.text}</span>
                         <span className="text-[10px] text-[#EF4444] tracking-wider uppercase font-bold">{w.count}x</span>
                       </li>

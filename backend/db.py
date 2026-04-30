@@ -3,8 +3,6 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pathlib import Path
 from dotenv import load_dotenv
 import os
-import uuid
-from datetime import datetime, timezone
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -19,5 +17,7 @@ APP_NAME = "soccer-analysis"
 JWT_SECRET = os.environ.get("JWT_SECRET")
 CHUNK_SIZE = 10 * 1024 * 1024  # 10MB per chunk
 CHUNK_STORAGE_DIR = "/var/video_chunks"
-SERVER_BOOT_ID = str(uuid.uuid4())
-SERVER_BOOT_TIME = datetime.now(timezone.utc).isoformat()
+
+# SERVER_BOOT_ID/TIME moved to runtime.py — re-exported for backwards compatibility
+# with any existing imports (tests or route modules).
+from runtime import SERVER_BOOT_ID, SERVER_BOOT_TIME  # noqa: E402,F401

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
 import { API } from '../App';
@@ -13,11 +13,7 @@ const SharedClipView = () => {
   const [copied, setCopied] = useState(false);
   const [showShareMenu, setShowShareMenu] = useState(false);
 
-  useEffect(() => {
-    fetchClip();
-  }, [shareToken]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const fetchClip = async () => {
+  const fetchClip = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/shared/clip/${shareToken}`);
       setClipData(res.data);
@@ -26,7 +22,11 @@ const SharedClipView = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [shareToken]);
+
+  useEffect(() => {
+    fetchClip();
+  }, [fetchClip]);
 
   const formatTime = (seconds) => {
     const m = Math.floor(seconds / 60);

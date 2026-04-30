@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
@@ -20,32 +20,32 @@ const TeamRoster = () => {
   const [eligible, setEligible] = useState([]);
   const [eligibleLoading, setEligibleLoading] = useState(false);
 
-  useEffect(() => {
-    fetchTeam();
-    fetchPlayers();
-    fetchClubs();
-  }, [teamId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const fetchTeam = async () => {
+  const fetchTeam = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/teams/${teamId}`, { headers: getAuthHeader() });
       setTeam(res.data);
     } catch (err) { console.error('Failed to fetch team:', err); }
-  };
+  }, [teamId]);
 
-  const fetchPlayers = async () => {
+  const fetchPlayers = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/teams/${teamId}/players`, { headers: getAuthHeader() });
       setPlayers(res.data);
     } catch (err) { console.error('Failed to fetch players:', err); }
-  };
+  }, [teamId]);
 
-  const fetchClubs = async () => {
+  const fetchClubs = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/clubs`, { headers: getAuthHeader() });
       setClubs(res.data);
     } catch (err) { console.error('Failed to fetch clubs:', err); }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchTeam();
+    fetchPlayers();
+    fetchClubs();
+  }, [fetchTeam, fetchPlayers, fetchClubs]);
 
   const handleAddPlayer = async (e) => {
     e.preventDefault();

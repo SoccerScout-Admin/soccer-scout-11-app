@@ -185,8 +185,8 @@ const CoachNetwork = () => {
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie data={levelChart} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label>
-                        {levelChart.map((entry, i) => (
-                          <Cell key={i} fill={entry.color} />
+                        {levelChart.map((entry) => (
+                          <Cell key={`lvl-${entry.name}`} fill={entry.color} />
                         ))}
                       </Pie>
                       <Tooltip contentStyle={{ background: '#0A0A0A', border: '1px solid #333' }} />
@@ -208,7 +208,7 @@ const CoachNetwork = () => {
                 ) : (
                   <ul className="space-y-2 text-sm">
                     {data.common_strengths_across_coaches.map((s, i) => (
-                      <li key={i} className="text-white flex justify-between gap-2">
+                      <li key={`cstr-${i}-${s.text?.slice?.(0, 32) || ''}`} className="text-white flex justify-between gap-2">
                         <span className="flex-1">{s.text}</span>
                         <span className="text-[10px] text-[#10B981] tracking-wider uppercase font-bold">{s.count} coaches</span>
                       </li>
@@ -225,7 +225,7 @@ const CoachNetwork = () => {
                 ) : (
                   <ul className="space-y-2 text-sm">
                     {data.common_weaknesses_across_coaches.map((w, i) => (
-                      <li key={i} className="text-white flex justify-between gap-2">
+                      <li key={`cwk-${i}-${w.text?.slice?.(0, 32) || ''}`} className="text-white flex justify-between gap-2">
                         <span className="flex-1">{w.text}</span>
                         <span className="text-[10px] text-[#EF4444] tracking-wider uppercase font-bold">{w.count} coaches</span>
                       </li>

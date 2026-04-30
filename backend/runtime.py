@@ -5,5 +5,7 @@ frontend detect restarts mid-processing (so the UI can re-poll video processing
 status instead of assuming stale progress).
 """
 import uuid
+from datetime import datetime, timezone
 
 SERVER_BOOT_ID: str = str(uuid.uuid4())
+SERVER_BOOT_TIME: str = datetime.now(timezone.utc).isoformat()
