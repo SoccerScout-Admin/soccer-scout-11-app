@@ -12,7 +12,6 @@ The mention record is persisted to `clip_mentions` so we can:
 """
 import logging
 import os
-import asyncio
 from datetime import datetime, timezone
 from db import db
 
@@ -81,17 +80,17 @@ def _render_mention_email(
 
 
 async def _send_via_resend(to_email: str, subject: str, html: str) -> str:
-    """Fire a Resend email in a thread so we don't block the event loop."""
-    import resend
-    resend.api_key = _resend_api_key()
-    params = {
-        "from": _sender_email(),
-        "to": [to_email],
-        "subject": subject,
-        "html": html,
-    }
-    resp = await asyncio.to_thread(resend.Emails.send, params)
-    return (resp or {}).get("id", "")
+    """Route through the email queue so quota-exhausted emails get queued for
+    automatic retry instead of silently dropped."""
+    from services.email_queue import send_or_queue
+    result = await send_or_queue(to_email, subject, html, kind="clip_mention")
+    if result["status"] == "sent":
+        return result.get("email_id", "")
+    if result["status"] == "quota_deferred":
+        logger.info("[mentions] email queued for %s — quota deferred", to_email)
+        return f"queued:{result.get('queue_id', '')}"
+    # permanent failure — re-raise so the caller can log and skip
+    raise RuntimeError(result.get("error") or "email send failed")
 
 
 async def notify_coach_mentions(

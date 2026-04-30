@@ -1850,7 +1850,8 @@ async def startup():
     asyncio.create_task(resume_interrupted_processing())
     # Periodic sweeper for permanently purging soft-deleted videos
     asyncio.create_task(deleted_video_sweeper())
-    # APScheduler — weekly Coach Pulse blast every Monday 08:00 UTC
+    # APScheduler — weekly Coach Pulse blast every Monday 08:00 UTC +
+    # email-queue retry every 30 min for quota-deferred sends.
     start_coach_pulse_scheduler()
 
 
@@ -1859,34 +1860,54 @@ _scheduler = None
 
 
 def start_coach_pulse_scheduler():
-    """Start an AsyncIOScheduler that fires the Coach Pulse weekly blast every
-    Monday at 08:00 UTC. Idempotent: running multiple times is a no-op because
-    the endpoint itself dedupes by ISO week."""
+    """Start an AsyncIOScheduler that fires:
+      1) Coach Pulse weekly blast every Monday 08:00 UTC
+      2) Email-queue retry sweep every 30 minutes (for quota-deferred sends)
+    Idempotent: running multiple times is a no-op."""
     global _scheduler
     if _scheduler is not None:
         return
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
         from apscheduler.triggers.cron import CronTrigger
+        from apscheduler.triggers.interval import IntervalTrigger
         from routes.coach_pulse import run_weekly_blast
+        from services.email_queue import process_queue
 
-        async def _job():
+        async def _weekly_job():
             try:
                 result = await run_weekly_blast(triggered_by="apscheduler")
                 logger.info("[apscheduler] coach_pulse weekly blast result: %s", result)
             except Exception as e:
                 logger.error("[apscheduler] coach_pulse weekly blast crashed: %s", e)
 
+        async def _queue_retry_job():
+            try:
+                result = await process_queue(limit=200)
+                if result["processed"] > 0:
+                    logger.info("[apscheduler] email queue retry: %s", result)
+            except Exception as e:
+                logger.error("[apscheduler] email queue retry crashed: %s", e)
+
         _scheduler = AsyncIOScheduler(timezone="UTC")
         _scheduler.add_job(
-            _job,
+            _weekly_job,
             CronTrigger(day_of_week="mon", hour=8, minute=0, timezone="UTC"),
             id="coach_pulse_weekly",
             replace_existing=True,
-            misfire_grace_time=3600,  # If the server was down at 08:00, run within the next hour
+            misfire_grace_time=3600,
+        )
+        _scheduler.add_job(
+            _queue_retry_job,
+            IntervalTrigger(minutes=30),
+            id="email_queue_retry",
+            replace_existing=True,
+            misfire_grace_time=600,
         )
         _scheduler.start()
-        logger.info("[apscheduler] scheduler started — coach_pulse_weekly cron: Mon 08:00 UTC")
+        logger.info(
+            "[apscheduler] scheduler started — coach_pulse_weekly (Mon 08:00 UTC) + email_queue_retry (every 30 min)"
+        )
     except Exception as e:
         logger.error("[apscheduler] failed to start scheduler: %s", e)
 

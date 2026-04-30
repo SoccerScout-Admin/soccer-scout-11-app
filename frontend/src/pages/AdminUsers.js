@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
 import { ArrowLeft, Shield, MagnifyingGlass, ShieldCheck, UserMinus, Warning, Crown, EnvelopeSimple, X } from '@phosphor-icons/react';
+import EmailQueueCard from './components/EmailQueueCard';
 
 const ROLE_META = {
   owner: { label: 'OWNER', color: '#F472B6', icon: Crown },
@@ -103,6 +104,8 @@ const AdminUsers = () => {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8">
+        <EmailQueueCard />
+
         {/* Search */}
         <form onSubmit={onSearchSubmit} className="flex gap-2 mb-6">
           <div className="relative flex-1">

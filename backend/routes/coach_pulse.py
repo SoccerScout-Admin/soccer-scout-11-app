@@ -11,7 +11,6 @@ Endpoints:
 """
 from __future__ import annotations
 import os
-import asyncio
 import logging
 import secrets
 from datetime import datetime, timezone, timedelta
@@ -95,17 +94,20 @@ async def _build_email_for(user: dict, network: dict, network_ready: bool) -> tu
 
 
 async def _send_via_resend(to_email: str, subject: str, html: str) -> str:
+    """Route through the email queue so quota-exceeded failures get retried
+    automatically instead of lost. Returns empty string if the email was
+    queued (still a successful, user-visible outcome)."""
+    from services.email_queue import send_or_queue
     if not resend.api_key:
         raise HTTPException(status_code=503, detail="Resend not configured (RESEND_API_KEY missing)")
-    try:
-        result = await asyncio.to_thread(
-            resend.Emails.send,
-            {"from": SENDER_EMAIL, "to": [to_email], "subject": subject, "html": html},
-        )
-        return result.get("id", "")
-    except Exception as e:
-        logger.error("Resend send failed for %s: %s", to_email, e)
-        raise HTTPException(status_code=502, detail=f"Email send failed: {e}")
+    result = await send_or_queue(to_email, subject, html, kind="coach_pulse")
+    if result["status"] == "sent":
+        return result.get("email_id", "")
+    if result["status"] == "quota_deferred":
+        logger.warning("Coach Pulse email queued for %s (quota exhausted)", to_email)
+        return ""  # Signal success — the queue will retry
+    # permanent failure
+    raise HTTPException(status_code=502, detail=f"Email send failed: {result.get('error')}")
 
 
 # ---------- subscription endpoints ----------

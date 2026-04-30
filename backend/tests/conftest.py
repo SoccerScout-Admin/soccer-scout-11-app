@@ -2,6 +2,7 @@ import pytest
 import requests
 import os
 import sys
+import asyncio
 
 # Allow tests that import backend modules directly (e.g. routes.voice_annotations)
 _BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -12,6 +13,17 @@ BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://video-scout-11.previ
 
 TEST_EMAIL = os.environ.get('TEST_EMAIL', 'testcoach@demo.com')
 TEST_PASSWORD = os.environ.get('TEST_PASSWORD', 'password123')
+
+
+# ONE module-scoped event loop shared across async tests. Motor caches its IO
+# executor against the first loop it sees, so creating per-file loops in
+# individual test modules causes "Event loop is closed" intermittent failures.
+# Tests should call `run_async(coro)` instead of managing their own loops.
+_SHARED_LOOP = asyncio.new_event_loop()
+
+
+def run_async(coro):
+    return _SHARED_LOOP.run_until_complete(coro)
 
 
 @pytest.fixture(scope="session")

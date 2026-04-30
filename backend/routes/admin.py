@@ -88,3 +88,39 @@ async def update_role(
     )
     logger.info("User %s role changed: %s → %s (by %s)", target.get("email"), target_role, new_role, current_user.get("email"))
     return {"user_id": user_id, "role": new_role}
+
+
+# ===== Email Queue (quota-exhaustion fallback) =====
+
+
+@router.get("/admin/email-queue")
+async def get_email_queue(
+    status: Optional[str] = None,
+    limit: int = 50,
+    current_user: dict = Depends(get_current_user),
+):
+    """Admin view of the email queue — shows depth + recent entries."""
+    _require_admin(current_user)
+    from services.email_queue import get_queue_depth, list_queue
+    depth = await get_queue_depth()
+    items = await list_queue(limit=max(1, min(limit, 200)), status=status)
+    return {"depth": depth, "items": items}
+
+
+@router.post("/admin/email-queue/process")
+async def trigger_queue_process(current_user: dict = Depends(get_current_user)):
+    """Manually fire the retry pass. Useful when quota resets unexpectedly."""
+    _require_admin(current_user)
+    from services.email_queue import process_queue
+    return await process_queue(limit=200)
+
+
+@router.post("/admin/email-queue/{queue_id}/retry")
+async def retry_queue_item(queue_id: str, current_user: dict = Depends(get_current_user)):
+    """Retry one queued email right now."""
+    _require_admin(current_user)
+    from services.email_queue import retry_now
+    result = await retry_now(queue_id)
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Queue item not found")
+    return result

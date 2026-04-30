@@ -2,6 +2,25 @@
 
 ## What's Been Implemented
 
+### Email Queue with Quota Fallback + Admin Visibility (Apr 30, 2026 — iter14)
+**Problem**: Resend free tier has hard monthly/daily limits. Naive sends raised `HTTPException(502)` and the email was lost forever.
+
+**Solution**: New `services/email_queue.py` wraps every send. On Resend error, the email is persisted to a MongoDB `email_queue` collection with one of three statuses:
+- `sent` — delivered, email_id recorded
+- `quota_deferred` — Resend returned a quota-style error (regex match on `daily_quota|monthly_quota|rate_limit|429|too_many_requests`). Retries every 1h via APScheduler (quota usually resets at UTC midnight).
+- `failed` — non-quota transient error. Backoff: 1h → 4h → 12h → 24h → 72h. After 5 attempts: `failed_permanent` (no further retries).
+
+**Integration**:
+- `routes/coach_pulse.py::_send_via_resend` and `services/clip_mentions.py::_send_via_resend` now delegate to `send_or_queue`. Callers treat `quota_deferred` as success (the queue will retry) — users don't see an error.
+- New APScheduler job `email_queue_retry` runs every 30 min and calls `process_queue()`, which finds any `quota_deferred|failed` email whose `next_retry_at <= now` and re-attempts it.
+- 3 new admin endpoints in `routes/admin.py`: `GET /api/admin/email-queue` (depth + recent items), `POST /api/admin/email-queue/process` (manual trigger), `POST /api/admin/email-queue/{id}/retry` (single-item retry).
+
+**Admin UI**: New `EmailQueueCard` component renders at the top of `/admin/users` — 4-stat grid (Sent / Quota Deferred / Retrying / Failed), "Retry All Now" button, recent-15 list with per-item status chips and inline "Retry" buttons for non-sent items. Card border turns amber when there are queued items.
+
+**Shared-loop fix**: moved the module-scoped asyncio event loop from `test_push_notifications.py` into `conftest.py::run_async` so multiple async test files in the same pytest session share one loop (Motor caches its IO executor against the first loop it sees).
+
+**Verified**: pytest 153 → **165/165 passing** (+12 new email-queue tests: quota detection regex, backoff progression, send-success / quota-deferred / transient-failure paths, retry-and-send, skip-future-retries, give-up-after-5-failures, 4 HTTP endpoint tests). Screenshot confirms Admin UI renders correctly with 8 already-queued real emails showing SENT status.
+
 ### React Page Refactor — Dashboard / MatchDetail / VideoAnalysis (Apr 30, 2026 — iter13)
 **Long-term-maintainability cleanup. Pure frontend decomposition — no behavior changes, no API changes.**
 

@@ -11,20 +11,14 @@ Covers:
 - Auto-processing hook import smoke + shared clip throttle hook
 """
 import os
-import asyncio
 import uuid
 import importlib
 import requests
 import pytest
 
+from tests.conftest import run_async as _run  # shared event loop — see conftest
+
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://video-scout-11.preview.emergentagent.com").rstrip("/")
-
-# A single, module-scoped event loop. Motor caches its IO executor against the first loop it
-# sees, so re-creating loops with asyncio.run() causes "Event loop is closed" the second time.
-_LOOP = asyncio.new_event_loop()
-
-def _run(coro):
-    return _LOOP.run_until_complete(coro)
 
 # ---------- Helpers ----------
 
