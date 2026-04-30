@@ -4,6 +4,7 @@ import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
 import { Plus, VideoCamera, CaretRight, Globe, ChartLineUp } from '@phosphor-icons/react';
 import CoachPulseCard from './components/CoachPulseCard';
+import GameOfTheWeekBanner from './components/GameOfTheWeekBanner';
 import DashboardHeader from './components/DashboardHeader';
 import FolderSidebar from './components/FolderSidebar';
 import MatchCard from './components/MatchCard';
@@ -312,6 +313,7 @@ const Dashboard = () => {
 
           {!selectionMode && (
             <>
+              <GameOfTheWeekBanner />
               <CoachPulseCard />
               <button data-testid="coach-network-cta-card" onClick={() => navigate('/coach-network')}
                 className="w-full mb-6 group flex items-center gap-4 bg-gradient-to-r from-[#1B0F2E] via-[#0F1A2E] to-[#0A0A0A] border border-[#A855F7]/30 hover:border-[#A855F7]/60 hover:from-[#2A1547] transition-all px-5 py-4 text-left">

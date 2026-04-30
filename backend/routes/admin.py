@@ -124,3 +124,84 @@ async def retry_queue_item(queue_id: str, current_user: dict = Depends(get_curre
     if result.get("status") == "not_found":
         raise HTTPException(status_code=404, detail="Queue item not found")
     return result
+
+
+# ===== Game of the Week =====
+
+
+@router.post("/admin/game-of-the-week/set")
+async def set_game_of_the_week(
+    payload: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    """Admin-only. Promote one shared match recap to every coach's dashboard for 7 days.
+
+    Expects body: {"share_token": "<token from POST /matches/{id}/share-recap>"}.
+    The pick is stored in the single-doc `featured` collection so lookups are O(1).
+    Previous pick is replaced; featured_at resets the 7-day clock.
+    """
+    _require_admin(current_user)
+    share_token = (payload or {}).get("share_token")
+    if not share_token:
+        raise HTTPException(status_code=400, detail="share_token is required")
+
+    match = await db.matches.find_one(
+        {"manual_result.recap_share_token": share_token},
+        {"_id": 0, "id": 1, "team_home": 1, "team_away": 1, "manual_result": 1, "insights": 1, "competition": 1, "date": 1},
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="No shared recap found for that token")
+
+    featured_at = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "_kind": "game_of_the_week",  # singleton discriminator
+        "share_token": share_token,
+        "match_id": match["id"],
+        "team_home": match["team_home"],
+        "team_away": match["team_away"],
+        "home_score": (match.get("manual_result") or {}).get("home_score", 0),
+        "away_score": (match.get("manual_result") or {}).get("away_score", 0),
+        "outcome": (match.get("manual_result") or {}).get("outcome", "D"),
+        "competition": match.get("competition") or "",
+        "date": match.get("date"),
+        "summary": (match.get("insights") or {}).get("summary", "")[:300],
+        "featured_at": featured_at,
+        "featured_by": current_user["id"],
+        "featured_by_name": current_user.get("name", ""),
+    }
+    await db.featured.update_one({"_kind": "game_of_the_week"}, {"$set": doc}, upsert=True)
+    return {"status": "featured", "share_token": share_token, "featured_at": featured_at}
+
+
+@router.delete("/admin/game-of-the-week")
+async def clear_game_of_the_week(current_user: dict = Depends(get_current_user)):
+    """Admin-only. Remove the current Game of the Week before its 7-day window ends."""
+    _require_admin(current_user)
+    await db.featured.delete_one({"_kind": "game_of_the_week"})
+    return {"status": "cleared"}
+
+
+@router.get("/game-of-the-week")
+async def get_game_of_the_week():
+    """Public endpoint — returns the current Game of the Week (or null if expired/unset).
+
+    Auto-expires 7 days after `featured_at`. No auth required so the Dashboard
+    banner loads without a JWT round-trip.
+    """
+    doc = await db.featured.find_one({"_kind": "game_of_the_week"}, {"_id": 0, "featured_by": 0})
+    if not doc:
+        return {"active": False}
+    featured_at = doc.get("featured_at")
+    try:
+        dt = datetime.fromisoformat(featured_at.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - dt).days
+    except Exception:
+        age_days = 0
+    if age_days >= 7:
+        # Lazily expire — clean up on read so no cron job needed
+        await db.featured.delete_one({"_kind": "game_of_the_week"})
+        return {"active": False}
+    days_remaining = 7 - age_days
+    return {"active": True, "days_remaining": days_remaining, **doc}
