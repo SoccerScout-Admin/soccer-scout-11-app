@@ -102,7 +102,10 @@ const AddPlayerForm = ({ match, teams, playerForm, setPlayerForm, onSubmit, onCa
   </div>
 );
 
-const PlayerGroup = ({ group, onDelete }) => (
+const PlayerGroup = ({ group, onDelete }) => {
+  // Non-mutating sort — avoids reordering the caller's players array on every render.
+  const sortedPlayers = [...group.players].sort((a, b) => (a.number || 99) - (b.number || 99));
+  return (
   <div>
     <div className="flex items-center gap-2 mb-3">
       <div className="w-3 h-3" style={{ backgroundColor: group.color }} />
@@ -111,7 +114,7 @@ const PlayerGroup = ({ group, onDelete }) => (
       </h4>
     </div>
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-      {group.players.sort((a, b) => (a.number || 99) - (b.number || 99)).map(player => (
+      {sortedPlayers.map(player => (
         <div key={player.id} data-testid={`player-card-${player.id}`}
           className="flex items-center gap-3 bg-[#0A0A0A] border border-white/5 px-4 py-3 group hover:border-white/10 transition-colors">
           <div className="w-8 h-8 flex items-center justify-center text-sm font-bold"
@@ -130,7 +133,8 @@ const PlayerGroup = ({ group, onDelete }) => (
       ))}
     </div>
   </div>
-);
+  );
+};
 
 const RosterSection = ({
   match, players, teams, playerGroups,

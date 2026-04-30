@@ -175,7 +175,7 @@ const SharedView = () => {
                             <Users size={14} /> Roster ({players.length})
                           </h4>
                           <div className="flex flex-wrap gap-2">
-                            {players.sort((a, b) => (a.number || 99) - (b.number || 99)).map(p => (
+                            {[...players].sort((a, b) => (a.number || 99) - (b.number || 99)).map(p => (
                               <span key={p.id} className="inline-flex items-center gap-1.5 bg-white/5 px-3 py-1.5 text-xs text-[#CCC]">
                                 <span className="text-[#007AFF] font-bold">#{p.number || '?'}</span>
                                 {p.name}

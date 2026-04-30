@@ -253,17 +253,21 @@ const Dashboard = () => {
     return result;
   }, [folders, expandedFolders]);
 
-  const displayMatches = selectedFolderId === '__none__'
-    ? matches.filter(m => !m.folder_id)
-    : selectedFolderId
-    ? matches.filter(m => m.folder_id === selectedFolderId)
-    : matches;
+  const displayMatches = useMemo(() => (
+    selectedFolderId === '__none__'
+      ? matches.filter(m => !m.folder_id)
+      : selectedFolderId
+      ? matches.filter(m => m.folder_id === selectedFolderId)
+      : matches
+  ), [matches, selectedFolderId]);
 
-  const selectedFolderName = selectedFolderId === '__none__'
-    ? 'Unsorted Matches'
-    : selectedFolderId
-    ? (folders.find(f => f.id === selectedFolderId)?.name || 'Folder')
-    : 'Match Library';
+  const selectedFolderName = useMemo(() => (
+    selectedFolderId === '__none__'
+      ? 'Unsorted Matches'
+      : selectedFolderId
+      ? (folders.find(f => f.id === selectedFolderId)?.name || 'Folder')
+      : 'Match Library'
+  ), [folders, selectedFolderId]);
 
   return (
     <div className="min-h-screen bg-[#0A0A0A]">

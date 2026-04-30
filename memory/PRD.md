@@ -2,6 +2,25 @@
 
 ## What's Been Implemented
 
+### P2 Code-Quality Cleanup + Live E2E Verification (Apr 30, 2026 — iter22)
+
+**P2 perf/correctness fixes** (user asked for C):
+- **`RosterSection.PlayerGroup`** — was calling `group.players.sort((a, b) => …)` directly inside JSX, which (a) mutates the caller's props array on every render and (b) runs sort on every re-render. Moved to a local non-mutating `[...group.players].sort(…)` assigned above the JSX. No behavior change.
+- **`SharedView` (public unauthenticated roster list)** — same in-place `.sort()` on prop array inside `.map()`. Fixed to `[...players].sort(…)`.
+- **`Dashboard`** — `displayMatches` (filters by folder) and `selectedFolderName` (folder lookup) wrapped in `useMemo` with correct deps so they don't recompute on unrelated state flips like bulk-select toggle, search token refresh, or mentions-badge re-fetch.
+
+**Live E2E verification after P2 fixes** (user asked for B):
+- Backend pytest suite: **165/165 passing, 33 skipped** (unchanged baseline).
+- Backend E2E via curl as Ben Buursma admin:
+  - Create Match → Save Manual Result (3 goal events) → `POST /matches/{id}/finish` → Gemini returned a 673-char AI recap in ~5s → `POST /share-recap` → public OG HTML has og:title + og:image + og:description + description meta tags → 1200×630 PNG (56KB) served with Cache-Control 300s → public JSON feed excludes `user_id` ✅
+  - `POST /matches/{id}/finish` twice correctly returns 409 ("Match already finished") ✅
+  - `POST /matches/{id}/unlock` clears `manual_result.is_final` but PRESERVES `insights.summary` — confirmed via `GET /matches/{id}` ✅
+  - `POST /admin/game-of-the-week/set` → public `GET /game-of-the-week` returns full banner payload with `days_remaining=7`, `featured_by_name=Ben Buursma`, Gemini summary excerpt → `DELETE /admin/game-of-the-week` clears → public GET returns `{active:false}` ✅
+  - Admin Email Queue: 25 sent / 0 quota_deferred / 0 failed across 25 records ✅
+- Frontend smoke (live preview as admin): Dashboard renders with the GOTW banner visible ("ARSENAL 2-1 CHELSEA · 7D LEFT" with recap text), Coach Pulse card, Push Notifications toggle, Coach Network CTA, and both match cards — 0 page errors. Public `/match-recap/:token` renders Arsenal + Chelsea + full Gemini recap + WIN chip + goal timeline, 0 page errors.
+
+Lint clean. No regressions.
+
 ### Share Recap — OG Card + Public Page (Apr 30, 2026 — iter20)
 
 **Shareable AI match recaps.** A new `Share` button appears on the AI Recap card once a match is finished. One tap generates a public link with a rich preview image (team names, big scoreline, WIN/LOSS/DRAW chip, first 3 lines of the AI narrative, Soccer Scout 11 lockup) that unfurls in WhatsApp, Slack, Twitter, iMessage.
