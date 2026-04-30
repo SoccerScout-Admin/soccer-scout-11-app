@@ -1,7 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { Envelope, CheckCircle } from '@phosphor-icons/react';
+import { Envelope, CheckCircle, BellRinging, BellSlash } from '@phosphor-icons/react';
 import { API, getAuthHeader } from '../../App';
+import {
+  isPushSupported, isIosButNotInstalled, requestPushPermission,
+  subscribeToPush, unsubscribeFromPush, sendTestPush, getSubscriptionCount,
+} from '../../utils/push';
 
 /**
  * Email Settings card — coaches can subscribe/unsubscribe to the weekly Coach Pulse digest
@@ -12,6 +16,10 @@ const CoachPulseCard = () => {
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [testStatus, setTestStatus] = useState(null);
+  const [pushActive, setPushActive] = useState(false);
+  const [pushSupported] = useState(() => isPushSupported());
+  const [needsInstall] = useState(() => isIosButNotInstalled());
+  const [pushBusy, setPushBusy] = useState(false);
 
   const fetchSubscription = useCallback(async () => {
     try {
@@ -24,6 +32,44 @@ const CoachPulseCard = () => {
   }, []);
 
   useEffect(() => { fetchSubscription(); }, [fetchSubscription]);
+
+  // Check initial push subscription state
+  useEffect(() => {
+    (async () => {
+      if (!pushSupported) return;
+      const count = await getSubscriptionCount();
+      setPushActive(count > 0 && Notification.permission === 'granted');
+    })();
+  }, [pushSupported]);
+
+  const togglePush = async () => {
+    setPushBusy(true);
+    setTestStatus(null);
+    try {
+      if (pushActive) {
+        await unsubscribeFromPush();
+        setPushActive(false);
+      } else {
+        const perm = await requestPushPermission();
+        if (!perm.granted) {
+          setTestStatus({ kind: 'err', text: perm.reason || 'Permission denied' });
+          return;
+        }
+        await subscribeToPush();
+        setPushActive(true);
+        // Fire a confirmation ping
+        try {
+          await sendTestPush();
+          setTestStatus({ kind: 'ok', text: 'Push enabled — check your notifications' });
+        } catch { /* noop */ }
+      }
+    } catch (err) {
+      setTestStatus({ kind: 'err', text: err.response?.data?.detail || err.message || 'Push setup failed' });
+    } finally {
+      setPushBusy(false);
+      setTimeout(() => setTestStatus(null), 8000);
+    }
+  };
 
   const toggle = async () => {
     setBusy(true);
@@ -107,6 +153,36 @@ const CoachPulseCard = () => {
           </button>
         </div>
       </div>
+
+      {/* Push toggle row — only shown on browsers that support Web Push */}
+      {(pushSupported || needsInstall) && (
+        <div data-testid="push-toggle-row" className="mt-3 pt-3 border-t border-white/5 flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            {pushActive ? <BellRinging size={16} weight="bold" className="text-[#10B981] flex-shrink-0" /> : <BellSlash size={16} className="text-[#666] flex-shrink-0" />}
+            <div className="min-w-0">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-white">Push notifications</div>
+              <div className="text-[10px] text-[#A3A3A3] truncate">
+                {needsInstall
+                  ? 'iOS: install the app to your home screen first'
+                  : pushActive
+                  ? 'Alerts for AI analysis done · shared-clip views'
+                  : "Get a tap when AI finishes or someone opens your shared clip"}
+              </div>
+            </div>
+          </div>
+          {pushSupported && !needsInstall && (
+            <button data-testid="push-toggle-btn"
+              onClick={togglePush} disabled={pushBusy}
+              className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 border transition-colors flex-shrink-0 ${
+                pushActive
+                  ? 'bg-[#10B981] text-white border-[#10B981] hover:bg-[#059669]'
+                  : 'text-[#10B981] border-[#10B981]/40 hover:bg-[#10B981]/15'
+              } disabled:opacity-50`}>
+              {pushBusy ? '...' : pushActive ? 'Enabled' : 'Enable'}
+            </button>
+          )}
+        </div>
+      )}
       {testStatus && (
         <div data-testid="coach-pulse-status"
           className={`mt-3 text-[11px] px-3 py-2 ${

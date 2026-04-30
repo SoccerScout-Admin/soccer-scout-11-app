@@ -50,9 +50,9 @@ function App() {
     setIsAuthenticated(!!token);
   }, []);
 
-  // Register service worker so the app is installable
+  // Register service worker so the app is installable AND push-notification-capable
   useEffect(() => {
-    if ('serviceWorker' in navigator && process.env.NODE_ENV === 'production') {
+    if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/service-worker.js').catch(() => {
         // Silently ignore; SW is nice-to-have for installability
       });

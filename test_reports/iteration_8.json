@@ -1,0 +1,51 @@
+{
+  "summary": "Backend testing for Web Push notification feature. Created /app/backend/tests/test_push_notifications.py with 15 test cases covering VAPID key endpoint, subscribe/unsubscribe upsert + cross-user isolation, send-test graceful failure, auth gating on all push routes, service-layer 410/404 auto-pruning (with mocked _send_sync), auto-processing hook import smoke, and shared-clip push hook end-to-end. 14/15 PASS. The single failure surfaced a CRITICAL DEAD-CODE BUG in the shared-clip push hook (see backend_issues.critical). Full regression: 94/95 tests pass (was 80/80 before; +15 push tests, -1 failure exposing the dead-code bug). All previously green tests still green — no regressions introduced.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/shared/clip/{share_token}",
+        "issue": "Push hook is DEAD CODE. routes/clips.py is never imported or mounted in server.py — the active handler is server.py:2184 `get_shared_clip_detail` which has NO push notification firing and NO last_view_notify_at throttle. Verified by: (1) grep -n 'from routes.clips\\|clips_router' server.py returns ZERO results, (2) hitting /api/shared/clip/{valid_token} returns 200 but last_view_notify_at remains None even after reset, (3) inspecting server.py:2184-2194 confirms the duplicate handler has no push code.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/shared/clip/{share_token} (server.py:2184 duplicate)",
+        "issue": "Two handlers defined for the same route — one in routes/clips.py (with push hook + last_view_notify_at throttle) and one in server.py:2184 (without). Even after the dead-code is fixed by mounting clips_router, FastAPI route-resolution conflict will pick whichever is registered first. Recommend deleting the server.py:2184 block and the server.py:2172 `/clips/{clip_id}/share` block, then importing clips_router into the mount loop on server.py:2162."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_push_notifications.py",
+    "/app/test_reports/pytest/iter8_full.xml",
+    "/app/test_reports/pytest/iter8_push.xml"
+  ],
+  "action_items": [
+    "Fix dead-code shared-clip push hook: in /app/backend/server.py, (a) add `from routes.clips import router as clips_router` at top and include it in the `for r in (...)` mount loop on line 2162, (b) delete the duplicate `@api_router.post('/clips/{clip_id}/share')` (server.py:2172) and `@api_router.get('/shared/clip/{share_token}')` (server.py:2184) handlers, since equivalents (with the new push hook) already live in routes/clips.py. After fix, re-run the test_shared_clip_route_is_mounted_from_routes_clips test to confirm last_view_notify_at gets populated and 2nd hit within 6h does not advance the marker.",
+    "Optional polish (services/push_notifications.py): the 24h TTL on webpush is hardcoded; consider env override. Also _send_sync swallows generic Exception with str(e)[:100] — could log the full exception for diagnosis."
+  ],
+  "critical_code_review_comments": [
+    "[CRITICAL DEAD CODE] routes/clips.py defines GET /shared/clip/{share_token}, POST /clips/{clip_id}/share, GET /shared/clip/{share_token}/video plus other handlers, but `clips_router` is never `include_router`'d in server.py. The new push notification hook (routes/clips.py:97-116) is therefore unreachable. The active route is server.py:2184 (`get_shared_clip_detail`), a stale duplicate that doesn't fire the push. This was not caught during self-verification because the route returns 200 either way — only the side-effect (push send + last_view_notify_at update) is missing.",
+    "[Architectural] server.py is 2347 lines and contains route handlers that overlap with dedicated routers in routes/. Recommend a one-time cleanup pass to delete all `@api_router.*` clip/share/folder handlers from server.py and rely solely on the per-feature routers, to prevent silent dead-code regressions like this one.",
+    "services/push_notifications.py:_send_sync uses `getattr(e.response, 'status_code', 0)` which can return 0 if pywebpush raises a non-HTTP error — pruning logic in send_to_user only matches '410' or '404' substrings, so transient network errors will never be pruned (correct behavior, but log volume could grow). Consider a separate counter for permanent vs transient failures.",
+    "routes/push_notifications.py: `unsubscribe` accepts `input: dict` (no Pydantic model) — works but inconsistent with `subscribe` which uses SubscribeInput. Add an UnsubscribeInput Pydantic model for parity and OpenAPI clarity.",
+    "routes/push_notifications.py: VAPID_PUBLIC_KEY is read at module import time (line 13). If env var changes after worker spin-up the cached value is stale — fine for current usage, just call it out."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_push_notifications.py (NEW — 15 test cases, 6 test classes)"
+  ],
+  "success_rate": {
+    "backend": "93% — 14/15 new push tests pass + 80/80 prior regression = 94/95 total. The 1 failure (test_shared_clip_route_is_mounted_from_routes_clips) is correctly catching a real dead-code bug in the shared-clip push hook integration; it should be retained as a regression guard until fixed."
+  },
+  "test_credentials": "testcoach@demo.com / password123 (loaded from /app/memory/test_credentials.md). Cross-user isolation test creates a throwaway test_push_<uuid>@demo.com user via /api/auth/register on each run.",
+  "seed_data_creation": "test_push_<uuid>@demo.com user created during cross-user isolation test (not deleted — accumulates 1 user per run; harmless but note for cleanup). Plus one fake push subscription doc keyed on a non-routable FCM-style endpoint, created and deleted within test_send_to_user_prunes_410_and_increments_removed (cleaned up on teardown). No persistent dirty data left after a successful run.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Push feature is mostly green. The single CRITICAL issue is that routes/clips.py is not registered with the FastAPI app — fix is straightforward (add 1 import + 1 line in mount loop in server.py, delete 2 duplicate route blocks). After the fix, re-run only `pytest /app/backend/tests/test_push_notifications.py::TestHookIntegration::test_shared_clip_route_is_mounted_from_routes_clips -v` to confirm. The auto-processing hook (server.py:1201-1211) was verified by code inspection — it lives directly in server.py inside run_auto_processing, imports send_to_user inline, wraps in try/except so push failures never break the AI pipeline. Could not exercise it end-to-end without uploading a video and waiting ~10min for full pipeline; recommend adding an integration test that mocks the AI calls and asserts send_to_user is invoked exactly once with title='Match analysis ready'. The 410-pruning is fully unit-tested via monkeypatching services.push_notifications._send_sync.",
+  "rca of the issue": "RCA — Shared-clip push hook is dead code:\\n  Reproduction: 1) reset last_view_notify_at=None on any clip with a share_token, 2) GET /api/shared/clip/{token}, 3) read last_view_notify_at — expected ISO timestamp, actual None.\\n  Root cause: server.py never registers clips_router. grep confirms zero references to `routes.clips` or `clips_router` in server.py. The active handler is server.py:2184 (get_shared_clip_detail), a pre-existing duplicate that lacks the new push code added to routes/clips.py.\\n  Mitigation: 2-line fix in server.py — add `from routes.clips import router as clips_router` and include it in the for-loop on line 2162. Then delete the 2 duplicate handlers in server.py (lines 2172-2194) to eliminate route ambiguity.\\n  Severity: HIGH — feature requirement '6-hour throttle on shared-clip-viewed push' is non-functional in production. Coaches will never receive notifications when their shared clips are opened, despite the UI Enable Push toggle working correctly."
+}

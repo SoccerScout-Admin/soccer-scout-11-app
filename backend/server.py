@@ -62,6 +62,7 @@ from routes.coach_network import router as coach_network_router
 from routes.videos import router as videos_router
 from routes.annotation_templates import router as annotation_templates_router
 from routes.coach_pulse import router as coach_pulse_router
+from routes.push_notifications import router as push_notifications_router
 
 # ===== Storage: Connection Pooling + Retry for SSL resilience =====
 
@@ -1197,6 +1198,18 @@ async def run_auto_processing(video_id: str, user_id: str, only_types: list = No
         )
         logger.info(f"Auto-processing {'COMPLETE' if final_status == 'completed' else 'FAILED (all types)'} for video {video_id}")
 
+        # Fire push notification (best-effort, non-blocking)
+        try:
+            from services.push_notifications import send_to_user
+            match = await db.matches.find_one({"video_id": video_id}, {"_id": 0, "team_home": 1, "team_away": 1, "id": 1})
+            if match:
+                match_label = f"{match.get('team_home','?')} vs {match.get('team_away','?')}"
+                title = "Match analysis ready" if final_status == "completed" else "Match analysis finished with issues"
+                body = f"AI tactical breakdown is ready for {match_label}." if final_status == "completed" else f"Some analyses for {match_label} didn't complete — tap to review."
+                await send_to_user(user_id, title, body, url=f"/match/{match['id']}")
+        except Exception as push_err:
+            logger.info("push notify skipped: %s", push_err)
+
     except Exception as e:
         logger.error(f"Auto-processing FAILED for video {video_id}: {e}")
         await db.videos.update_one(
@@ -2146,7 +2159,7 @@ _pp_api.include_router(player_profile_router)
 app.include_router(_pp_api)
 
 # Mount Folders, Matches, Annotations, Analysis, Insights (CRUD-style routers)
-for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router, videos_router, annotation_templates_router, coach_pulse_router):
+for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router, videos_router, annotation_templates_router, coach_pulse_router, push_notifications_router):
     _api = APIRouter(prefix="/api")
     _api.include_router(r)
     app.include_router(_api)
