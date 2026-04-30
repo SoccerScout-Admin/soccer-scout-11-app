@@ -361,7 +361,10 @@ async def delete_club(club_id: str, current_user: dict = Depends(get_current_use
 
 @router.post("/clubs/{club_id}/logo")
 async def upload_club_logo(club_id: str, file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
-    """Upload a club logo/crest"""
+    """Upload a club logo/crest. The image is auto-processed: solid-color
+    backgrounds are stripped to transparent, the crest is letterboxed into a
+    square 512x512 PNG so it renders consistently across OG cards, dashboards,
+    and shared team pages."""
     club = await db.clubs.find_one({"id": club_id, "user_id": current_user["id"]}, {"_id": 0})
     if not club:
         raise HTTPException(status_code=404, detail="Club not found")
@@ -370,12 +373,25 @@ async def upload_club_logo(club_id: str, file: UploadFile = File(...), current_u
     data = await file.read()
     if len(data) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Image too large (max 5MB)")
-    ext = file.filename.split(".")[-1] if "." in file.filename else "png"
-    storage_path = f"{APP_NAME}/clubs/{current_user['id']}/{club_id}.{ext}"
-    await run_in_threadpool(put_object_sync, storage_path, data, file.content_type)
+    # Process: bg removal + square-pad + downsample to 512x512 PNG with alpha
+    try:
+        from services.crest_pipeline import process_crest
+        processed = await run_in_threadpool(process_crest, data)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    storage_path = f"{APP_NAME}/clubs/{current_user['id']}/{club_id}.png"
+    await run_in_threadpool(put_object_sync, storage_path, processed, "image/png")
     logo_url = f"/api/clubs/{club_id}/logo/view"
-    await db.clubs.update_one({"id": club_id}, {"$set": {"logo_url": logo_url, "logo_path": storage_path}})
-    return {"url": logo_url}
+    await db.clubs.update_one(
+        {"id": club_id},
+        {"$set": {
+            "logo_url": logo_url,
+            "logo_path": storage_path,
+            "logo_processed": True,
+            "logo_size": len(processed),
+        }},
+    )
+    return {"url": logo_url, "processed_bytes": len(processed)}
 
 
 @router.get("/clubs/{club_id}/logo/view")

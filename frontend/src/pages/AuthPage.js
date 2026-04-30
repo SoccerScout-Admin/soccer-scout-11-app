@@ -1,11 +1,21 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API } from '../App';
 import { User, Lock, Envelope } from '@phosphor-icons/react';
+import '../styles/logo-intro.css';
 
 const AuthPage = ({ setIsAuthenticated }) => {
   const [isLogin, setIsLogin] = useState(true);
+  // Show the intro animation only on the first time per session — returning
+  // users skip it. Computed at mount so re-renders don't re-fire it.
+  const showIntro = useMemo(() => {
+    try {
+      if (sessionStorage.getItem('logo-intro-played')) return false;
+      sessionStorage.setItem('logo-intro-played', '1');
+      return true;
+    } catch { return false; }
+  }, []);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -48,8 +58,10 @@ const AuthPage = ({ setIsAuthenticated }) => {
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <img src="/logo-mark-256.png" alt="Soccer Scout 11" data-testid="auth-logo"
-            className="mx-auto h-24 sm:h-28 w-auto mb-4 drop-shadow-[0_0_28px_rgba(0,122,255,0.35)]" />
-          <p className="text-[#A3A3A3] text-sm tracking-wide">AI-Powered Match Analysis Platform</p>
+            className={`mx-auto h-24 sm:h-28 w-auto mb-4 drop-shadow-[0_0_28px_rgba(0,122,255,0.35)] ${showIntro ? 'logo-intro' : ''}`} />
+          <p data-testid="auth-tagline" className={`text-[#A3A3A3] text-sm tracking-wide ${showIntro ? 'logo-intro-tagline' : ''}`}>
+            AI-Powered Match Analysis Platform
+          </p>
         </div>
 
         <div className="bg-[#141414] border border-white/10 p-8">

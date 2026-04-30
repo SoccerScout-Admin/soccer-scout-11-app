@@ -45,6 +45,29 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### Logo Intro Animation + OG Lockup + Crest Pipeline (Apr 30, 2026 — iter13)
+**3 brand-polish features.**
+
+**1. Animated logo intro on first-time auth**
+- New CSS file `styles/logo-intro.css` defines `logo-fade-up` (translate+scale ease-out), `logo-glow-pulse` (drop-shadow blue glow on entrance), and `tagline-fade-in`.
+- AuthPage gates the animation behind `sessionStorage.getItem('logo-intro-played')` — fires only once per browser session.
+- Honors `prefers-reduced-motion: reduce` for accessibility.
+
+**2. OG cards embed the logo lockup**
+- `services/og_card.py` — `_load_logo_lockup()` (cached) + `_paste_brand_lockup(img, position='right'|'left')`. Clip cards use `position='left'` to leave room for the play-triangle visual.
+- All 4 render functions (team, folder, clip, player) now paste the transparent-bg `logo-mark.png` (~56px tall) instead of plain text "SOCCER SCOUT 11".
+- Falls back gracefully to text-only branding if the logo file isn't bundled.
+
+**3. Per-club crest pipeline**
+- New `services/crest_pipeline.py` — given any upload (JPEG/PNG/WEBP), `process_crest()`:
+  - Detects uniform background via 4-corner sampling
+  - Strips matching pixels to alpha=0 via Euclidean color distance (`BG_TOLERANCE=35`)
+  - Crops to non-transparent bounding box → letterboxes into transparent square → downsamples to 512×512 PNG
+- `POST /api/clubs/{id}/logo` now runs every upload through this pipeline. Crests composite cleanly onto any background and flow automatically into OG cards.
+- Verified end-to-end: 400×400 white-bg JPEG → 1959-byte transparent PNG.
+
+**Verified**: pytest 141 passed + 5 skipped (baseline preserved). Frontend lint clean. Auth animation captured mid- and end-state. OG lockup visible in rendered cards. Crest upload curl-tested.
+
 ### Mentions Inbox + Mobile Manual-Result Form + Coach Pulse Preview Modal (Apr 30, 2026 — iter12)
 **3 follow-on features after iter11.**
 

@@ -1,0 +1,37 @@
+/* Soccer Scout 11 — first-time logo intro animation
+ * Used on the auth page. Fires once per session (gated by sessionStorage in
+ * AuthPage.js). Subtle: ball drops + spins into place, wordmark fades in
+ * after 200ms. The whole thing is <1.2s so returning users barely notice.
+ */
+@keyframes logo-fade-up {
+  0%   { opacity: 0; transform: translateY(20px) scale(0.92); }
+  60%  { opacity: 1; transform: translateY(-4px) scale(1.02); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes logo-glow-pulse {
+  0%, 100% { filter: drop-shadow(0 0 24px rgba(0, 122, 255, 0.18)); }
+  50%      { filter: drop-shadow(0 0 40px rgba(0, 122, 255, 0.5)); }
+}
+
+@keyframes tagline-fade-in {
+  0%   { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.logo-intro {
+  animation: logo-fade-up 900ms cubic-bezier(0.16, 1, 0.3, 1) both,
+             logo-glow-pulse 2400ms ease-in-out 900ms 1 both;
+}
+
+.logo-intro-tagline {
+  animation: tagline-fade-in 600ms ease-out 500ms both;
+}
+
+/* Reduced-motion respect — accessibility first */
+@media (prefers-reduced-motion: reduce) {
+  .logo-intro,
+  .logo-intro-tagline {
+    animation: none;
+  }
+}

@@ -3,6 +3,7 @@
 Produces a 1200x630 PNG (Twitter summary_large_image dimensions) featuring:
 team name, season, club crest, and a row of player avatars.
 """
+import os
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from typing import Optional, List
@@ -79,6 +80,68 @@ def _fit_image(image_bytes: bytes, box: int) -> Optional[Image.Image]:
     canvas = Image.new("RGBA", (box, box), (0, 0, 0, 0))
     canvas.paste(src, ((box - src.width) // 2, (box - src.height) // 2), src)
     return canvas
+
+
+# ===== Brand lockup =====
+# Path to the transparent-background logo mark (PNG with alpha channel).
+# We try a few likely deployment locations so the OG generator works in
+# both dev and prod containers.
+_LOGO_LOCKUP_CACHE: Optional[Image.Image] = None
+_LOGO_CANDIDATES = [
+    "/app/frontend/public/logo-mark.png",
+    "/app/frontend/build/logo-mark.png",
+    os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "public", "logo-mark.png"),
+]
+
+
+def _load_logo_lockup() -> Optional[Image.Image]:
+    global _LOGO_LOCKUP_CACHE
+    if _LOGO_LOCKUP_CACHE is not None:
+        return _LOGO_LOCKUP_CACHE
+    for path in _LOGO_CANDIDATES:
+        try:
+            if os.path.exists(path):
+                _LOGO_LOCKUP_CACHE = Image.open(path).convert("RGBA")
+                return _LOGO_LOCKUP_CACHE
+        except Exception:
+            continue
+    return None
+
+
+def _paste_brand_lockup(img: Image.Image, position: str = "right") -> None:
+    """Draw the Soccer Scout 11 logo lockup at the bottom of the OG card.
+
+    `position` is "right" (default) or "left" — clip cards put the logo on the
+    left because the right is occupied by a big play icon.
+
+    Falls back to the previous text-only treatment if the logo file is missing
+    so OG cards still render in environments where the asset wasn't bundled.
+    """
+    target_h = 56
+    margin_x, margin_y = 64, 36
+    logo = _load_logo_lockup()
+    if logo is not None:
+        ratio = target_h / logo.height
+        scaled = logo.resize((int(logo.width * ratio), target_h), Image.LANCZOS)
+        if position == "left":
+            x = margin_x
+        else:
+            x = W - scaled.width - margin_x
+        y = H - scaled.height - margin_y
+        img.paste(scaled, (x, y), scaled)
+        return
+    # Fallback: text brand
+    draw = ImageDraw.Draw(img)
+    brand_font = _load_font(FONT_BOLD, 22)
+    brand = "SOCCER SCOUT 11"
+    bbox = draw.textbbox((0, 0), brand, font=brand_font)
+    bw = bbox[2] - bbox[0]
+    if position == "left":
+        draw.text((64, H - 56), brand, font=brand_font, fill=WHITE)
+        draw.ellipse((44, H - 50, 56, H - 38), fill=ACCENT)
+    else:
+        draw.text((W - bw - 64, H - 56), brand, font=brand_font, fill=WHITE)
+        draw.ellipse((W - bw - 84, H - 50, W - bw - 72, H - 38), fill=ACCENT)
 
 
 def render_team_card(
@@ -171,17 +234,8 @@ def render_team_card(
                 extra_text, font=extra_font, fill=WHITE,
             )
 
-    # Bottom-right brand
-    brand_font = _load_font(FONT_BOLD, 22)
-    brand = "SOCCER SCOUT 11"
-    bbox = draw.textbbox((0, 0), brand, font=brand_font)
-    bw = bbox[2] - bbox[0]
-    draw.text((W - bw - 64, H - 56), brand, font=brand_font, fill=WHITE)
-    # Small dot before brand
-    draw.ellipse(
-        (W - bw - 84, H - 50, W - bw - 72, H - 38),
-        fill=ACCENT,
-    )
+    # Bottom-right brand lockup (Soccer Scout 11 logo)
+    _paste_brand_lockup(img)
 
     out = BytesIO()
     img.save(out, format="PNG", optimize=True)
@@ -244,12 +298,8 @@ def render_folder_card(
                 shown = shown[:-1] + "…"
             draw.text((x + 20, card_y + 38), shown, font=label_font2, fill=WHITE)
 
-    # Brand
-    brand_font = _load_font(FONT_BOLD, 22)
-    brand = "SOCCER SCOUT 11"
-    bw = draw.textbbox((0, 0), brand, font=brand_font)[2]
-    draw.text((W - bw - 64, H - 56), brand, font=brand_font, fill=WHITE)
-    draw.ellipse((W - bw - 84, H - 50, W - bw - 72, H - 38), fill=ACCENT)
+    # Brand lockup
+    _paste_brand_lockup(img)
 
     out = BytesIO()
     img.save(out, format="PNG", optimize=True)
@@ -325,11 +375,8 @@ def render_clip_card(
         sub_font = _load_font(FONT_REG, 30)
         draw.text((64, sub_y), "  •  ".join(sub_parts), font=sub_font, fill=SUBTLE)
 
-    # Brand
-    brand_font = _load_font(FONT_BOLD, 22)
-    brand = "SOCCER SCOUT 11"
-    draw.text((64, H - 56), brand, font=brand_font, fill=WHITE)
-    draw.ellipse((44, H - 50, 56, H - 38), fill=ACCENT)
+    # Brand lockup (bottom-left to leave room for the play triangle on right)
+    _paste_brand_lockup(img, position="left")
 
     out = BytesIO()
     img.save(out, format="PNG", optimize=True)
@@ -454,11 +501,7 @@ def render_player_card(
         draw.text((64, H - 90), f"Shared by Coach {coach_name}",
                   font=coach_font, fill=(120, 120, 120))
 
-    brand_font = _load_font(FONT_BOLD, 22)
-    brand = "SOCCER SCOUT 11"
-    bw = draw.textbbox((0, 0), brand, font=brand_font)[2]
-    draw.text((W - bw - 64, H - 56), brand, font=brand_font, fill=WHITE)
-    draw.ellipse((W - bw - 84, H - 50, W - bw - 72, H - 38), fill=ACCENT)
+    _paste_brand_lockup(img)
 
     out = BytesIO()
     img.save(out, format="PNG", optimize=True)
