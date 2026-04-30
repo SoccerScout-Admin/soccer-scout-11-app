@@ -4,6 +4,8 @@
  * `videoMeta` / `processing_status` shape that `/api/videos/{id}/processing-status`
  * returns.
  */
+import { useProcessingEta } from './hooks/useProcessingEta';
+
 const STEPS = [
   { key: 'tactical', label: 'Tactical Analysis' },
   { key: 'player_performance', label: 'Player Ratings' },
@@ -34,6 +36,8 @@ const StepIcon = ({ done, current, failed }) => {
 };
 
 const ProcessingProgressBar = ({ videoMeta, onRetry }) => {
+  const eta = useProcessingEta(videoMeta);
+
   if (!videoMeta || !videoMeta.processing_status) return null;
 
   const status = videoMeta.processing_status;
@@ -82,6 +86,11 @@ const ProcessingProgressBar = ({ videoMeta, onRetry }) => {
               <span className="text-[#10B981] ml-2">· {completed.length}/4 done</span>
             )}
           </p>
+          {!isFailed && eta && (
+            <p data-testid="processing-eta" className="text-[10px] text-[#FBBF24] mt-1 tracking-[0.15em] uppercase font-bold">
+              {eta}
+            </p>
+          )}
         </div>
         <div className="text-right flex items-center gap-3 flex-shrink-0">
           <p className={`text-3xl font-bold ${isFailed ? 'text-[#EF4444]' : 'text-[#007AFF]'}`} style={{ fontFamily: 'Bebas Neue' }}>

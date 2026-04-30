@@ -7,12 +7,28 @@ coupled with the chunked-upload pipeline and the AI auto-processing background t
 import os
 import time
 import jwt
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends
 from db import db, JWT_SECRET
 from runtime import SERVER_BOOT_ID
 from routes.auth import get_current_user
 
 router = APIRouter()
+
+
+def _parse_iso(value):
+    if not value:
+        return None
+    try:
+        # Handle `Z` suffix + timezone-naive values
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
 
 
 @router.get("/videos/{video_id}/access-token")
@@ -97,8 +113,49 @@ async def get_processing_status(video_id: str, current_user: dict = Depends(get_
         "processing_progress": video.get("processing_progress", 0),
         "processing_current": video.get("processing_current"),
         "processing_error": video.get("processing_error"),
+        "processing_started_at": video.get("processing_started_at"),
         "processing_completed_at": video.get("processing_completed_at"),
         "completed_types": completed_types,
         "failed_types": failed_types,
         "server_boot_id": SERVER_BOOT_ID,
+    }
+
+
+@router.get("/videos/processing-eta-stats")
+async def get_processing_eta_stats(current_user: dict = Depends(get_current_user)):
+    """Return the user's avg total processing duration for completed videos.
+
+    Used by the client-side ETA estimator on MatchDetail. When progress < 10%
+    the frontend falls back to this average; otherwise it extrapolates from
+    the in-flight elapsed time.
+
+    Returns:
+      { avg_seconds: float|null, samples: int }
+    """
+    cursor = db.videos.find(
+        {
+            "user_id": current_user["id"],
+            "processing_status": "completed",
+            "processing_started_at": {"$ne": None},
+            "processing_completed_at": {"$ne": None},
+        },
+        {"_id": 0, "processing_started_at": 1, "processing_completed_at": 1},
+    ).sort("processing_completed_at", -1).limit(20)  # Last 20 completed — keeps avg responsive to recent infra
+
+    durations = []
+    async for v in cursor:
+        started = _parse_iso(v.get("processing_started_at"))
+        finished = _parse_iso(v.get("processing_completed_at"))
+        if not started or not finished:
+            continue
+        delta = (finished - started).total_seconds()
+        # Sanity-bound: discard < 10s (probably instant failure) or > 2h (probably stalled)
+        if 10 <= delta <= 7200:
+            durations.append(delta)
+
+    if not durations:
+        return {"avg_seconds": None, "samples": 0}
+    return {
+        "avg_seconds": round(sum(durations) / len(durations), 1),
+        "samples": len(durations),
     }

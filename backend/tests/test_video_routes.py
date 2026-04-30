@@ -15,20 +15,30 @@ import pytest
 import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://video-scout-11.preview.emergentagent.com").rstrip("/")
-EXISTING_VIDEO_ID = "d108814f-cf70-43ee-b3e2-a2269c84aa63"  # LFC 07B vs Express FC, chunked
+
+
+@pytest.fixture(scope="module")
+def existing_video_id(auth_headers):
+    """Fetch a live, non-deleted video owned by the test user so we don't hard-code IDs
+    that get soft-deleted over time."""
+    matches = requests.get(f"{BASE_URL}/api/matches", headers=auth_headers, timeout=15).json()
+    for m in matches:
+        if m.get("video_id"):
+            return m["video_id"]
+    pytest.skip("No video available for test user — seed a video to run this regression")
 
 
 class TestVideoAccessToken:
-    def test_access_token_requires_auth(self):
-        r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/access-token")
+    def test_access_token_requires_auth(self, existing_video_id):
+        r = requests.get(f"{BASE_URL}/api/videos/{existing_video_id}/access-token")
         assert r.status_code in (401, 403), r.text
 
     def test_access_token_404_for_unknown_video(self, auth_headers):
         r = requests.get(f"{BASE_URL}/api/videos/not-a-real-video-id/access-token", headers=auth_headers)
         assert r.status_code == 404, r.text
 
-    def test_access_token_returns_valid_jwt(self, auth_headers):
-        r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/access-token", headers=auth_headers)
+    def test_access_token_returns_valid_jwt(self, auth_headers, existing_video_id):
+        r = requests.get(f"{BASE_URL}/api/videos/{existing_video_id}/access-token", headers=auth_headers)
         assert r.status_code == 200, r.text
         data = r.json()
         assert "token" in data
@@ -36,7 +46,7 @@ class TestVideoAccessToken:
         assert isinstance(token, str) and len(token) > 20
         # Decode without verifying signature — we just need the claim shape
         payload = jwt.decode(token, options={"verify_signature": False})
-        assert payload.get("video_id") == EXISTING_VIDEO_ID
+        assert payload.get("video_id") == existing_video_id
         assert payload.get("type") == "video_access"
         assert "user_id" in payload
         assert "exp" in payload
@@ -46,20 +56,20 @@ class TestVideoAccessToken:
 
 
 class TestVideoMetadata:
-    def test_metadata_requires_auth(self):
-        r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/metadata")
+    def test_metadata_requires_auth(self, existing_video_id):
+        r = requests.get(f"{BASE_URL}/api/videos/{existing_video_id}/metadata")
         assert r.status_code in (401, 403), r.text
 
     def test_metadata_404_unknown(self, auth_headers):
         r = requests.get(f"{BASE_URL}/api/videos/not-a-real-vid/metadata", headers=auth_headers)
         assert r.status_code == 404, r.text
 
-    def test_metadata_schema_and_no_large_fields(self, auth_headers):
-        r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/metadata", headers=auth_headers)
+    def test_metadata_schema_and_no_large_fields(self, auth_headers, existing_video_id):
+        r = requests.get(f"{BASE_URL}/api/videos/{existing_video_id}/metadata", headers=auth_headers)
         assert r.status_code == 200, r.text
         data = r.json()
         # Basic video fields
-        assert data["id"] == EXISTING_VIDEO_ID
+        assert data["id"] == existing_video_id
         assert "filename" in data or "title" in data or "original_filename" in data
         # Large fields must be stripped
         assert "chunk_paths" not in data
@@ -68,8 +78,8 @@ class TestVideoMetadata:
         # _id from mongo must not leak
         assert "_id" not in data
 
-    def test_metadata_includes_chunk_integrity_when_chunked(self, auth_headers):
-        r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/metadata", headers=auth_headers)
+    def test_metadata_includes_chunk_integrity_when_chunked(self, auth_headers, existing_video_id):
+        r = requests.get(f"{BASE_URL}/api/videos/{existing_video_id}/metadata", headers=auth_headers)
         assert r.status_code == 200
         data = r.json()
         if data.get("is_chunked"):
@@ -86,17 +96,17 @@ class TestVideoMetadata:
 
 
 class TestVideoProcessingStatus:
-    def test_processing_status_requires_auth(self):
-        r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/processing-status")
+    def test_processing_status_requires_auth(self, existing_video_id):
+        r = requests.get(f"{BASE_URL}/api/videos/{existing_video_id}/processing-status")
         assert r.status_code in (401, 403), r.text
 
     def test_processing_status_404_unknown(self, auth_headers):
         r = requests.get(f"{BASE_URL}/api/videos/not-real/processing-status", headers=auth_headers)
         assert r.status_code == 404, r.text
 
-    def test_processing_status_payload_shape(self, auth_headers):
+    def test_processing_status_payload_shape(self, auth_headers, existing_video_id):
         r = requests.get(
-            f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/processing-status",
+            f"{BASE_URL}/api/videos/{existing_video_id}/processing-status",
             headers=auth_headers,
         )
         assert r.status_code == 200, r.text
@@ -117,10 +127,10 @@ class TestVideoProcessingStatus:
         # server_boot_id must be a truthy string
         assert isinstance(data["server_boot_id"], str) and data["server_boot_id"]
 
-    def test_processing_status_reflects_completed_analyses(self, auth_headers):
+    def test_processing_status_reflects_completed_analyses(self, auth_headers, existing_video_id):
         """Per review context this video has 4 completed analyses -> completed_types should be non-empty."""
         r = requests.get(
-            f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/processing-status",
+            f"{BASE_URL}/api/videos/{existing_video_id}/processing-status",
             headers=auth_headers,
         )
         assert r.status_code == 200
@@ -133,7 +143,7 @@ class TestVideoProcessingStatus:
 
 class TestNoDuplicateRoute:
     """Verify the 410-Gone shim has been removed and a normal 200 is returned (not 410)."""
-    def test_no_410_gone(self, auth_headers):
+    def test_no_410_gone(self, auth_headers, existing_video_id):
         for ep in ("access-token", "metadata", "processing-status"):
-            r = requests.get(f"{BASE_URL}/api/videos/{EXISTING_VIDEO_ID}/{ep}", headers=auth_headers)
+            r = requests.get(f"{BASE_URL}/api/videos/{existing_video_id}/{ep}", headers=auth_headers)
             assert r.status_code != 410, f"{ep} returned 410 - duplicate shim still live"
