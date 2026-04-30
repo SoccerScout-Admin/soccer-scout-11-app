@@ -166,6 +166,28 @@ async def preview_email(current_user: dict = Depends(get_current_user)):
     return HTMLResponse(html)
 
 
+@router.get("/coach-pulse/admin-preview/{user_id}", response_class=HTMLResponse)
+async def admin_preview_email(
+    user_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Admin-only: preview the weekly digest as it would be rendered for any
+    given user. Powers the 'Preview Digest' button on the admin page so the
+    owner can verify this Monday's blast before it fires at 08:00 UTC.
+    """
+    role = (current_user.get("role") or "").lower()
+    if role not in ("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    target = await db.users.find_one(
+        {"id": user_id}, {"_id": 0, "id": 1, "email": 1, "name": 1}
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    network_ready, network = await _network_payload()
+    _, html, _ = await _build_email_for(target, network, network_ready)
+    return HTMLResponse(html)
+
+
 @router.post("/coach-pulse/send-test")
 async def send_test(current_user: dict = Depends(get_current_user)):
     if not current_user.get("email"):

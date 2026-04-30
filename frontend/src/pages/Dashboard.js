@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
-import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield, ChartLineUp, Globe, UploadSimple } from '@phosphor-icons/react';
+import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield, ChartLineUp, Globe, UploadSimple, At } from '@phosphor-icons/react';
 import CoachPulseCard from './components/CoachPulseCard';
 
 const Dashboard = () => {
@@ -87,6 +87,16 @@ const Dashboard = () => {
   }, []);
 
   useEffect(() => { fetchMatches(); fetchFolders(); }, [fetchMatches, fetchFolders]);
+
+  // Mentions badge — best-effort poll on mount. Failures silently ignored.
+  const [unreadMentions, setUnreadMentions] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    axios.get(`${API}/coach-network/mentions`, { headers: getAuthHeader() })
+      .then((res) => { if (!cancelled) setUnreadMentions((res.data || []).filter((m) => !m.read_at).length); })
+      .catch(() => { /* silent */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const handleCreateMatch = async (e) => {
     e.preventDefault();
@@ -251,6 +261,16 @@ const Dashboard = () => {
               className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-xs text-[#A855F7] hover:text-white hover:bg-[#A855F7]/15 transition-colors border border-[#A855F7]/30 font-bold uppercase tracking-wider">
               <Globe size={16} weight="bold" /> Coach Network
             </button>
+            <button data-testid="mentions-nav-btn" onClick={() => navigate('/mentions')}
+              className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-xs text-[#A855F7] hover:text-white hover:bg-[#A855F7]/15 transition-colors border border-[#A855F7]/30 font-bold uppercase tracking-wider relative">
+              <At size={16} weight="bold" /> Mentions
+              {unreadMentions > 0 && (
+                <span data-testid="mentions-unread-badge"
+                  className="absolute -top-1.5 -right-1.5 bg-[#A855F7] text-white text-[9px] font-bold tracking-wider px-1.5 py-0.5 min-w-[18px] text-center">
+                  {unreadMentions > 9 ? '9+' : unreadMentions}
+                </span>
+              )}
+            </button>
             {['admin', 'owner'].includes((user?.role || '').toLowerCase()) && (
               <button data-testid="admin-nav-btn" onClick={() => navigate('/admin/users')}
                 className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-xs text-[#FBBF24] hover:text-white hover:bg-[#FBBF24]/15 transition-colors border border-[#FBBF24]/30 font-bold uppercase tracking-wider">
@@ -265,6 +285,15 @@ const Dashboard = () => {
             <button data-testid="coach-network-nav-btn-mobile" onClick={() => navigate('/coach-network')} aria-label="Coach Network"
               className="sm:hidden p-2 text-[#A855F7] border border-[#A855F7]/30">
               <Globe size={18} weight="bold" />
+            </button>
+            <button data-testid="mentions-nav-btn-mobile" onClick={() => navigate('/mentions')} aria-label="Mentions"
+              className="sm:hidden p-2 text-[#A855F7] border border-[#A855F7]/30 relative">
+              <At size={18} weight="bold" />
+              {unreadMentions > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 bg-[#A855F7] text-white text-[9px] font-bold tracking-wider px-1.5 py-0.5 min-w-[18px] text-center">
+                  {unreadMentions > 9 ? '9+' : unreadMentions}
+                </span>
+              )}
             </button>
             {['admin', 'owner'].includes((user?.role || '').toLowerCase()) && (
               <button data-testid="admin-nav-btn-mobile" onClick={() => navigate('/admin/users')} aria-label="Admin"

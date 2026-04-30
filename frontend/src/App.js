@@ -19,6 +19,7 @@ import MatchInsights from './pages/MatchInsights';
 import SeasonTrends from './pages/SeasonTrends';
 import PlayerSeasonTrends from './pages/PlayerSeasonTrends';
 import CoachNetwork from './pages/CoachNetwork';
+import MentionsInbox from './pages/MentionsInbox';
 import AdminUsers from './pages/AdminUsers';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 
@@ -169,6 +170,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <CoachNetwork />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/mentions"
+            element={
+              <ProtectedRoute>
+                <MentionsInbox />
               </ProtectedRoute>
             }
           />

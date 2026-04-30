@@ -7,7 +7,7 @@ Privacy guarantees:
 - Numeric distributions are bucketed
 - Returns only the calling user's percentile bucket, not their raw rank
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from collections import Counter
 from datetime import datetime, timezone
 from db import db
@@ -182,6 +182,73 @@ async def compute_benchmarks(user_id: str | None = None) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
+
+
+@router.get("/coach-network/mentions")
+async def list_my_mentions(
+    unread_only: bool = False,
+    current_user: dict = Depends(get_current_user),
+):
+    """Return clip-reel mentions where the current user was tagged.
+    Each mention is enriched with the reel title, share_token and clip count
+    so the UI can link straight to the public reel.
+    """
+    query: dict = {"mentioned_user_id": current_user["id"]}
+    if unread_only:
+        query["read_at"] = {"$in": [None, ""]}
+    mentions = await db.clip_mentions.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+    if not mentions:
+        return []
+    coll_ids = list({m["collection_id"] for m in mentions})
+    collections = await db.clip_collections.find(
+        {"id": {"$in": coll_ids}},
+        {"_id": 0, "id": 1, "title": 1, "share_token": 1, "clip_ids": 1, "description": 1, "created_at": 1},
+    ).to_list(len(coll_ids))
+    coll_map = {c["id"]: c for c in collections}
+    result = []
+    for m in mentions:
+        coll = coll_map.get(m["collection_id"])
+        if not coll:
+            continue  # collection deleted — skip orphan
+        result.append({
+            "id": m["id"],
+            "mentioner_name": m.get("mentioner_name") or "A coach",
+            "mentioner_user_id": m.get("mentioner_user_id"),
+            "collection_id": coll["id"],
+            "reel_title": coll.get("title") or "Clip Reel",
+            "reel_share_token": coll.get("share_token"),
+            "reel_clip_count": len(coll.get("clip_ids") or []),
+            "reel_description": (coll.get("description") or "")[:400],
+            "created_at": m.get("created_at"),
+            "read_at": m.get("read_at"),
+            "email_sent": bool(m.get("email_sent")),
+        })
+    return result
+
+
+@router.post("/coach-network/mentions/{mention_id}/read")
+async def mark_mention_read(
+    mention_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Mark a single mention as read (updates read_at timestamp)."""
+    res = await db.clip_mentions.update_one(
+        {"id": mention_id, "mentioned_user_id": current_user["id"]},
+        {"$set": {"read_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Mention not found")
+    return {"status": "ok"}
+
+
+@router.post("/coach-network/mentions/read-all")
+async def mark_all_mentions_read(current_user: dict = Depends(get_current_user)):
+    """Mark every mention for the current user as read."""
+    now = datetime.now(timezone.utc).isoformat()
+    res = await db.clip_mentions.update_many(
+        {"mentioned_user_id": current_user["id"], "read_at": {"$in": [None, ""]}},
+        {"$set": {"read_at": now}},
+    )
+    return {"updated": res.modified_count}
 
 
 @router.get("/coach-network/mentionable-coaches")

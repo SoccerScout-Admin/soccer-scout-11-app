@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
-import { ArrowLeft, Shield, MagnifyingGlass, ShieldCheck, UserMinus, Warning, Crown } from '@phosphor-icons/react';
+import { ArrowLeft, Shield, MagnifyingGlass, ShieldCheck, UserMinus, Warning, Crown, EnvelopeSimple, X } from '@phosphor-icons/react';
 
 const ROLE_META = {
   owner: { label: 'OWNER', color: '#F472B6', icon: Crown },
@@ -19,6 +19,9 @@ const AdminUsers = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [previewUser, setPreviewUser] = useState(null);
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [loadingPreview, setLoadingPreview] = useState(false);
 
   const fetchUsers = useCallback(async (q = '') => {
     setLoading(true);
@@ -57,6 +60,23 @@ const AdminUsers = () => {
       alert(err.response?.data?.detail || 'Failed to update role');
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const openPreview = async (u) => {
+    setPreviewUser(u);
+    setPreviewHtml('');
+    setLoadingPreview(true);
+    try {
+      const res = await axios.get(`${API}/coach-pulse/admin-preview/${u.id}`, {
+        headers: getAuthHeader(),
+        responseType: 'text',
+      });
+      setPreviewHtml(res.data);
+    } catch (err) {
+      setPreviewHtml(`<p style="color:#EF4444;font-family:sans-serif;padding:20px;">Failed to load preview: ${err.response?.data?.detail || err.message}</p>`);
+    } finally {
+      setLoadingPreview(false);
     }
   };
 
@@ -139,13 +159,21 @@ const AdminUsers = () => {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span data-testid={`role-chip-${u.id}`}
                       className="flex items-center gap-1.5 text-[10px] font-bold tracking-[0.2em] uppercase px-2.5 py-1.5"
                       style={{ color: meta.color, backgroundColor: `${meta.color}20`, borderColor: `${meta.color}40`, borderWidth: 1, borderStyle: 'solid' }}>
                       <Icon size={12} weight="bold" />
                       {meta.label}
                     </span>
+
+                    <button data-testid={`preview-digest-${u.id}-btn`} onClick={() => openPreview(u)}
+                      title="Preview the weekly Coach Pulse email this user would receive"
+                      className="flex items-center gap-1.5 text-xs font-bold tracking-wider uppercase px-3 py-1.5 bg-[#10B981]/10 text-[#10B981] hover:bg-[#10B981]/20 transition-colors border border-[#10B981]/30">
+                      <EnvelopeSimple size={14} weight="bold" />
+                      <span className="hidden md:inline">Preview Digest</span>
+                      <span className="md:hidden">Preview</span>
+                    </button>
 
                     {['coach', 'analyst'].includes(roleKey) ? (
                       <button data-testid={`promote-${u.id}-btn`} onClick={() => setRole(u.id, 'admin')}
@@ -174,6 +202,43 @@ const AdminUsers = () => {
           Note: owner-role users can only be changed by another owner. Demotion is blocked if you're the last admin.
         </p>
       </main>
+
+      {/* Preview Digest Modal */}
+      {previewUser && (
+        <div data-testid="preview-modal-overlay" onClick={() => setPreviewUser(null)}
+          className="fixed inset-0 bg-black/80 z-[200] flex items-center justify-center p-4">
+          <div onClick={(e) => e.stopPropagation()}
+            className="bg-[#0A0A0A] border border-white/10 w-full max-w-3xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-white/10 flex-shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <EnvelopeSimple size={18} weight="bold" className="text-[#10B981] flex-shrink-0" />
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold tracking-wider uppercase truncate" style={{ fontFamily: 'Bebas Neue' }}>
+                    Coach Pulse Preview
+                  </h3>
+                  <p className="text-xs text-[#A3A3A3] truncate">For {previewUser.name || previewUser.email}</p>
+                </div>
+              </div>
+              <button data-testid="close-preview-btn" onClick={() => setPreviewUser(null)}
+                className="p-2 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] flex-shrink-0">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden bg-[#0A0A0A]">
+              {loadingPreview ? (
+                <p className="text-sm text-[#666] text-center py-12">Rendering preview…</p>
+              ) : (
+                <iframe data-testid="preview-iframe" title="Coach Pulse digest preview"
+                  srcDoc={previewHtml} sandbox="allow-same-origin"
+                  className="w-full h-[70vh] border-0 bg-[#0A0A0A]" />
+              )}
+            </div>
+            <div className="p-3 border-t border-white/10 flex-shrink-0 text-[10px] text-[#666] tracking-wider uppercase text-center">
+              This is what {previewUser.name || previewUser.email} will receive on Monday's auto-blast.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

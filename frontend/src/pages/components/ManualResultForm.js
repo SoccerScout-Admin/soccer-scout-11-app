@@ -121,20 +121,20 @@ const ManualResultForm = ({ match, players, onSaved }) => {
           </div>
         </div>
 
-        <div className="flex items-center gap-6 mb-4">
-          <div className="flex-1 text-center">
-            <div className="text-[10px] tracking-wider uppercase text-[#A3A3A3] mb-1">{match.team_home}</div>
-            <div className="text-5xl font-bold text-white" style={{ fontFamily: 'Bebas Neue' }}>{existing.home_score}</div>
+        <div className="flex items-center gap-3 sm:gap-6 mb-4">
+          <div className="flex-1 text-center min-w-0">
+            <div className="text-[9px] sm:text-[10px] tracking-wider uppercase text-[#A3A3A3] mb-1 truncate">{match.team_home}</div>
+            <div className="text-4xl sm:text-5xl font-bold text-white" style={{ fontFamily: 'Bebas Neue' }}>{existing.home_score}</div>
           </div>
           <div className="flex items-center justify-center">
-            <span className="px-3 py-1 text-xs font-bold tracking-[0.2em] uppercase"
+            <span className="px-2 sm:px-3 py-1 text-[10px] sm:text-xs font-bold tracking-[0.15em] sm:tracking-[0.2em] uppercase"
               style={{ color: outcomeColor, backgroundColor: `${outcomeColor}20`, border: `1px solid ${outcomeColor}40` }}>
               {outcome === 'W' ? 'Win' : outcome === 'L' ? 'Loss' : 'Draw'}
             </span>
           </div>
-          <div className="flex-1 text-center">
-            <div className="text-[10px] tracking-wider uppercase text-[#A3A3A3] mb-1">{match.team_away}</div>
-            <div className="text-5xl font-bold text-white" style={{ fontFamily: 'Bebas Neue' }}>{existing.away_score}</div>
+          <div className="flex-1 text-center min-w-0">
+            <div className="text-[9px] sm:text-[10px] tracking-wider uppercase text-[#A3A3A3] mb-1 truncate">{match.team_away}</div>
+            <div className="text-4xl sm:text-5xl font-bold text-white" style={{ fontFamily: 'Bebas Neue' }}>{existing.away_score}</div>
           </div>
         </div>
 
@@ -194,22 +194,34 @@ const ManualResultForm = ({ match, players, onSaved }) => {
         )}
       </div>
 
-      {/* Scoreline */}
-      <div className="grid grid-cols-3 gap-4 items-end mb-5">
+      {/* Scoreline — on mobile use big +/- steppers, on desktop keep the input field */}
+      <div className="grid grid-cols-3 gap-3 sm:gap-4 items-end mb-5">
         <div className="text-center">
-          <label className="block text-[10px] tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">{match.team_home}</label>
-          <input data-testid="home-score-input" type="number" min="0" max="99" value={homeScore}
-            onChange={(e) => setHomeScore(e.target.value)}
-            className="w-full bg-[#0A0A0A] border border-white/10 text-white text-4xl text-center font-bold py-3 focus:border-[#60A5FA] focus:outline-none"
-            style={{ fontFamily: 'Bebas Neue' }} />
+          <label className="block text-[9px] sm:text-[10px] tracking-[0.15em] sm:tracking-[0.2em] uppercase text-[#A3A3A3] mb-2 truncate">{match.team_home}</label>
+          <div className="flex items-center gap-1 sm:block">
+            <button type="button" data-testid="home-score-minus" onClick={() => setHomeScore((v) => Math.max(0, Number(v) - 1))}
+              className="sm:hidden flex-shrink-0 w-10 h-14 bg-[#0A0A0A] border border-white/10 text-white text-xl font-bold hover:bg-[#1F1F1F] active:bg-[#2A2A2A]">−</button>
+            <input data-testid="home-score-input" type="number" inputMode="numeric" pattern="[0-9]*" min="0" max="99" value={homeScore}
+              onChange={(e) => setHomeScore(e.target.value)}
+              className="w-full bg-[#0A0A0A] border border-white/10 text-white text-3xl sm:text-4xl text-center font-bold py-3 focus:border-[#60A5FA] focus:outline-none"
+              style={{ fontFamily: 'Bebas Neue' }} />
+            <button type="button" data-testid="home-score-plus" onClick={() => setHomeScore((v) => Math.min(99, Number(v) + 1))}
+              className="sm:hidden flex-shrink-0 w-10 h-14 bg-[#0A0A0A] border border-white/10 text-white text-xl font-bold hover:bg-[#1F1F1F] active:bg-[#2A2A2A]">+</button>
+          </div>
         </div>
         <div className="text-center pb-3 text-[#666] text-2xl">–</div>
         <div className="text-center">
-          <label className="block text-[10px] tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">{match.team_away}</label>
-          <input data-testid="away-score-input" type="number" min="0" max="99" value={awayScore}
-            onChange={(e) => setAwayScore(e.target.value)}
-            className="w-full bg-[#0A0A0A] border border-white/10 text-white text-4xl text-center font-bold py-3 focus:border-[#60A5FA] focus:outline-none"
-            style={{ fontFamily: 'Bebas Neue' }} />
+          <label className="block text-[9px] sm:text-[10px] tracking-[0.15em] sm:tracking-[0.2em] uppercase text-[#A3A3A3] mb-2 truncate">{match.team_away}</label>
+          <div className="flex items-center gap-1 sm:block">
+            <button type="button" data-testid="away-score-minus" onClick={() => setAwayScore((v) => Math.max(0, Number(v) - 1))}
+              className="sm:hidden flex-shrink-0 w-10 h-14 bg-[#0A0A0A] border border-white/10 text-white text-xl font-bold hover:bg-[#1F1F1F] active:bg-[#2A2A2A]">−</button>
+            <input data-testid="away-score-input" type="number" inputMode="numeric" pattern="[0-9]*" min="0" max="99" value={awayScore}
+              onChange={(e) => setAwayScore(e.target.value)}
+              className="w-full bg-[#0A0A0A] border border-white/10 text-white text-3xl sm:text-4xl text-center font-bold py-3 focus:border-[#60A5FA] focus:outline-none"
+              style={{ fontFamily: 'Bebas Neue' }} />
+            <button type="button" data-testid="away-score-plus" onClick={() => setAwayScore((v) => Math.min(99, Number(v) + 1))}
+              className="sm:hidden flex-shrink-0 w-10 h-14 bg-[#0A0A0A] border border-white/10 text-white text-xl font-bold hover:bg-[#1F1F1F] active:bg-[#2A2A2A]">+</button>
+          </div>
         </div>
       </div>
 
@@ -228,34 +240,41 @@ const ManualResultForm = ({ match, players, onSaved }) => {
           <div className="space-y-2">
             {events.map((ev, i) => (
               <div key={`evform-${i}`} data-testid={`event-row-${i}`}
-                className="grid grid-cols-12 gap-2 bg-[#0A0A0A] border border-white/5 p-2">
-                <input type="number" min="0" max="200" value={ev.minute}
-                  onChange={(e) => updateEvent(i, { minute: e.target.value })}
-                  placeholder="Min" className="col-span-1 bg-[#141414] border border-white/10 text-white px-2 py-1.5 text-xs focus:border-[#60A5FA] focus:outline-none" />
-                <select value={ev.type} onChange={(e) => updateEvent(i, { type: e.target.value })}
-                  className="col-span-2 bg-[#141414] border border-white/10 text-white px-2 py-1.5 text-xs focus:border-[#60A5FA] focus:outline-none">
-                  {EVENT_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-                </select>
-                <select value={ev.team} onChange={(e) => updateEvent(i, { team: e.target.value })}
-                  className="col-span-3 bg-[#141414] border border-white/10 text-white px-2 py-1.5 text-xs focus:border-[#60A5FA] focus:outline-none">
-                  <option value="">Team...</option>
-                  <option value={match.team_home}>{match.team_home}</option>
-                  <option value={match.team_away}>{match.team_away}</option>
-                </select>
-                <select value={ev.player_id || ''} onChange={(e) => updateEvent(i, { player_id: e.target.value })}
-                  className="col-span-2 bg-[#141414] border border-white/10 text-white px-2 py-1.5 text-xs focus:border-[#60A5FA] focus:outline-none">
-                  <option value="">Player (opt)</option>
-                  {(players || []).filter((p) => !ev.team || p.team === ev.team).map((p) => (
-                    <option key={p.id} value={p.id}>#{p.number || '?'} {p.name}</option>
-                  ))}
-                </select>
-                <input type="text" maxLength="120" value={ev.description}
-                  onChange={(e) => updateEvent(i, { description: e.target.value })}
-                  placeholder="Description" className="col-span-3 bg-[#141414] border border-white/10 text-white px-2 py-1.5 text-xs focus:border-[#60A5FA] focus:outline-none" />
-                <button data-testid={`remove-event-${i}-btn`} type="button" onClick={() => removeEvent(i)}
-                  className="col-span-1 flex items-center justify-center text-[#A3A3A3] hover:text-[#EF4444] hover:bg-[#EF4444]/10">
-                  <Trash size={14} />
-                </button>
+                className="bg-[#0A0A0A] border border-white/5 p-2.5">
+                {/* Mobile: stacked 2x2 grid. Desktop: 12-col compact row. */}
+                <div className="grid grid-cols-2 sm:grid-cols-12 gap-2">
+                  <input type="number" inputMode="numeric" min="0" max="200" value={ev.minute}
+                    onChange={(e) => updateEvent(i, { minute: e.target.value })}
+                    placeholder="Min" aria-label="Minute"
+                    className="col-span-1 sm:col-span-1 bg-[#141414] border border-white/10 text-white px-2 py-2 text-xs focus:border-[#60A5FA] focus:outline-none" />
+                  <select value={ev.type} onChange={(e) => updateEvent(i, { type: e.target.value })} aria-label="Event type"
+                    className="col-span-1 sm:col-span-2 bg-[#141414] border border-white/10 text-white px-2 py-2 text-xs focus:border-[#60A5FA] focus:outline-none">
+                    {EVENT_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                  </select>
+                  <select value={ev.team} onChange={(e) => updateEvent(i, { team: e.target.value })} aria-label="Team"
+                    className="col-span-2 sm:col-span-3 bg-[#141414] border border-white/10 text-white px-2 py-2 text-xs focus:border-[#60A5FA] focus:outline-none">
+                    <option value="">Team...</option>
+                    <option value={match.team_home}>{match.team_home}</option>
+                    <option value={match.team_away}>{match.team_away}</option>
+                  </select>
+                  <select value={ev.player_id || ''} onChange={(e) => updateEvent(i, { player_id: e.target.value })} aria-label="Player"
+                    className="col-span-2 sm:col-span-2 bg-[#141414] border border-white/10 text-white px-2 py-2 text-xs focus:border-[#60A5FA] focus:outline-none">
+                    <option value="">Player (opt)</option>
+                    {(players || []).filter((p) => !ev.team || p.team === ev.team).map((p) => (
+                      <option key={p.id} value={p.id}>#{p.number || '?'} {p.name}</option>
+                    ))}
+                  </select>
+                  <input type="text" maxLength="120" value={ev.description}
+                    onChange={(e) => updateEvent(i, { description: e.target.value })}
+                    placeholder="Description" aria-label="Description"
+                    className="col-span-2 sm:col-span-3 bg-[#141414] border border-white/10 text-white px-2 py-2 text-xs focus:border-[#60A5FA] focus:outline-none" />
+                  <button data-testid={`remove-event-${i}-btn`} type="button" onClick={() => removeEvent(i)}
+                    aria-label="Remove event"
+                    className="col-span-2 sm:col-span-1 flex items-center justify-center gap-1.5 py-2 text-[10px] uppercase tracking-wider text-[#A3A3A3] hover:text-[#EF4444] hover:bg-[#EF4444]/10 border border-white/5 sm:border-0">
+                    <Trash size={14} />
+                    <span className="sm:hidden">Remove</span>
+                  </button>
+                </div>
               </div>
             ))}
           </div>
