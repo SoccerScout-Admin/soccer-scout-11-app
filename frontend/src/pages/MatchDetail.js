@@ -8,6 +8,7 @@ import UploadPanel from './components/UploadPanel';
 import DeletedVideosDrawer from './components/DeletedVideosDrawer';
 import ConfirmReuploadModal from './components/ConfirmReuploadModal';
 import RosterSection from './components/RosterSection';
+import ProcessingProgressBar from './components/ProcessingProgressBar';
 
 const MatchDetail = () => {
   const { matchId } = useParams();
@@ -258,6 +259,16 @@ const MatchDetail = () => {
     }
   };
 
+  const handleReprocessVideo = async () => {
+    if (!match?.video_id) return;
+    try {
+      await axios.post(`${API}/videos/${match.video_id}/reprocess`, {}, { headers: getAuthHeader() });
+      setVideoMeta((prev) => ({ ...(prev || {}), processing_status: 'queued', processing_progress: 0 }));
+    } catch (err) {
+      alert('Failed to retry processing: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
   const playerGroups = useMemo(() => {
     const homeTeamPlayers = players.filter(p => p.team === match?.team_home);
     const awayTeamPlayers = players.filter(p => p.team === match?.team_away);
@@ -312,6 +323,8 @@ const MatchDetail = () => {
             onConfirmReupload={() => setConfirmReupload(true)}
             navigate={navigate} />
         </div>
+
+        <ProcessingProgressBar videoMeta={videoMeta} onRetry={handleReprocessVideo} />
 
         <DeletedVideosDrawer open={showDeletedDrawer} deletedVideos={deletedVideos}
           onClose={() => setShowDeletedDrawer(false)} onRestore={handleRestoreVideo} />

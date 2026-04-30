@@ -13,10 +13,16 @@ const VideoStatus = ({ match }) => {
     );
   }
   if (status === 'processing' || status === 'queued') {
+    const pct = Math.max(0, Math.min(100, match.processing_progress || 0));
     return (
-      <div className="flex items-center gap-2 text-[#007AFF] text-sm">
-        <div className="w-3 h-3 border-2 border-[#007AFF] border-t-transparent rounded-full animate-spin" />
-        <span>Processing ({match.processing_progress || 0}%)</span>
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2 text-[#007AFF] text-sm">
+          <div className="w-3 h-3 border-2 border-[#007AFF] border-t-transparent rounded-full animate-spin" />
+          <span>Processing · {pct}%</span>
+        </div>
+        <div className="h-1 bg-[#0A0A0A] rounded-full overflow-hidden" data-testid="match-card-progress-bar">
+          <div className="h-full bg-[#007AFF] transition-all duration-500" style={{ width: `${pct}%` }} />
+        </div>
       </div>
     );
   }

@@ -2,6 +2,16 @@
 
 ## What's Been Implemented
 
+### Visible Processing Progress Bars on MatchDetail + Dashboard (Apr 30, 2026 — iter16)
+**Problem**: Before this, MatchDetail only showed a small text chip ("Processing… 42%") and Dashboard cards showed plain text — coaches couldn't see at a glance how far along AI analysis was.
+
+**Delivered**:
+- **New `ProcessingProgressBar.js`** — reusable presentational component showing: gradient banner (blue for active, red for failed), big percentage display (Bebas Neue), animated spinner / X icon, full-width progress bar with smooth 500ms fill transition, and a 4-step status grid (Tactical / Player Ratings / Highlights / Timeline Markers) where each step renders green check / blue spinner / red X / empty-circle. Includes inline "Retry" / "Resume" button when failed — wires to `POST /api/videos/{id}/reprocess`.
+- **Mounted on MatchDetail** below the upload panel. Auto-polls via existing 5s videoMeta poll in MatchDetail's `useEffect`.
+- **Thin progress bar on MatchCard (Dashboard)**: replaces the plain "Processing (X%)" text with a flex column — "Processing · X%" label + 1px-tall blue progress bar with 500ms transition. Only renders in `processing`/`queued` states. New `data-testid="match-card-progress-bar"`.
+
+**Verified**: live screenshots from both `/match/:id` (showing red "PROCESSING FAILED" state with 0/4 steps + Retry button) and `/` dashboard (11 cards render correctly, progress bars hidden when no active processing). Lint clean. No backend changes needed — all data already exposed by `/api/videos/{id}/processing-status` and `/api/matches` (which injects `processing_status` + `processing_progress` per match).
+
 ### VideoAnalysis useVideoProcessing Hook (Apr 30, 2026 — iter15)
 **Pure refactor: 585 → 490 lines (-16%)** in VideoAnalysis.js. Extracted two cohesive hooks in `/app/frontend/src/pages/components/hooks/useVideoProcessing.js`:
 
