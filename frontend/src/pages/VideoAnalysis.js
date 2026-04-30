@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useRef, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
@@ -17,17 +17,35 @@ import ClipCreateForm from './components/ClipCreateForm';
 import VideoToolbar from './components/VideoToolbar';
 import DataIntegrityBanner from './components/DataIntegrityBanner';
 import { useClipShare, useClipCollection, useClipTagging } from './components/hooks/useClipActions';
+import { useVideoProcessing, useVideoData } from './components/hooks/useVideoProcessing';
+
+const PROCESSING_LABEL = {
+  tactical: 'Tactical Analysis',
+  player_performance: 'Player Ratings',
+  highlights: 'Highlights Detection',
+  timeline_markers: 'Timeline Markers',
+};
 
 const VideoAnalysis = () => {
   const { videoId } = useParams();
   const navigate = useNavigate();
   const videoRef = useRef(null);
-  const [videoMetadata, setVideoMetadata] = useState(null);
-  const [match, setMatch] = useState(null);
-  const [analyses, setAnalyses] = useState([]);
-  const [annotations, setAnnotations] = useState([]);
-  const [clips, setClips] = useState([]);
-  const [players, setPlayers] = useState([]);
+
+  const {
+    videoMetadata, match, analyses, setAnalyses,
+    annotations, setAnnotations, clips, setClips,
+    players, markers, setMarkers, videoSrc,
+  } = useVideoData(videoId);
+
+  const onAnalysesRefresh = useCallback((a) => setAnalyses(a), [setAnalyses]);
+  const onMarkersRefresh = useCallback((m) => setMarkers(m), [setMarkers]);
+
+  const {
+    processingStatus, serverRestarted,
+    isProcessing, isProcessed, processingFailed,
+    reprocess: handleReprocess,
+  } = useVideoProcessing(videoId, onAnalysesRefresh, onMarkersRefresh);
+
   const [activeTab, setActiveTab] = useState('overview');
   const [analyzing, setAnalyzing] = useState(false);
   const [annotationMode, setAnnotationMode] = useState(null);
@@ -39,116 +57,12 @@ const VideoAnalysis = () => {
   const [clipFormData, setClipFormData] = useState({ title: '', start_time: 0, end_time: 0, clip_type: 'highlight', description: '' });
   const [currentTimestamp, setCurrentTimestamp] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
-  const [videoSrc, setVideoSrc] = useState('');
-  const [markers, setMarkers] = useState([]);
   const [showTrimPanel, setShowTrimPanel] = useState(false);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
   const [downloadingClip, setDownloadingClip] = useState(null);
   const [selectedClips, setSelectedClips] = useState([]);
   const [downloadingZip, setDownloadingZip] = useState(false);
-  const [processingStatus, setProcessingStatus] = useState(null);
-  const [serverBootId, setServerBootId] = useState(null);
-  const [serverRestarted, setServerRestarted] = useState(false);
-
-  const fetchProcessingStatus = useCallback(async () => {
-    try {
-      const response = await axios.get(`${API}/videos/${videoId}/processing-status`, { headers: getAuthHeader() });
-      const data = response.data;
-      setProcessingStatus(data);
-
-      // Detect server restart via boot_id change
-      if (data.server_boot_id) {
-        if (serverBootId && serverBootId !== data.server_boot_id) {
-          console.log('Server restarted detected — boot_id changed');
-          setServerRestarted(true);
-          // If processing was in progress, server auto-resumes on startup
-          // Refresh analyses to get any that completed before restart
-          const res = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
-          setAnalyses(res.data);
-        }
-        setServerBootId(data.server_boot_id);
-      }
-
-      return data;
-    } catch (err) {
-      console.error('Failed to fetch processing status:', err);
-      return null;
-    }
-  }, [videoId, serverBootId]);
-
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const [metaRes, analysesRes, annotationsRes, clipsRes] = await Promise.all([
-          axios.get(`${API}/videos/${videoId}/metadata`, { headers: getAuthHeader() }),
-          axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() }),
-          axios.get(`${API}/annotations/video/${videoId}`, { headers: getAuthHeader() }),
-          axios.get(`${API}/clips/video/${videoId}`, { headers: getAuthHeader() })
-        ]);
-        setVideoMetadata(metaRes.data);
-        setAnalyses(analysesRes.data);
-        setAnnotations(annotationsRes.data);
-        setClips(clipsRes.data);
-
-        if (metaRes.data.match_id) {
-          const matchRes = await axios.get(`${API}/matches/${metaRes.data.match_id}`, { headers: getAuthHeader() });
-          setMatch(matchRes.data);
-          // Fetch players for this match
-          try {
-            const playersRes = await axios.get(`${API}/players/match/${metaRes.data.match_id}`, { headers: getAuthHeader() });
-            setPlayers(playersRes.data);
-          } catch (e) { console.error('Failed to fetch players:', e); }
-        }
-        // Fetch timeline markers
-        try {
-          const markersRes = await axios.get(`${API}/markers/video/${videoId}`, { headers: getAuthHeader() });
-          setMarkers(markersRes.data);
-        } catch (e) { console.error('Failed to fetch markers:', e); }
-        // Get short-lived video access token (avoids exposing main JWT in video URL)
-        try {
-          const tokenRes = await axios.get(`${API}/videos/${videoId}/access-token`, { headers: getAuthHeader() });
-          setVideoSrc(`${API}/videos/${videoId}?token=${tokenRes.data.token}`);
-        } catch (e) {
-          console.error('Failed to get video access token:', e);
-          setVideoSrc(`${API}/videos/${videoId}`);
-        }
-      } catch (err) {
-        console.error('Failed to load data:', err);
-      }
-    };
-    loadData();
-    fetchProcessingStatus();
-  }, [videoId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Poll processing status — always poll every 8s (acts as heartbeat + status check)
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      const status = await fetchProcessingStatus();
-      // If processing just completed, refresh analyses
-      if (status && processingStatus && 
-          (processingStatus.processing_status === 'processing' || processingStatus.processing_status === 'queued') &&
-          (status.processing_status === 'completed' || status.processing_status === 'failed')) {
-        const res = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
-        setAnalyses(res.data);
-        // Also refresh markers after processing completes
-        try {
-          const mkRes = await axios.get(`${API}/markers/video/${videoId}`, { headers: getAuthHeader() });
-          setMarkers(mkRes.data);
-        } catch (e) { console.error('Failed to refresh markers after processing:', e); }
-      }
-    }, 8000);
-    return () => clearInterval(interval);
-  }, [fetchProcessingStatus, processingStatus, videoId]);
-
-  const handleReprocess = async () => {
-    try {
-      await axios.post(`${API}/videos/${videoId}/reprocess`, {}, { headers: getAuthHeader() });
-      setProcessingStatus({ processing_status: 'queued', processing_progress: 0 });
-    } catch (err) {
-      console.error('Reprocess failed:', err);
-    }
-  };
 
   const handleGenerateAnalysis = async (type) => {
     setAnalyzing(true);
@@ -354,16 +268,7 @@ const VideoAnalysis = () => {
     }
   };
 
-  const isProcessing = processingStatus && (processingStatus.processing_status === 'processing' || processingStatus.processing_status === 'queued');
-  const isProcessed = processingStatus && processingStatus.processing_status === 'completed';
-  const processingFailed = processingStatus && processingStatus.processing_status === 'failed';
-
-  const processingLabel = {
-    'tactical': 'Tactical Analysis',
-    'player_performance': 'Player Ratings',
-    'highlights': 'Highlights Detection',
-    'timeline_markers': 'Timeline Markers'
-  };
+  const processingLabel = PROCESSING_LABEL;
 
   const sortedMarkers = useMemo(() =>
     [...markers].sort((a, b) => a.time - b.time),

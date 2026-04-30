@@ -2,6 +2,16 @@
 
 ## What's Been Implemented
 
+### VideoAnalysis useVideoProcessing Hook (Apr 30, 2026 — iter15)
+**Pure refactor: 585 → 490 lines (-16%)** in VideoAnalysis.js. Extracted two cohesive hooks in `/app/frontend/src/pages/components/hooks/useVideoProcessing.js`:
+
+- **`useVideoProcessing(videoId, onAnalysesRefresh, onMarkersRefresh)`** — owns the 8s polling loop, server-boot-id restart detection, `reprocess` mutation, and derived flags (`isProcessing` / `isProcessed` / `processingFailed` / `serverRestarted`).
+- **`useVideoData(videoId)`** — initial parallel load of `videoMetadata`, `analyses`, `annotations`, `clips`, `match`, `players`, `markers`, plus short-lived access-token-signed `videoSrc`.
+
+**Behavior unchanged** — same 8s interval, same boot-id detection, same reprocess endpoint. Screenshot confirmed the page still renders correctly end-to-end (toolbar + processing-error banner + player + sidebars + tabs all load). Lint clean.
+
+**Cumulative refactor status**: Dashboard 750→373 (-50%), MatchDetail 646→336 (-48%), VideoAnalysis 835→490 (-41%). Total 2229 → **1199 lines (-46%)** across the 3 pages + 14 components + 4 hook modules.
+
 ### Email Queue with Quota Fallback + Admin Visibility (Apr 30, 2026 — iter14)
 **Problem**: Resend free tier has hard monthly/daily limits. Naive sends raised `HTTPException(502)` and the email was lost forever.
 
