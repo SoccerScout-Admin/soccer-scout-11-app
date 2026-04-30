@@ -65,6 +65,7 @@ from routes.push_notifications import router as push_notifications_router
 from routes.voice_annotations import router as voice_annotations_router
 from routes.spoken_summary import router as spoken_summary_router
 from routes.admin import router as admin_router
+from routes.scouting_packets import router as scouting_packets_router
 
 # ===== Storage: Delegated to services/storage.py =====
 # All storage primitives (create_storage_session, init_storage, put_object_sync,
@@ -1090,6 +1091,27 @@ async def create_clip(input: ClipCreate, current_user: dict = Depends(get_curren
     await db.clips.insert_one(clip_obj.model_dump())
     return clip_obj
 
+@api_router.get("/clips", response_model=List[Clip])
+async def list_all_user_clips(
+    limit: int = 500,
+    match_id: Optional[str] = None,
+    player_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """List clips for the current user, most recent first. Optional filters:
+    `match_id` (all clips for one match) and `player_id` (clips where the
+    player is tagged). Powers cross-match bulk share, scouting packets, and
+    the iter12 mention E2E test fixture.
+    """
+    query: dict = {"user_id": current_user["id"]}
+    if match_id:
+        query["match_id"] = match_id
+    if player_id:
+        query["player_ids"] = player_id
+    clips = await db.clips.find(query, {"_id": 0}).sort("created_at", -1).to_list(max(1, min(limit, 2000)))
+    return clips
+
+
 @api_router.get("/clips/video/{video_id}", response_model=List[Clip])
 async def get_clips(video_id: str, current_user: dict = Depends(get_current_user)):
     clips = await db.clips.find({"video_id": video_id, "user_id": current_user["id"]}, {"_id": 0}).to_list(1000)
@@ -1643,7 +1665,7 @@ _pp_api.include_router(player_profile_router)
 app.include_router(_pp_api)
 
 # Mount Folders, Matches, Annotations, Analysis, Insights (CRUD-style routers)
-for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router, videos_router, annotation_templates_router, coach_pulse_router, push_notifications_router, voice_annotations_router, spoken_summary_router, admin_router):
+for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router, videos_router, annotation_templates_router, coach_pulse_router, push_notifications_router, voice_annotations_router, spoken_summary_router, admin_router, scouting_packets_router):
     _api = APIRouter(prefix="/api")
     _api.include_router(r)
     app.include_router(_api)

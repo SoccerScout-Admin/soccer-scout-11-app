@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { API, getAuthHeader } from '../App';
-import { ArrowLeft, Sparkle, ArrowsClockwise, UserCircle, TrendUp, Target, GraduationCap, Lightbulb, Star, Globe } from '@phosphor-icons/react';
+import { API, getAuthHeader, getCurrentUser } from '../App';
+import { ArrowLeft, Sparkle, ArrowsClockwise, UserCircle, TrendUp, Target, GraduationCap, Lightbulb, Star, Globe, FilePdf } from '@phosphor-icons/react';
+import ScoutingPacketModal from './components/ScoutingPacketModal';
 
 const NetworkPercentileChip = ({ level, distribution }) => {
   if (!level || !distribution) return null;
@@ -38,6 +39,9 @@ const PlayerSeasonTrends = () => {
   const [teamId, setTeamId] = useState(null);
   const [availableTeams, setAvailableTeams] = useState([]);
   const [networkBenchmarks, setNetworkBenchmarks] = useState(null);
+  const [packetModalOpen, setPacketModalOpen] = useState(false);
+  const me = getCurrentUser();
+  const isAdmin = ['admin', 'owner'].includes((me?.role || '').toLowerCase());
 
   useEffect(() => {
     const load = async () => {
@@ -124,6 +128,13 @@ const PlayerSeasonTrends = () => {
               <><Sparkle size={14} weight="fill" /> Generate Report</>
             )}
           </button>
+          {isAdmin && (
+            <button data-testid="scouting-packet-btn" onClick={() => setPacketModalOpen(true)}
+              title="Generate a branded PDF scouting packet for this player"
+              className="flex items-center gap-2 px-4 py-2.5 bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/40 hover:bg-[#10B981]/25 text-xs font-bold tracking-wider uppercase rounded transition-colors">
+              <FilePdf size={14} weight="bold" /> Scouting Packet
+            </button>
+          )}
         </div>
       </header>
 
@@ -381,6 +392,13 @@ const PlayerSeasonTrends = () => {
           </>
         )}
       </main>
+
+      <ScoutingPacketModal
+        open={packetModalOpen}
+        onClose={() => setPacketModalOpen(false)}
+        playerId={playerId}
+        playerName={data?.player?.name || 'Player'}
+      />
     </div>
   );
 };
