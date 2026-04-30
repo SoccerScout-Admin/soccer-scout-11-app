@@ -19,6 +19,7 @@ import MatchInsights from './pages/MatchInsights';
 import SeasonTrends from './pages/SeasonTrends';
 import PlayerSeasonTrends from './pages/PlayerSeasonTrends';
 import CoachNetwork from './pages/CoachNetwork';
+import AdminUsers from './pages/AdminUsers';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -47,7 +48,27 @@ function App() {
 
   useEffect(() => {
     const token = localStorage.getItem('token');
-    setIsAuthenticated(!!token);
+    if (!token) { setIsAuthenticated(false); return; }
+    // Revalidate token on mount — if 401, drop stale session.
+    // Also syncs role/name changes (e.g. admin promotion) without logout/login.
+    axios.get(`${API}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => {
+        const u = res.data || {};
+        localStorage.setItem('user', JSON.stringify({
+          id: u.id, name: u.name, role: u.role,
+        }));
+        setIsAuthenticated(true);
+      })
+      .catch((err) => {
+        if (err.response?.status === 401) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          setIsAuthenticated(false);
+        } else {
+          // Network/server blip — keep current session, assume authenticated.
+          setIsAuthenticated(true);
+        }
+      });
   }, []);
 
   // Register service worker so the app is installable AND push-notification-capable
@@ -148,6 +169,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <CoachNetwork />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/users"
+            element={
+              <ProtectedRoute>
+                <AdminUsers />
               </ProtectedRoute>
             }
           />

@@ -29,7 +29,11 @@ const AuthPage = ({ setIsAuthenticated }) => {
 
       const response = await axios.post(`${API}${endpoint}`, payload);
       localStorage.setItem('token', response.data.token);
-      localStorage.setItem('user', JSON.stringify(response.data.user));
+      // Cache only non-sensitive fields — drop email and any future PII.
+      const u = response.data.user || {};
+      localStorage.setItem('user', JSON.stringify({
+        id: u.id, name: u.name, role: u.role,
+      }));
       setIsAuthenticated(true);
       navigate('/');
     } catch (err) {

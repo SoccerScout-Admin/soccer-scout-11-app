@@ -181,3 +181,41 @@ async def compute_benchmarks(user_id: str | None = None) -> dict:
         "k_anonymity_threshold": K_ANON_THRESHOLD,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+
+@router.get("/coach-network/mentionable-coaches")
+async def mentionable_coaches(
+    q: str = "", current_user: dict = Depends(get_current_user)
+):
+    """Return coaches the current user can @-mention in a shared clip reel.
+
+    Includes all other coaches on the platform (the Coach Network is the whole
+    platform). Results filtered by a case-insensitive substring match on name
+    or email. Excludes the caller and inactive/empty accounts (coaches with
+    zero matches AND zero clips are deprioritized but still returned so a
+    fresh coach can still be mentioned).
+    """
+    import re
+    q = (q or "").strip()
+    base = {"id": {"$ne": current_user["id"]}}
+    if q:
+        pattern = {"$regex": re.escape(q), "$options": "i"}
+        base["$or"] = [{"name": pattern}, {"email": pattern}]
+    users = await db.users.find(base, {"_id": 0, "id": 1, "name": 1, "email": 1}).limit(20).to_list(20)
+    # Enrich with activity counters so the UI can sort active coaches first
+    result = []
+    for u in users:
+        matches_n = await db.matches.count_documents({"user_id": u["id"]})
+        clips_n = await db.clips.count_documents({"user_id": u["id"]})
+        result.append({
+            "id": u["id"],
+            "name": u.get("name") or "",
+            "email": u.get("email") or "",
+            "matches_count": matches_n,
+            "clips_count": clips_n,
+            "active": (matches_n + clips_n) > 0,
+        })
+    # Active coaches first
+    result.sort(key=lambda r: (not r["active"], r["name"].lower()))
+    return result

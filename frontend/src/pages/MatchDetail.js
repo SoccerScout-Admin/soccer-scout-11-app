@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
 import { ArrowLeft, UploadSimple, VideoCamera, Spinner, Users, Plus, Trash, FileText, Warning, ArrowsClockwise } from '@phosphor-icons/react';
+import ManualResultForm from './components/ManualResultForm';
 
 const MatchDetail = () => {
   const { matchId } = useParams();
@@ -288,6 +289,12 @@ const MatchDetail = () => {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-8">
+        {/* Manual Result — shown above the upload panel when no video is attached,
+            so coaches can record the outcome without footage */}
+        {!match.video_id && (
+          <ManualResultForm match={match} players={players} onSaved={() => fetchMatch()} />
+        )}
+
         {/* Match Info + Upload */}
         <div className="bg-[#141414] border border-white/10 p-8 mb-6">
           <div className="flex items-center justify-between mb-6">

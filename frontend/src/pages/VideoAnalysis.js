@@ -241,6 +241,8 @@ const VideoAnalysis = () => {
   const [collectionShare, setCollectionShare] = useState(null);
   const [collectionModalOpen, setCollectionModalOpen] = useState(false);
   const [collectionTitle, setCollectionTitle] = useState('');
+  const [collectionDescription, setCollectionDescription] = useState('');
+  const [mentionedCoaches, setMentionedCoaches] = useState([]);
   const [creatingCollection, setCreatingCollection] = useState(false);
   const [collectionCopied, setCollectionCopied] = useState(false);
 
@@ -303,6 +305,8 @@ const VideoAnalysis = () => {
       const res = await axios.post(`${API}/clip-collections`, {
         clip_ids: selectedClips,
         title: collectionTitle.trim() || `${selectedClips.length} Clips`,
+        description: (collectionDescription || '').trim(),
+        mentioned_coach_ids: mentionedCoaches.map((c) => c.id),
       }, { headers: getAuthHeader() });
       setCollectionShare(res.data);
     } catch (err) {
@@ -744,7 +748,14 @@ const VideoAnalysis = () => {
               downloadingClip={downloadingClip}
               downloadingZip={downloadingZip}
               onToggleSelect={toggleClipSelection}
-              onShareReel={() => { setCollectionTitle(''); setCollectionShare(null); setCollectionCopied(false); setCollectionModalOpen(true); }}
+              onShareReel={() => {
+                setCollectionTitle('');
+                setCollectionDescription('');
+                setMentionedCoaches([]);
+                setCollectionShare(null);
+                setCollectionCopied(false);
+                setCollectionModalOpen(true);
+              }}
               onDownloadZipSelected={() => handleDownloadZip(selectedClips)}
               onDownloadAllZip={() => handleDownloadZip(clips.map(c => c.id))}
               onDeleteClip={handleDeleteClip}
@@ -781,6 +792,10 @@ const VideoAnalysis = () => {
         selectedClips={selectedClips}
         collectionTitle={collectionTitle}
         setCollectionTitle={setCollectionTitle}
+        description={collectionDescription}
+        setDescription={setCollectionDescription}
+        mentionedCoaches={mentionedCoaches}
+        setMentionedCoaches={setMentionedCoaches}
         handleCreateCollection={handleCreateCollection}
         creatingCollection={creatingCollection}
         collectionUrl={collectionUrl}

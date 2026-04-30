@@ -1,5 +1,5 @@
 """Player profile aggregation, public share, and clip-collection (batch share) endpoints."""
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime, timezone
@@ -152,12 +152,14 @@ async def get_shared_player(share_token: str):
 
 class ClipCollectionCreate(BaseModel):
     title: Optional[str] = None
+    description: Optional[str] = None
     clip_ids: List[str] = Field(min_length=1, max_length=200)
+    mentioned_coach_ids: List[str] = Field(default_factory=list, max_length=20)
 
 
 @router.post("/clip-collections")
 async def create_clip_collection(
-    body: ClipCollectionCreate, current_user: dict = Depends(get_current_user)
+    body: ClipCollectionCreate, request: Request, current_user: dict = Depends(get_current_user)
 ):
     owned = await db.clips.find(
         {"id": {"$in": body.clip_ids}, "user_id": current_user["id"]},
@@ -176,12 +178,37 @@ async def create_clip_collection(
         "id": str(uuid.uuid4()),
         "user_id": current_user["id"],
         "title": title,
+        "description": (body.description or "").strip()[:2000],
         "clip_ids": list(body.clip_ids),
         "share_token": str(uuid.uuid4())[:12],
+        "mentioned_coach_ids": list(body.mentioned_coach_ids or []),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.clip_collections.insert_one(coll)
-    return {k: v for k, v in coll.items() if k != "_id"}
+
+    # Fire mention notifications (best-effort, non-blocking would be ideal but
+    # the caller usually wants to know how many went out — keep it awaitable).
+    notify_summary = {"sent": 0, "skipped": 0}
+    if coll["mentioned_coach_ids"]:
+        try:
+            from services.clip_mentions import notify_coach_mentions
+            # Prefer the forwarded host so mentions link to the public preview URL
+            # rather than the internal cluster name.
+            host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+            notify_summary = await notify_coach_mentions(
+                mentioner=current_user,
+                collection=coll,
+                mentioned_coach_ids=coll["mentioned_coach_ids"],
+                request_host=host,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("clip mention notify failed: %s", e)
+
+    result = {k: v for k, v in coll.items() if k != "_id"}
+    result["mentions_sent"] = notify_summary.get("sent", 0)
+    result["mentions_skipped"] = notify_summary.get("skipped", 0)
+    return result
 
 
 @router.get("/clip-collections")

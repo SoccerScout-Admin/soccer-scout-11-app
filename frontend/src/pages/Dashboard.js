@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
-import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield, ChartLineUp, Globe } from '@phosphor-icons/react';
+import { Play, Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield, ChartLineUp, Globe, UploadSimple } from '@phosphor-icons/react';
 import CoachPulseCard from './components/CoachPulseCard';
 
 const Dashboard = () => {
@@ -251,6 +251,12 @@ const Dashboard = () => {
               className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-xs text-[#A855F7] hover:text-white hover:bg-[#A855F7]/15 transition-colors border border-[#A855F7]/30 font-bold uppercase tracking-wider">
               <Globe size={16} weight="bold" /> Coach Network
             </button>
+            {['admin', 'owner'].includes((user?.role || '').toLowerCase()) && (
+              <button data-testid="admin-nav-btn" onClick={() => navigate('/admin/users')}
+                className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-xs text-[#FBBF24] hover:text-white hover:bg-[#FBBF24]/15 transition-colors border border-[#FBBF24]/30 font-bold uppercase tracking-wider">
+                <Shield size={16} weight="bold" /> Admin
+              </button>
+            )}
             {/* Mobile icon-only versions */}
             <button data-testid="clubs-nav-btn-mobile" onClick={() => navigate('/clubs')} aria-label="Clubs & Teams"
               className="sm:hidden p-2 text-[#A3A3A3] hover:text-white border border-white/10">
@@ -260,6 +266,12 @@ const Dashboard = () => {
               className="sm:hidden p-2 text-[#A855F7] border border-[#A855F7]/30">
               <Globe size={18} weight="bold" />
             </button>
+            {['admin', 'owner'].includes((user?.role || '').toLowerCase()) && (
+              <button data-testid="admin-nav-btn-mobile" onClick={() => navigate('/admin/users')} aria-label="Admin"
+                className="sm:hidden p-2 text-[#FBBF24] border border-[#FBBF24]/30">
+                <Shield size={18} weight="bold" />
+              </button>
+            )}
             <div className="hidden md:block text-right">
               <p className="text-sm text-[#A3A3A3]">{user?.name}</p>
               <p className="text-xs text-[#A3A3A3] uppercase tracking-wider">{user?.role}</p>
@@ -519,6 +531,31 @@ const Dashboard = () => {
                           <span>Video uploaded</span>
                         </div>
                       )}
+                    </div>
+                  )}
+                  {!match.video_id && match.has_manual_result && match.manual_result && (
+                    <div className="mt-4 flex items-center gap-2 flex-wrap" data-testid={`manual-badge-${match.id}`}>
+                      <span className="text-[10px] tracking-[0.2em] uppercase font-bold text-[#60A5FA] bg-[#60A5FA]/15 border border-[#60A5FA]/30 px-2 py-1">
+                        No Video — Manual Result
+                      </span>
+                      <span className="text-sm font-bold text-white" style={{ fontFamily: 'Bebas Neue' }}>
+                        {match.manual_result.home_score} – {match.manual_result.away_score}
+                      </span>
+                      {match.manual_result.outcome && (
+                        <span className="text-[10px] tracking-wider uppercase font-bold px-1.5 py-0.5"
+                          style={{
+                            color: match.manual_result.outcome === 'W' ? '#10B981' : match.manual_result.outcome === 'L' ? '#EF4444' : '#FBBF24',
+                            backgroundColor: (match.manual_result.outcome === 'W' ? '#10B981' : match.manual_result.outcome === 'L' ? '#EF4444' : '#FBBF24') + '20',
+                          }}>
+                          {match.manual_result.outcome}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {!match.video_id && !match.has_manual_result && (
+                    <div className="mt-4 flex items-center gap-2 text-[#A3A3A3] text-xs" data-testid={`pending-badge-${match.id}`}>
+                      <UploadSimple size={14} />
+                      <span>No video or result yet</span>
                     </div>
                   )}
                 </div>

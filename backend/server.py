@@ -64,180 +64,40 @@ from routes.coach_pulse import router as coach_pulse_router
 from routes.push_notifications import router as push_notifications_router
 from routes.voice_annotations import router as voice_annotations_router
 from routes.spoken_summary import router as spoken_summary_router
+from routes.admin import router as admin_router
 
-# ===== Storage: Connection Pooling + Retry for SSL resilience =====
-
-def create_storage_session():
-    session = requests.Session()
-    retry_strategy = Retry(
-        total=0,  # No urllib3 retries - all retries at application level
-    )
-    adapter = HTTPAdapter(
-        max_retries=retry_strategy,
-        pool_connections=10,
-        pool_maxsize=10,
-    )
-    session.mount('https://', adapter)
-    session.mount('http://', adapter)
-    return session
-
-storage_session = create_storage_session()
-
-def init_storage():
-    global storage_key
-    if storage_key:
-        # Verify the key still works by checking if session changed
-        return storage_key
-    try:
-        resp = storage_session.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-        resp.raise_for_status()
-        storage_key = resp.json()["storage_key"]
-        logger.info("Storage initialized successfully")
-        return storage_key
-    except Exception as e:
-        logger.error(f"Storage init failed: {e}")
-        raise
-
-def reset_storage():
-    """Reset storage key so it re-initializes on next call"""
-    global storage_key
-    storage_key = None
-
-def put_object_sync(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    resp = storage_session.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data, timeout=(3, 15)  # 3s connect, 15s read - fail fast for fallback
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-async def put_object_with_retry(path: str, data: bytes, content_type: str, max_retries: int = 2) -> dict:
-    """Upload to storage with fast retry and session recreation on SSL errors"""
-    global storage_session
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            result = await run_in_threadpool(put_object_sync, path, data, content_type)
-            return result
-        except Exception as e:
-            last_error = e
-            error_str = str(e)
-            is_retryable = "SSL" in error_str or "Connection" in error_str or "EOF" in error_str or "500" in error_str
-            if attempt < max_retries - 1 and is_retryable:
-                wait_time = 2
-                logger.warning(f"Storage upload failed (attempt {attempt+1}/{max_retries}), retrying in {wait_time}s: {error_str[:100]}")
-                storage_session = create_storage_session()
-                reset_storage()
-                init_storage()
-                await asyncio.sleep(wait_time)
-            else:
-                raise
-    raise last_error
-
-def get_object_sync(path: str) -> tuple:
-    key = init_storage()
-    resp = storage_session.get(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key}, timeout=120
-    )
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
-
-def delete_object_sync(path: str):
-    key = init_storage()
-    try:
-        storage_session.delete(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=30)
-    except Exception:
-        pass
-
-# Legacy wrappers (used by non-chunked upload and analysis)
-def put_object(path, data, content_type):
-    return put_object_sync(path, data, content_type)
-
-def get_object(path):
-    return get_object_sync(path)
-
-# ===== Circuit Breaker for Object Storage =====
+# ===== Storage: Delegated to services/storage.py =====
+# All storage primitives (create_storage_session, init_storage, put_object_sync,
+# get_object_sync, store_chunk, read_chunk_data, circuit breaker) live in
+# services/storage.py. server.py imports and re-exports them so existing call
+# sites (upload/download endpoints, video streaming, clip extraction) work.
+from services.storage import (
+    create_storage_session,  # noqa: F401
+    init_storage,
+    reset_storage,  # noqa: F401
+    put_object_sync,
+    put_object_with_retry,  # noqa: F401
+    get_object_sync,
+    delete_object_sync,  # noqa: F401
+    store_chunk,
+    read_chunk_data,
+    storage_breaker,  # noqa: F401
+    _write_file,  # noqa: F401
+    _read_file,  # noqa: F401
+)
 
 CHUNK_STORAGE_DIR = "/var/video_chunks"
 os.makedirs(CHUNK_STORAGE_DIR, exist_ok=True)
 
-class StorageCircuitBreaker:
-    def __init__(self, failure_threshold=1, reset_timeout=120):
-        self.consecutive_failures = 0
-        self.failure_threshold = failure_threshold
-        self.last_failure_time = 0
-        self.reset_timeout = reset_timeout
 
-    @property
-    def is_open(self):
-        if self.consecutive_failures >= self.failure_threshold:
-            if time.time() - self.last_failure_time > self.reset_timeout:
-                self.consecutive_failures = 0
-                return False
-            return True
-        return False
+# Legacy wrappers (still referenced by non-chunked upload paths)
+def put_object(path, data, content_type):
+    return put_object_sync(path, data, content_type)
 
-    def record_failure(self):
-        self.consecutive_failures += 1
-        self.last_failure_time = time.time()
 
-    def record_success(self):
-        self.consecutive_failures = 0
+def get_object(path):
+    return get_object_sync(path)
 
-storage_breaker = StorageCircuitBreaker()
-
-async def store_chunk(video_id: str, user_id: str, chunk_index: int, data: bytes) -> dict:
-    """Store chunk - tries Object Storage first, falls back to local filesystem (/var overlay, 84GB)"""
-    chunk_path = f"{APP_NAME}/videos/{user_id}/{video_id}_chunk_{chunk_index:06d}.bin"
-
-    if not storage_breaker.is_open:
-        try:
-            result = await put_object_with_retry(chunk_path, data, "application/octet-stream", max_retries=2)
-            storage_breaker.record_success()
-            return {"backend": "storage", "path": chunk_path, "size": len(data)}
-        except Exception as e:
-            storage_breaker.record_failure()
-            logger.warning(f"Object Storage failed (breaker: {storage_breaker.consecutive_failures}), falling back to filesystem: {str(e)[:80]}")
-    else:
-        logger.info("Circuit breaker OPEN - using filesystem directly")
-
-    # Fallback: store on local filesystem (/var is on 84GB overlay, NOT the 9.8GB /app partition)
-    video_dir = os.path.join(CHUNK_STORAGE_DIR, video_id)
-    os.makedirs(video_dir, exist_ok=True)
-    local_path = os.path.join(video_dir, f"chunk_{chunk_index:06d}.bin")
-    await run_in_threadpool(_write_file, local_path, data)
-    logger.info(f"Chunk {chunk_index} stored on filesystem ({len(data)} bytes)")
-    return {"backend": "filesystem", "path": local_path, "size": len(data)}
-
-def _write_file(path: str, data: bytes):
-    with open(path, 'wb') as f:
-        f.write(data)
-
-def _read_file(path: str) -> bytes:
-    with open(path, 'rb') as f:
-        return f.read()
-
-async def read_chunk_data(video_id: str, chunk_index: int, chunk_info: dict) -> bytes:
-    """Read chunk from the appropriate backend"""
-    backend = chunk_info.get("backend", "storage")
-    path = chunk_info.get("path", "")
-
-    if backend == "filesystem":
-        return await run_in_threadpool(_read_file, path)
-    elif backend == "mongodb":
-        doc = await db.video_chunks.find_one(
-            {"video_id": video_id, "chunk_index": chunk_index},
-            {"data": 1}
-        )
-        if doc and "data" in doc:
-            return bytes(doc["data"])
-        raise Exception(f"Chunk {chunk_index} not found in MongoDB")
-    else:
-        data, _ = await run_in_threadpool(get_object_sync, path)
-        return data
 
 # ===== Models =====
 
@@ -1783,7 +1643,7 @@ _pp_api.include_router(player_profile_router)
 app.include_router(_pp_api)
 
 # Mount Folders, Matches, Annotations, Analysis, Insights (CRUD-style routers)
-for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router, videos_router, annotation_templates_router, coach_pulse_router, push_notifications_router, voice_annotations_router, spoken_summary_router):
+for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router, videos_router, annotation_templates_router, coach_pulse_router, push_notifications_router, voice_annotations_router, spoken_summary_router, admin_router):
     _api = APIRouter(prefix="/api")
     _api.include_router(r)
     app.include_router(_api)
@@ -1968,6 +1828,45 @@ async def startup():
     asyncio.create_task(resume_interrupted_processing())
     # Periodic sweeper for permanently purging soft-deleted videos
     asyncio.create_task(deleted_video_sweeper())
+    # APScheduler — weekly Coach Pulse blast every Monday 08:00 UTC
+    start_coach_pulse_scheduler()
+
+
+# ===== APScheduler: Weekly Coach Pulse Blast =====
+_scheduler = None
+
+
+def start_coach_pulse_scheduler():
+    """Start an AsyncIOScheduler that fires the Coach Pulse weekly blast every
+    Monday at 08:00 UTC. Idempotent: running multiple times is a no-op because
+    the endpoint itself dedupes by ISO week."""
+    global _scheduler
+    if _scheduler is not None:
+        return
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        from routes.coach_pulse import run_weekly_blast
+
+        async def _job():
+            try:
+                result = await run_weekly_blast(triggered_by="apscheduler")
+                logger.info("[apscheduler] coach_pulse weekly blast result: %s", result)
+            except Exception as e:
+                logger.error("[apscheduler] coach_pulse weekly blast crashed: %s", e)
+
+        _scheduler = AsyncIOScheduler(timezone="UTC")
+        _scheduler.add_job(
+            _job,
+            CronTrigger(day_of_week="mon", hour=8, minute=0, timezone="UTC"),
+            id="coach_pulse_weekly",
+            replace_existing=True,
+            misfire_grace_time=3600,  # If the server was down at 08:00, run within the next hour
+        )
+        _scheduler.start()
+        logger.info("[apscheduler] scheduler started — coach_pulse_weekly cron: Mon 08:00 UTC")
+    except Exception as e:
+        logger.error("[apscheduler] failed to start scheduler: %s", e)
 
 
 async def deleted_video_sweeper():
@@ -1992,4 +1891,11 @@ async def deleted_video_sweeper():
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    global _scheduler
+    if _scheduler is not None:
+        try:
+            _scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        _scheduler = None
     client.close()

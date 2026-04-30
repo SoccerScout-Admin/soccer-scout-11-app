@@ -20,6 +20,8 @@ class Match(BaseModel):
     competition: str = ""
     folder_id: Optional[str] = None
     video_id: Optional[str] = None
+    has_manual_result: bool = False
+    manual_result: Optional[dict] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -53,7 +55,6 @@ async def get_matches(current_user: dict = Depends(get_current_user)):
                 match["processing_status"] = video.get("processing_status", "none")
                 match["processing_progress"] = video.get("processing_progress", 0)
     return matches
-
 
 @router.get("/matches/{match_id}", response_model=Match)
 async def get_match(match_id: str, current_user: dict = Depends(get_current_user)):
@@ -96,6 +97,81 @@ async def list_deleted_videos(
         },
         {"_id": 0, "chunk_paths": 0, "chunk_sizes": 0, "chunk_backends": 0},
     ).sort("deleted_at", -1).to_list(20)
+
+
+class ManualKeyEvent(BaseModel):
+    type: str  # 'goal', 'shot', 'save', 'foul', 'card', 'sub', 'note'
+    minute: int = 0
+    team: str = ""  # must match team_home or team_away
+    player_id: Optional[str] = None
+    description: str = ""
+
+
+class ManualResult(BaseModel):
+    home_score: int = Field(ge=0, le=99)
+    away_score: int = Field(ge=0, le=99)
+    key_events: List[ManualKeyEvent] = Field(default_factory=list, max_length=60)
+    notes: str = Field(default="", max_length=2000)
+
+
+@router.put("/matches/{match_id}/manual-result")
+async def save_manual_result(
+    match_id: str,
+    body: ManualResult,
+    current_user: dict = Depends(get_current_user),
+):
+    """Record the outcome of a match that has no video uploaded.
+
+    Counts toward Season Trends (W/D/L, GF/GA) just like video-derived results.
+    Safe to call multiple times — replaces previous manual result.
+    """
+    match = await db.matches.find_one(
+        {"id": match_id, "user_id": current_user["id"]}, {"_id": 0, "id": 1, "team_home": 1, "team_away": 1},
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    payload = body.model_dump()
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    payload["updated_by"] = current_user["id"]
+    # Compute derived outcome from the home team's perspective so downstream
+    # aggregations don't have to recompute.
+    payload["outcome"] = (
+        "W" if body.home_score > body.away_score
+        else "L" if body.home_score < body.away_score
+        else "D"
+    )
+    await db.matches.update_one(
+        {"id": match_id},
+        {"$set": {"manual_result": payload, "has_manual_result": True}},
+    )
+    return {"status": "saved", "manual_result": payload}
+
+
+@router.delete("/matches/{match_id}/manual-result")
+async def delete_manual_result(
+    match_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Remove a manual result (e.g. once video is uploaded and processed)."""
+    res = await db.matches.update_one(
+        {"id": match_id, "user_id": current_user["id"]},
+        {"$unset": {"manual_result": "", "has_manual_result": ""}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return {"status": "deleted"}
+
+
+@router.get("/matches/{match_id}/manual-result")
+async def get_manual_result(
+    match_id: str, current_user: dict = Depends(get_current_user)
+):
+    match = await db.matches.find_one(
+        {"id": match_id, "user_id": current_user["id"]},
+        {"_id": 0, "manual_result": 1},
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return match.get("manual_result") or {}
 
 
 # ===== Bulk match operations =====

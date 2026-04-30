@@ -1,0 +1,51 @@
+{
+  "summary": "Iter11 — 7 new features verified. Full pytest suite: 133 passed + 4 skipped + 1 failed (the single failure is a real bug in GET /api/matches/{id}/manual-result after deletion, see RCA). Baseline 116 passed regressions ALL still passing — no behavioural regressions from the 7 changes (storage dedup, APScheduler, admin endpoints, mentions, manual results, season trends, localStorage PII cleanup). 17/19 new iter11 tests pass; 1 fails (manual-result GET-after-DELETE bug); 1 skipped (no clips for the current user — environmental). Frontend smoke confirms: AdminUsers loads with 61 users + Promote/Demote/Coach/Analyst chips, ManualResultForm renders above upload panel for video-less matches, localStorage user blob has no email field, /auth/me revalidates and returns id+email+name+role, Coach Pulse + admin link visible on dashboard, mentionable-coaches API working (6 results for q=coach). Zero React console errors.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET /api/matches/{match_id}/manual-result",
+        "issue": "After DELETE /manual-result unsets the field, the subsequent GET returns 404 instead of 200 + {}. Root cause in routes/matches.py line ~168: find_one uses inclusion projection {\"_id\": 0, \"manual_result\": 1}; when manual_result is unset Mongo returns an empty dict {}, and `if not match:` is truthy for empty dict, hitting the 404 branch. Fix: change to `match = await db.matches.find_one({...}, {...}); if match is None: 404`. Or simpler — use `await db.matches.count_documents({...})` first, or change the projection to also include 'id': 1 so the doc is never empty.",
+        "priority": "LOW"
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter11_new_features.py",
+    "/app/test_reports/pytest/iter11_new_features.xml",
+    "/app/test_reports/pytest/iter11_full.xml"
+  ],
+  "action_items": [
+    "Fix GET /api/matches/{id}/manual-result returning 404 when manual_result has been unset (see RCA below). One-line fix in routes/matches.py.",
+    "(Optional) The 2 dashboard console errors are 'Failed to load resource: 404' — likely a missing favicon or static asset. Not blocking, but worth a quick look at the network tab.",
+    "(Nothing required) Storage dedup verified: 0 storage function definitions remain in server.py; all routed to services/storage.py. APScheduler started and 'coach_pulse_weekly cron: Mon 08:00 UTC' is logged at every backend boot. Resend sender swap to bb@soccerscout11.com is loaded from .env."
+  ],
+  "critical_code_review_comments": [
+    "[BUG] routes/matches.py:168 — `if not match:` evaluates to True for empty dict (when manual_result has been unset); causes spurious 404 on a valid match. Use `if match is None:` or include 'id' in the projection.",
+    "[GOOD] routes/admin.py self-demote guard correctly checks `others == 0` before blocking — allows demotion when another admin exists, blocks the last-admin lockout case.",
+    "[GOOD] services/storage.py is the single source of truth; server.py:46-82 does pure re-export with `# noqa: F401` markers. Verified at the test level (test_server_does_not_redefine_storage_funcs).",
+    "[GOOD] APScheduler hook in startup() with shutdown cleanup is correct — uses run_weekly_blast() so the HTTP send-weekly endpoint and the cron share one code path (no drift risk).",
+    "[GOOD] LocalStorage PII cleanup verified live: `{id, name, role}` only; email is fetched fresh via /auth/me on App mount. This means a stale token whose user has been demoted will pick up the new role on next mount.",
+    "[OBSERVABILITY] routes/coach_network.py:209-210 does an N+1 count_documents per user inside the mentionable-coaches loop (limit 20 so capped at ~40 queries). For 100s of coaches this would matter; for current scale fine.",
+    "[OBSERVABILITY] routes/admin.py:46-47 also does N+1 counts per user (capped at 500 docs). Same comment — fine at current scale, but consider $lookup aggregation when user count > 500.",
+    "[NIT] routes/matches.py ManualResult.key_events max_length=60 — reasonable, but no per-event validation on `team` matching match.team_home/team_away. Coach could submit team='wrong_name' and it'd save (low impact since UI renders from match anyway)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter11_new_features.py (NEW — 19 tests covering admin RBAC, mentions, manual results, season trends incl. manual, storage dedup, auth/me)"
+  ],
+  "success_rate": {
+    "backend": "99% — 133/138 (excluding 4 skips and 1 found-bug). 116/116 baseline preserved (zero regressions). 17/18 of new iter11 active tests pass; the 1 failure surfaced a real product bug worth fixing.",
+    "frontend": "100% — AdminUsers + ManualResultForm + Dashboard manual-badges + localStorage PII cleanup + /auth/me revalidation all verified live. 0 React errors."
+  },
+  "test_credentials": "testcoach@demo.com / password123 (admin) — confirmed working. Aux non-admin coaches created on-the-fly via /api/auth/register with email TEST_aux_*@demo.com / coach123 for 403 + promote/demote tests; cleanup not needed since they use the TEST_ prefix.",
+  "seed_data_creation": "Tests create+cleanup their own ephemeral matches (TEST_HOME vs TEST_AWAY, TEST_FH vs TEST_FA) and a TEST_TrendsFolder for season-trends. Multiple TEST_aux_<hex>@demo.com user accounts created during admin RBAC tests (registered fresh per test; not deleted but TEST_-prefixed and harmless).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 7 iter11 features land cleanly except for one product bug: GET /api/matches/{id}/manual-result returns 404 (instead of 200 + {}) when manual_result has been unset. The bug is in routes/matches.py line ~168 (`if not match:` matches empty dict). Trivial fix. APScheduler is running (confirmed via /var/log/supervisor/backend.err.log: '[apscheduler] scheduler started — coach_pulse_weekly cron: Mon 08:00 UTC'). Storage dedup is clean. localStorage PII cleanup verified: localStorage.user is `{id, name, role}` only — no email, no PII leak. /auth/me revalidates role on App mount so admin promotions/demotions take effect on next page load without requiring re-login. AdminUsers UI is functional with 61 users displayed. Mentionable-coaches endpoint returns 6 active coaches matching `q=coach`. ManualResultForm renders above upload panel on /match/{id} when match.video_id is null. ShareReelModal mention autocomplete UI was not exercised end-to-end (would need a processed match with extractable clips); the underlying API surface (description + mentioned_coach_ids on POST /api/clip-collections) is wired and accepts the schema (verified by 1 active test, but skipped because the test user has 0 clips in the current dataset).",
+  "rca of the issue": "BUG: GET /api/matches/{match_id}/manual-result returns 404 after DELETE has unset manual_result.\n\nReproduction:\n1. POST /api/matches → match_id\n2. PUT /api/matches/{match_id}/manual-result with valid scores → 200\n3. DELETE /api/matches/{match_id}/manual-result → 200\n4. GET /api/matches/{match_id}/manual-result → expected 200 + {}, actual 404\n\nRoot cause (routes/matches.py:165-174):\n```python\nmatch = await db.matches.find_one(\n    {\"id\": match_id, \"user_id\": current_user[\"id\"]},\n    {\"_id\": 0, \"manual_result\": 1},  # inclusion projection\n)\nif not match:                          # ← truthy check; empty dict is falsy!\n    raise HTTPException(404, ...)\nreturn match.get(\"manual_result\") or {}\n```\nWhen manual_result was previously $unset and the doc has no other included fields under this projection, MongoDB returns `{}`. `not {}` is True in Python, so the route raises 404 even though the match exists.\n\nMitigation (one-line fix):\n  `if match is None:` instead of `if not match:`\nor: include 'id' in the projection so the returned doc is never empty:\n  `{\"_id\": 0, \"id\": 1, \"manual_result\": 1}`\n\nImpact: Frontend that polls GET after a DELETE will misinterpret as 'match not found' and may show a confusing error toast. Low impact today because DELETE is a rare admin-style operation and the manual-result UI on the front-end hides the whole form once unset. Worth fixing for API-correctness regardless."
+}

@@ -188,12 +188,19 @@ async def send_weekly(current_user: dict = Depends(get_current_user)):
     role = (current_user.get("role") or "").lower()
     if role not in ("admin", "owner"):
         raise HTTPException(status_code=403, detail="Only admin/owner can trigger the weekly blast")
+    return await run_weekly_blast(triggered_by=f"manual:{current_user.get('email')}")
+
+
+async def run_weekly_blast(triggered_by: str = "scheduled") -> dict:
+    """Core weekly-blast logic — callable from either the HTTP endpoint or the APScheduler job.
+    Idempotent: skips users who already received the pulse this ISO week.
+    """
+    logger.info("Coach Pulse weekly blast starting (trigger=%s)", triggered_by)
     network_ready, network = await _network_payload()
     week_start = _week_start().isoformat()
     cursor = db.coach_pulse_subscriptions.find({"is_active": True}, {"_id": 0})
     sent, skipped = 0, 0
     async for sub in cursor:
-        # Idempotency: skip if already sent this week
         if sub.get("last_sent_at") and sub["last_sent_at"] >= week_start:
             skipped += 1
             continue
@@ -214,9 +221,11 @@ async def send_weekly(current_user: dict = Depends(get_current_user)):
                 "kind": "weekly",
                 "email_id": email_id,
                 "sent_at": now,
+                "triggered_by": triggered_by,
             })
             sent += 1
         except Exception as e:
             logger.error("Failed to send weekly to %s: %s", user.get("email"), e)
             skipped += 1
-    return {"sent": sent, "skipped": skipped}
+    logger.info("Coach Pulse weekly blast done — sent=%d, skipped=%d", sent, skipped)
+    return {"sent": sent, "skipped": skipped, "trigger": triggered_by}
