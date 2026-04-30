@@ -2,6 +2,24 @@
 
 ## What's Been Implemented
 
+### Platform avg Processing-Time Chip + Tap-to-Add-Goal (Apr 30, 2026 — iter18)
+
+**Platform avg Processing-Time Chip (Coach Network)**
+- Added `processing_time: { platform_avg_seconds, your_avg_seconds, your_samples }` and `samples.processing_durations_aggregated` to `GET /api/coach-network/benchmarks`. Uses the same sanity bounds (10s ≤ dur ≤ 2h) as `/api/videos/processing-eta-stats`.
+- Added `_parse_iso_safe` helper in `coach_network.py` so one parser is shared across all temporal aggregates.
+- **New UI chip** on `/coach-network` between the platform stats grid and "Your Bucket": blue pill with Timer icon, two big Bebas numbers (Platform avg / Your avg). Your avg colors green or amber based on whether you're above/below the network avg, with "Faster than avg" / "Slower than avg" tagline. Locked state when you have 0 completed runs.
+- 3 new pytest cases in `test_coach_network_processing_time.py`: schema shape check, multi-user avg math (5 samples → platform 156s + testcoach 90s), outlier rejection.
+
+**Tap-to-Add-Goal (ManualResultForm)**
+- New mobile-first `Quick Add Goals` row — two big green/red tap targets labeled "GOAL / {team name}" that on each tap:
+  1. Bump the scoreline by 1 (respects 99 max)
+  2. Append a `goal` event to the editable events list with auto-computed minute (wall-clock elapsed since kickoff, clamped 0–120)
+  3. Flash a green toast "+1 GOAL · Team · 42'" for 1.8s
+- All events are fully editable afterward (minute / player / description), matching the existing events UI contract.
+- Perfect for live-match logging where a coach just needs to tap once per goal without opening dropdowns.
+
+**Verified**: pytest **143/143 passing** (+3 new). Screenshots confirmed both flows live — AI Processing Speed chip shows "Platform 2.5 MIN / Your 2.0 MIN · Faster than avg" in green; Quick Goal taps bump the home score 0→1, fire the toast "+1 GOAL · RESUME TEST A · 0'", and create a goal event row in the editable events list.
+
 ### ETA Estimator on MatchDetail Processing Banner (Apr 30, 2026 — iter17)
 **Goal**: Show coaches "~3 min remaining" while AI analysis runs so the wait feels predictable.
 

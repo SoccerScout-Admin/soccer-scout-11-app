@@ -33,6 +33,21 @@ def _percentile_bucket(value: float, sorted_values: list) -> str:
     return "Bottom 25%"
 
 
+def _parse_iso_safe(value):
+    """Tolerant ISO-8601 parser — always returns a tz-aware datetime or None."""
+    if not value:
+        return None
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
 @router.get("/coach-network/benchmarks")
 async def get_network_benchmarks(current_user: dict = Depends(get_current_user)):
     """Platform-wide benchmark dashboard for coaches.
@@ -133,6 +148,28 @@ async def compute_benchmarks(user_id: str | None = None) -> dict:
                     recruit_levels[level] += 1
                     trends_count += 1
 
+    # Platform-wide + per-user avg AI-processing duration (seconds).
+    # Sanity-bound durations: 10s–2h (matches /api/videos/processing-eta-stats logic).
+    all_durations = []
+    my_durations = []
+    async for v in db.videos.find(
+        {"processing_status": "completed", "processing_started_at": {"$ne": None}, "processing_completed_at": {"$ne": None}},
+        {"_id": 0, "user_id": 1, "processing_started_at": 1, "processing_completed_at": 1},
+    ):
+        started = _parse_iso_safe(v.get("processing_started_at"))
+        finished = _parse_iso_safe(v.get("processing_completed_at"))
+        if not started or not finished:
+            continue
+        dur = (finished - started).total_seconds()
+        if not (10 <= dur <= 7200):
+            continue
+        all_durations.append(dur)
+        if user_id and v.get("user_id") == user_id:
+            my_durations.append(dur)
+
+    platform_avg_processing = round(sum(all_durations) / len(all_durations), 1) if all_durations else None
+    your_avg_processing = round(sum(my_durations) / len(my_durations), 1) if my_durations else None
+
     # Apply k-anonymity to text aggregates: only show themes that ≥3 coaches have hit
     top_weaknesses = [
         {"text": text.capitalize(), "count": cnt}
@@ -177,6 +214,12 @@ async def compute_benchmarks(user_id: str | None = None) -> dict:
         "samples": {
             "match_insights_aggregated": insights_count,
             "player_trends_aggregated": trends_count,
+            "processing_durations_aggregated": len(all_durations),
+        },
+        "processing_time": {
+            "platform_avg_seconds": platform_avg_processing,
+            "your_avg_seconds": your_avg_processing,
+            "your_samples": len(my_durations),
         },
         "k_anonymity_threshold": K_ANON_THRESHOLD,
         "generated_at": datetime.now(timezone.utc).isoformat(),

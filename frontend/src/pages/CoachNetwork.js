@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, Globe, Users, Trophy, FilmStrip, ChartLineUp, Lock, GraduationCap } from '@phosphor-icons/react';
+import { ArrowLeft, Globe, Users, Trophy, FilmStrip, ChartLineUp, Lock, GraduationCap, Timer } from '@phosphor-icons/react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from 'recharts';
 
 const BUCKET_COLOR = {
@@ -20,6 +20,14 @@ const LEVEL_COLOR = {
   'High School Varsity': '#FBBF24',
   'Youth Competitive': '#F472B6',
   'Youth Recreational': '#A3A3A3',
+};
+
+const _formatSec = (sec) => {
+  if (sec == null) return '—';
+  if (sec < 90) return `${Math.round(sec)} sec`;
+  const m = sec / 60;
+  if (m < 10) return `${(Math.round(m * 2) / 2).toFixed(1)} min`;
+  return `${Math.round(m)} min`;
 };
 
 const CoachNetwork = () => {
@@ -122,9 +130,59 @@ const CoachNetwork = () => {
               })}
             </section>
 
+            {/* Processing time comparison chip */}
+            {data.processing_time && data.processing_time.platform_avg_seconds && (
+              <section data-testid="processing-time-chip"
+                className="bg-gradient-to-r from-[#0F1A2E] via-[#141414] to-[#0F1A2E] border border-[#60A5FA]/25 p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <div className="w-10 h-10 bg-[#60A5FA]/15 border border-[#60A5FA]/30 flex items-center justify-center">
+                    <Timer size={20} weight="bold" className="text-[#60A5FA]" />
+                  </div>
+                  <div>
+                    <div className="text-[10px] tracking-[0.2em] uppercase text-[#60A5FA] font-bold">AI Processing Speed</div>
+                    <div className="text-xs text-[#A3A3A3] mt-0.5">Typical time for a full video analysis</div>
+                  </div>
+                </div>
+                <div className="flex-1 grid grid-cols-2 gap-3 sm:gap-6 w-full sm:w-auto">
+                  <div data-testid="platform-processing-time">
+                    <div className="text-[10px] tracking-wider uppercase text-[#A3A3A3] mb-1">Platform avg</div>
+                    <div className="text-3xl font-bold text-[#60A5FA]" style={{ fontFamily: 'Bebas Neue' }}>
+                      {_formatSec(data.processing_time.platform_avg_seconds)}
+                    </div>
+                    <div className="text-[10px] text-[#666] mt-0.5">{data.samples.processing_durations_aggregated || 0} videos</div>
+                  </div>
+                  <div data-testid="your-processing-time">
+                    <div className="text-[10px] tracking-wider uppercase text-[#A3A3A3] mb-1">Your avg</div>
+                    {data.processing_time.your_avg_seconds ? (
+                      <>
+                        <div className="text-3xl font-bold" style={{
+                          fontFamily: 'Bebas Neue',
+                          color: data.processing_time.your_avg_seconds <= data.processing_time.platform_avg_seconds ? '#10B981' : '#FBBF24',
+                        }}>
+                          {_formatSec(data.processing_time.your_avg_seconds)}
+                        </div>
+                        <div className="text-[10px] text-[#666] mt-0.5">
+                          {data.processing_time.your_samples} videos ·{' '}
+                          <span style={{
+                            color: data.processing_time.your_avg_seconds <= data.processing_time.platform_avg_seconds ? '#10B981' : '#FBBF24',
+                          }}>
+                            {data.processing_time.your_avg_seconds <= data.processing_time.platform_avg_seconds ? 'Faster than avg' : 'Slower than avg'}
+                          </span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-2xl font-bold text-[#666]" style={{ fontFamily: 'Bebas Neue' }}>— —</div>
+                        <div className="text-[10px] text-[#666] mt-0.5">Complete a processing run to unlock</div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </section>
+            )}
+
             {/* Your bucket on the network */}
-            <section data-testid="your-bucket" className="bg-gradient-to-br from-[#1B0F2E] to-[#141414] border border-[#A855F7]/30 p-6">
-              <div className="text-[10px] tracking-wider uppercase text-[#A855F7] mb-3">Your bucket on the platform</div>
+            <section data-testid="your-bucket" className="bg-gradient-to-br from-[#1B0F2E] to-[#141414] border border-[#A855F7]/30 p-6">              <div className="text-[10px] tracking-wider uppercase text-[#A855F7] mb-3">Your bucket on the platform</div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="bg-[#0A0A0A] border border-white/10 p-4">
                   <div className="text-xs text-[#A3A3A3] mb-1">Matches uploaded</div>

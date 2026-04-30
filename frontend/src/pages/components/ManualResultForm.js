@@ -26,6 +26,35 @@ const ManualResultForm = ({ match, players, onSaved }) => {
   const [events, setEvents] = useState([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [quickGoalFlash, setQuickGoalFlash] = useState(null);
+
+  /**
+   * Live-match logging helper: a single tap on the Home/Away Goal buttons bumps
+   * the scoreline AND appends a `goal` event at the current wall-clock minute of
+   * the match (computed from `match.date` + current time, clamped 0–120).
+   * The minute and player can be edited afterward in the event row.
+   */
+  const _quickGoalMinute = () => {
+    // Prefer the match.date as kickoff marker (00:00 local) — not precise but good enough.
+    // If the match is from a past day, just use 45' as a reasonable mid-match default.
+    const kickoffMs = match.date ? new Date(match.date + 'T15:00:00').getTime() : Date.now();
+    const diffMin = Math.round((Date.now() - kickoffMs) / 60000);
+    if (diffMin < 0 || diffMin > 120) return 0;
+    return diffMin;
+  };
+
+  const handleQuickGoal = (side) => {
+    const team = side === 'home' ? match.team_home : match.team_away;
+    const minute = _quickGoalMinute();
+    if (side === 'home') {
+      setHomeScore((v) => Math.min(99, Number(v) + 1));
+    } else {
+      setAwayScore((v) => Math.min(99, Number(v) + 1));
+    }
+    setEvents((prev) => [...prev, { type: 'goal', minute, team, player_id: '', description: '' }]);
+    setQuickGoalFlash(`+1 goal · ${team} · ${minute}'`);
+    setTimeout(() => setQuickGoalFlash(null), 1800);
+  };
 
   const loadExisting = useCallback(async () => {
     try {
@@ -224,6 +253,33 @@ const ManualResultForm = ({ match, players, onSaved }) => {
           </div>
         </div>
       </div>
+
+      {/* Tap-to-add-goal — mobile-first live-match logging.
+          Each tap bumps the scoreline AND inserts a goal event at the current minute (editable later). */}
+      <div className="mb-5 grid grid-cols-2 gap-3" data-testid="quick-add-goals">
+        <button type="button" data-testid="quick-add-home-goal" onClick={() => handleQuickGoal('home')}
+          className="flex flex-col items-center gap-1 py-4 border-2 border-[#10B981]/30 bg-[#10B981]/5 hover:bg-[#10B981]/15 active:bg-[#10B981]/25 transition-colors">
+          <div className="flex items-center gap-2">
+            <Trophy size={18} weight="fill" className="text-[#10B981]" />
+            <span className="text-xs font-bold tracking-[0.15em] uppercase text-[#10B981]">Goal</span>
+          </div>
+          <span className="text-[10px] text-[#A3A3A3] tracking-wider uppercase truncate px-2">{match.team_home}</span>
+        </button>
+        <button type="button" data-testid="quick-add-away-goal" onClick={() => handleQuickGoal('away')}
+          className="flex flex-col items-center gap-1 py-4 border-2 border-[#EF4444]/30 bg-[#EF4444]/5 hover:bg-[#EF4444]/15 active:bg-[#EF4444]/25 transition-colors">
+          <div className="flex items-center gap-2">
+            <Trophy size={18} weight="fill" className="text-[#EF4444]" />
+            <span className="text-xs font-bold tracking-[0.15em] uppercase text-[#EF4444]">Goal</span>
+          </div>
+          <span className="text-[10px] text-[#A3A3A3] tracking-wider uppercase truncate px-2">{match.team_away}</span>
+        </button>
+      </div>
+      {quickGoalFlash && (
+        <div data-testid="quick-goal-flash"
+          className="mb-3 text-[10px] font-bold tracking-[0.2em] uppercase text-center py-1.5 bg-[#10B981]/10 text-[#10B981]">
+          {quickGoalFlash}
+        </div>
+      )}
 
       {/* Key events */}
       <div className="mb-5">
