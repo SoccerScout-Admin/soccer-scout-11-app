@@ -1,0 +1,48 @@
+{
+  "summary": "Iter13 — Frontend-only smoke test of the Dashboard.js / MatchDetail.js / VideoAnalysis.js refactor (component extraction). All extracted components render correctly and 31/32 expected data-testids are present and functional. Login, dashboard header, folder sidebar (incl. create-folder modal + per-folder menu with Rename/Share/Season Trends/Delete), New Match modal + creation, Select-mode + bulk-action-bar, MatchDetail (manual-result-form, upload-video-btn, show-deleted-link, roster-section, add-player-btn → all 4 player inputs render and accept input, import-csv-btn → all 3 csv inputs render), /video/non-existent-id (no React crash — page renders with axios 404s gracefully handled), /admin/users (loads, 17KB), /mentions (loads). One testid name-discrepancy: spec asked for `match-back-btn` but actual testid is `back-to-dashboard-btn` — back button works, only the testid name differs. One pre-existing-or-new React hydration warning observed: `<span> cannot be a child of <option>` (origin not pinned to a specific extracted file — all <option> elements I inspected contain only text, so the warning likely originates outside the refactored files or from a transitive shadcn/radix select used elsewhere — flagged for main agent). No page errors, no React crashes, no broken integrations.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "MatchDetail.js back button",
+        "issue": "Spec requested data-testid='match-back-btn' but actual implementation uses data-testid='back-to-dashboard-btn' (line 284 of MatchDetail.js). Functionality works (navigates to '/'), but testid name doesn't match the contract in the review request. Either rename the testid OR update the spec.",
+        "selector": "button[data-testid='back-to-dashboard-btn']",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Any page render under ProtectedRoute",
+        "issue": "React hydration/dev warning fires repeatedly: `In HTML, <span> cannot be a child of <option>. This will cause a hydration error.` Stack points to <Routes> → <RenderedRoute> → <ProtectedRoute>. Grep through every <option> in /app/frontend/src/pages/components/ and /app/frontend/src/pages/ shows only plain-text or string-expression children — no literal <span> inside <option>. Likely candidates: a transitive Select/Combobox component or a shadcn/radix import elsewhere in the tree, or older code outside the refactored files. Functionality not blocked, but is a console-noise regression worth pinning.",
+        "affected_selectors": ["select", "option"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Decide: rename MatchDetail back-button testid from `back-to-dashboard-btn` → `match-back-btn` (matches review_request contract), OR update spec to expect `back-to-dashboard-btn`.",
+    "Investigate the `<span> cannot be a child of <option>` hydration warning — search the dependency tree (App.js, ProtectedRoute, layouts, any wrapper that renders selects). The warning fires under the Dashboard ProtectedRoute, but no extracted component has span-in-option. May be pre-existing from a non-refactored file — confirm by checking iter12 console (iter12 didn't capture console errors so it's untracked baseline).",
+    "(Nice-to-have) The 4 'No routes matched location /dashboard' warnings during my test were caused by my test script using the wrong path — app uses '/' as root. Not an app bug; mentioning so next testing agent doesn't re-investigate."
+  ],
+  "critical_code_review_comments": [
+    "[GOOD] All 14 new files extracted cleanly under /app/frontend/src/pages/components/ with hooks/ subdir. No duplicate testids detected during navigation.",
+    "[GOOD] FolderFormModal, CreateMatchModal, BulkActionBar, RosterSection, ConfirmReuploadModal, etc. all expose their data-testids consistently — selection mode, modal inputs, bulk actions all wire up correctly post-extraction.",
+    "[GOOD] /video/:id with non-existent id no longer crashes — VideoAnalysis (now 585 lines) gracefully renders with 404s logged but no React unmount/blank screen.",
+    "[GOOD] MatchDetail (now 336 lines) — add-player-btn → 4 player inputs all present and accept input. import-csv-btn → 3 csv testids all present. Roster section is fully functional after extraction.",
+    "[NIT] /api/matches/bulk/delete request body uses `match_ids` (not `ids`) — discovered during programmatic cleanup. Matches Pydantic schema; just noting for future test scripts.",
+    "[NIT] Spec used `match-back-btn` while code uses `back-to-dashboard-btn` — single naming source-of-truth would prevent future drift.",
+    "[OBS] Hydration warning `<span> in <option>` is the only concerning console signal. Worth a 5-min audit by main agent — not a blocker but is the kind of warning that becomes a hydration error on SSR/concurrent-rendering upgrades."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "N/A (skipped per spec)",
+    "frontend": "97% — 31/32 data-testids verified present and functional. All critical flows (login → dashboard → folder CRUD → match CRUD → match detail → admin/mentions/non-existent video) render without React crashes or page errors. 1 testid name-mismatch + 1 console hydration warning are the only issues."
+  },
+  "test_credentials": "testcoach@demo.com / password123 (admin role confirmed via login response — role='admin')",
+  "seed_data_creation": "Created folder 'Refactor Test' (deleted at end via UI menu → Delete) and match 'Alpha FC vs Beta FC' dated 2026-01-15 (id=7510b03c-f5cd-44e1-be51-e22f783e2770, deleted at end via POST /api/matches/bulk/delete with body {match_ids: [...]} → returned {status:'deleted', count:1}, verified GET 404). Both test artefacts cleaned up.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Refactor (Dashboard/MatchDetail/VideoAnalysis component extraction) lands cleanly on the UI side — no regressions in core flows, no broken testids except the back-btn name (spec vs code: match-back-btn vs back-to-dashboard-btn). The recurring `<span> in <option>` hydration warning was logged 2x during testing under ProtectedRoute but is NOT visibly blocking anything; if main agent wants to clear console, audit any select/combobox components rendered above Dashboard (e.g., layout, NavMenu, or transitive deps). MatchDetail roster, csv-import, manual-result-form, and add-player-btn all work post-extraction. Test artefacts (folder + match) cleaned. Programmatic cleanup hint: POST /api/matches/bulk/delete uses {match_ids: [...]} not {ids: [...]}.",
+  "rca of the issue": "Two minor findings, no functional regression: (1) `match-back-btn` discrepancy — the review_request contract names the testid one way but MatchDetail.js line 284 implements `back-to-dashboard-btn`. Pure naming drift; rename one or the other. (2) Console hydration warning `<span> cannot be a child of <option>` — origin not pinned to extracted files (all <option>s I grepped contain only text/string expressions). Fires twice during the test session under <ProtectedRoute>. Not blocking but worth an audit on layout-level / wrapper components that may render a Select with span markup."
+}

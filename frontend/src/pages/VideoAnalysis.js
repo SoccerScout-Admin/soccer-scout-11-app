@@ -13,6 +13,10 @@ import ClipsSidebar from './components/ClipsSidebar';
 import AnnotationsSidebar from './components/AnnotationsSidebar';
 import AnnotationForm from './components/AnnotationForm';
 import LiveCoachingMic from './components/LiveCoachingMic';
+import ClipCreateForm from './components/ClipCreateForm';
+import VideoToolbar from './components/VideoToolbar';
+import DataIntegrityBanner from './components/DataIntegrityBanner';
+import { useClipShare, useClipCollection, useClipTagging } from './components/hooks/useClipActions';
 
 const VideoAnalysis = () => {
   const { videoId } = useParams();
@@ -238,172 +242,27 @@ const VideoAnalysis = () => {
     setSelectedClips(prev => prev.includes(clipId) ? prev.filter(id => id !== clipId) : [...prev, clipId]);
   };
 
-  const [collectionShare, setCollectionShare] = useState(null);
-  const [collectionModalOpen, setCollectionModalOpen] = useState(false);
-  const [collectionTitle, setCollectionTitle] = useState('');
-  const [collectionDescription, setCollectionDescription] = useState('');
   const [mentionedCoaches, setMentionedCoaches] = useState([]);
-  const [creatingCollection, setCreatingCollection] = useState(false);
-  const [collectionCopied, setCollectionCopied] = useState(false);
 
-  const [taggingClip, setTaggingClip] = useState(null);
-  const [tagSearch, setTagSearch] = useState('');
-  const [tagSelection, setTagSelection] = useState([]);
-  const [savingTags, setSavingTags] = useState(false);
-  const [aiSuggesting, setAiSuggesting] = useState(false);
-  const [aiSuggestions, setAiSuggestions] = useState(null);
+  const {
+    taggingClip, setTaggingClip, tagSearch, setTagSearch,
+    tagSelection, savingTags, aiSuggesting, aiSuggestions,
+    openTagModal, handleAiSuggest, toggleTag, saveClipTags,
+  } = useClipTagging(setClips);
 
-  const openTagModal = (clip) => {
-    setTaggingClip(clip);
-    setTagSelection(clip.player_ids || []);
-    setTagSearch('');
-    setAiSuggestions(null);
-  };
+  const {
+    collectionShare, setCollectionShare,
+    collectionModalOpen, setCollectionModalOpen,
+    collectionTitle, setCollectionTitle,
+    collectionDescription, setCollectionDescription,
+    creatingCollection, collectionCopied,
+    collectionUrl, handleCreateCollection, copyCollectionUrl,
+  } = useClipCollection(selectedClips, mentionedCoaches);
 
-  const handleAiSuggest = async () => {
-    if (!taggingClip) return;
-    setAiSuggesting(true);
-    try {
-      const res = await axios.post(`${API}/clips/${taggingClip.id}/ai-suggest-tags`, {}, { headers: getAuthHeader() });
-      setAiSuggestions(res.data);
-      // Pre-select any matched players (coach can de-select before saving)
-      const ids = Array.from(new Set([...tagSelection, ...res.data.suggestions.map(s => s.player_id)]));
-      setTagSelection(ids);
-    } catch (err) {
-      alert('AI tagging failed: ' + (err.response?.data?.detail || err.message));
-    } finally {
-      setAiSuggesting(false);
-    }
-  };
-
-  const toggleTag = (playerId) => {
-    setTagSelection(prev =>
-      prev.includes(playerId) ? prev.filter(id => id !== playerId) : [...prev, playerId]
-    );
-  };
-
-  const saveClipTags = async () => {
-    if (!taggingClip) return;
-    setSavingTags(true);
-    try {
-      await axios.patch(`${API}/clips/${taggingClip.id}`, { player_ids: tagSelection }, { headers: getAuthHeader() });
-      setClips(prev => prev.map(c =>
-        c.id === taggingClip.id ? { ...c, player_ids: tagSelection } : c
-      ));
-      setTaggingClip(null);
-    } catch (err) {
-      alert('Failed to save tags: ' + (err.response?.data?.detail || err.message));
-    } finally {
-      setSavingTags(false);
-    }
-  };
-
-  const handleCreateCollection = async () => {
-    if (selectedClips.length === 0) return;
-    setCreatingCollection(true);
-    try {
-      const res = await axios.post(`${API}/clip-collections`, {
-        clip_ids: selectedClips,
-        title: collectionTitle.trim() || `${selectedClips.length} Clips`,
-        description: (collectionDescription || '').trim(),
-        mentioned_coach_ids: mentionedCoaches.map((c) => c.id),
-      }, { headers: getAuthHeader() });
-      setCollectionShare(res.data);
-    } catch (err) {
-      alert('Failed to create reel: ' + (err.response?.data?.detail || err.message));
-    } finally {
-      setCreatingCollection(false);
-    }
-  };
-
-  const collectionUrl = collectionShare
-    ? `${window.location.origin}/api/og/clip-collection/${collectionShare.share_token}`
-    : '';
-
-  const copyCollectionUrl = async () => {
-    if (!collectionUrl) return;
-    try {
-      await navigator.clipboard.writeText(collectionUrl);
-    } catch {
-      const ta = document.createElement('textarea');
-      ta.value = collectionUrl; document.body.appendChild(ta);
-      ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-    }
-    setCollectionCopied(true);
-    setTimeout(() => setCollectionCopied(false), 2000);
-  };
-
-  const [sharingClip, setSharingClip] = useState(null);
-  const [clipShareCopied, setClipShareCopied] = useState(false);
-
-  const handleShareClip = async (clip) => {
-    if (clip.share_token) {
-      // Already shared — show the modal
-      setSharingClip(clip);
-      return;
-    }
-    try {
-      const res = await axios.post(`${API}/clips/${clip.id}/share`, {}, { headers: getAuthHeader() });
-      if (res.data.share_token) {
-        const updated = { ...clip, share_token: res.data.share_token };
-        setSharingClip(updated);
-        // Update clips list
-        setClips(prev => prev.map(c => c.id === clip.id ? { ...c, share_token: res.data.share_token } : c));
-      }
-    } catch (err) {
-      alert('Failed to generate share link');
-    }
-  };
-
-  const handleRevokeClipShare = async () => {
-    if (!sharingClip) return;
-    try {
-      await axios.post(`${API}/clips/${sharingClip.id}/share`, {}, { headers: getAuthHeader() });
-      setClips(prev => prev.map(c => c.id === sharingClip.id ? { ...c, share_token: null } : c));
-      setSharingClip(null);
-    } catch (err) {
-      alert('Failed to revoke share link');
-    }
-  };
-
-  const copyClipShareLink = () => {
-    const url = `${window.location.origin}/api/og/clip/${sharingClip.share_token}`;
-    try {
-      navigator.clipboard.writeText(url).then(() => {
-        setClipShareCopied(true);
-        setTimeout(() => setClipShareCopied(false), 2000);
-      }).catch(() => {
-        const ta = document.createElement('textarea');
-        ta.value = url;
-        ta.style.position = 'fixed';
-        ta.style.left = '-9999px';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        setClipShareCopied(true);
-        setTimeout(() => setClipShareCopied(false), 2000);
-      });
-    } catch (e) {
-      console.error('Clipboard copy failed:', e);
-    }
-  };
-
-  const shareClipTo = (platform) => {
-    const url = `${window.location.origin}/api/og/clip/${sharingClip.share_token}`;
-    const text = `${sharingClip.title} — Soccer Scout`;
-    const links = {
-      facebook: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`,
-      instagram: url,
-      youtube: url,
-      sms: `sms:?body=${encodeURIComponent(`${text}: ${url}`)}`
-    };
-    if (platform === 'instagram' || platform === 'youtube') {
-      copyClipShareLink();
-      return;
-    }
-    window.open(links[platform], '_blank', 'width=600,height=400');
-  };
+  const {
+    sharingClip, setSharingClip, clipShareCopied,
+    handleShareClip, handleRevokeClipShare, copyClipShareLink, shareClipTo,
+  } = useClipShare(setClips);
 
   const handleAddAnnotation = async () => {
     if (!annotationText.trim() || !annotationMode) return;
@@ -495,12 +354,6 @@ const VideoAnalysis = () => {
     }
   };
 
-  const formatTime = (seconds) => {
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  };
-
   const isProcessing = processingStatus && (processingStatus.processing_status === 'processing' || processingStatus.processing_status === 'queued');
   const isProcessed = processingStatus && processingStatus.processing_status === 'completed';
   const processingFailed = processingStatus && processingStatus.processing_status === 'failed';
@@ -542,24 +395,7 @@ const VideoAnalysis = () => {
       />
 
       <main className="max-w-[1400px] mx-auto px-6 py-6">
-        {/* Data Integrity Warning */}
-        {videoMetadata && videoMetadata.data_integrity && videoMetadata.data_integrity !== 'full' && (
-          <div data-testid="data-integrity-warning" className="bg-[#1A1A0A] border border-[#FFB800]/30 rounded-lg px-6 py-4 mb-6">
-            <div className="flex items-center gap-3">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFB800" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-              <div>
-                <p className="text-sm font-medium text-[#FFB800]">
-                  {videoMetadata.data_integrity === 'unavailable' ? 'Video data unavailable' : 'Partial video data'}
-                </p>
-                <p className="text-xs text-[#888] mt-0.5">
-                  {videoMetadata.data_integrity === 'unavailable'
-                    ? 'All video chunks were lost during a server restart. Please re-upload the video.'
-                    : `Only ${videoMetadata.chunks_available} of ${videoMetadata.chunks_total} chunks available (${Math.round(videoMetadata.chunks_available / videoMetadata.chunks_total * 100)}%). Video may stop playing early. Re-upload for full playback.`}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
+        <DataIntegrityBanner videoMetadata={videoMetadata} />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left: Video + Controls */}
@@ -574,46 +410,22 @@ const VideoAnalysis = () => {
               onSeek={seekTo}
             />
 
-            {/* Clip & Annotation Toolbar */}
-            <div className="flex items-center gap-3 flex-wrap">
-              <div className="flex items-center gap-1.5 bg-white/5 rounded-lg px-3 py-2">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-                <span className="text-sm text-white font-mono">{formatTime(currentTimestamp)}</span>
-              </div>
-              <button data-testid="create-clip-btn"
-                onClick={() => { setShowClipForm(true); setClipFormData({ ...clipFormData, start_time: currentTimestamp, end_time: currentTimestamp + 10 }); }}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#007AFF] text-white text-xs font-medium hover:bg-[#0066DD] transition-colors">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.12 15.88M14.47 14.48L20 20M8.12 8.12L12 12"/></svg>
-                Create Clip
-              </button>
-              {[['note', 'Note'], ['tactical', 'Tactical'], ['key_moment', 'Key Moment']].map(([mode, label]) => (
-                <button key={mode} data-testid={`${mode}-tool-btn`}
-                  onClick={() => { setAnnotationMode(mode); setShowAnnotationForm(true); }}
-                  className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                    annotationMode === mode ? 'bg-[#007AFF] text-white' : 'bg-white/5 text-[#888] hover:text-white hover:bg-white/10'
-                  }`}>
-                  {label}
-                </button>
-              ))}
-              {/* Inline Live Coaching mic (desktop) */}
-              <div className="hidden sm:block">
-                <LiveCoachingMic
-                  videoId={videoId}
-                  videoCurrentTime={currentTimestamp}
-                  isMobile={false}
-                  onAnnotationAdded={(ann) => setAnnotations((prev) => [ann, ...prev])}
-                />
-              </div>
-              <div className="ml-auto">
-                <button data-testid="trim-analyze-btn"
-                  onClick={() => { setShowTrimPanel(!showTrimPanel); setTrimStart(0); setTrimEnd(Math.floor(videoDuration)); }}
-                  className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                    showTrimPanel ? 'bg-[#A855F7] text-white' : 'bg-white/5 text-[#888] hover:text-white hover:bg-white/10'
-                  }`}>
-                  Trim &amp; Analyze
-                </button>
-              </div>
-            </div>
+            <VideoToolbar
+              videoId={videoId}
+              currentTimestamp={currentTimestamp}
+              videoDuration={videoDuration}
+              clipFormData={clipFormData}
+              setClipFormData={setClipFormData}
+              setShowClipForm={setShowClipForm}
+              annotationMode={annotationMode}
+              setAnnotationMode={setAnnotationMode}
+              setShowAnnotationForm={setShowAnnotationForm}
+              onAnnotationAdded={(ann) => setAnnotations((prev) => [ann, ...prev])}
+              showTrimPanel={showTrimPanel}
+              setShowTrimPanel={setShowTrimPanel}
+              setTrimStart={setTrimStart}
+              setTrimEnd={setTrimEnd}
+            />
 
             {/* Trim Panel */}
             {showTrimPanel && (
@@ -633,78 +445,16 @@ const VideoAnalysis = () => {
 
             {/* Clip Form */}
             {showClipForm && (
-              <div className="bg-[#111] rounded-lg border border-white/10 p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-semibold" style={{ fontFamily: 'Space Grotesk' }}>Create Clip</h3>
-                  <button data-testid="close-clip-form-btn" onClick={() => setShowClipForm(false)} className="text-[#666] hover:text-white">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                  </button>
-                </div>
-                <div className="space-y-3">
-                  <input data-testid="clip-title-input" type="text" placeholder="Clip title" value={clipFormData.title}
-                    onChange={(e) => setClipFormData({ ...clipFormData, title: e.target.value })}
-                    className="w-full bg-white/5 rounded-lg text-white px-3 py-2.5 text-sm border border-white/10 focus:border-[#007AFF] focus:outline-none" />
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[10px] text-[#666] uppercase tracking-wider mb-1">Start</label>
-                      <div className="flex gap-2">
-                        <input data-testid="clip-start-time-input" type="number" step="0.1" value={clipFormData.start_time}
-                          onChange={(e) => setClipFormData({ ...clipFormData, start_time: parseFloat(e.target.value) || 0 })}
-                          className="flex-1 bg-white/5 rounded-lg text-white px-3 py-2 text-sm border border-white/10 focus:border-[#007AFF] focus:outline-none" />
-                        <button data-testid="set-start-time-btn" onClick={() => setClipFormData({ ...clipFormData, start_time: currentTimestamp })}
-                          className="px-3 py-2 rounded-lg bg-white/10 text-[#007AFF] text-xs font-medium hover:bg-white/15 transition-colors">Now</button>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-[#666] uppercase tracking-wider mb-1">End</label>
-                      <div className="flex gap-2">
-                        <input data-testid="clip-end-time-input" type="number" step="0.1" value={clipFormData.end_time}
-                          onChange={(e) => setClipFormData({ ...clipFormData, end_time: parseFloat(e.target.value) || 0 })}
-                          className="flex-1 bg-white/5 rounded-lg text-white px-3 py-2 text-sm border border-white/10 focus:border-[#007AFF] focus:outline-none" />
-                        <button data-testid="set-end-time-btn" onClick={() => setClipFormData({ ...clipFormData, end_time: currentTimestamp })}
-                          className="px-3 py-2 rounded-lg bg-white/10 text-[#007AFF] text-xs font-medium hover:bg-white/15 transition-colors">Now</button>
-                      </div>
-                    </div>
-                  </div>
-                  <select data-testid="clip-type-select" value={clipFormData.clip_type}
-                    onChange={(e) => setClipFormData({ ...clipFormData, clip_type: e.target.value })}
-                    className="w-full bg-white/5 rounded-lg text-white px-3 py-2.5 text-sm border border-white/10 focus:border-[#007AFF] focus:outline-none">
-                    <option value="highlight">Highlight</option>
-                    <option value="goal">Goal</option>
-                    <option value="save">Save</option>
-                    <option value="tactical">Tactical Play</option>
-                    <option value="mistake">Mistake</option>
-                  </select>
-                  <textarea data-testid="clip-description-input" placeholder="Description (optional)" value={clipFormData.description}
-                    onChange={(e) => setClipFormData({ ...clipFormData, description: e.target.value })}
-                    className="w-full bg-white/5 rounded-lg text-white px-3 py-2.5 text-sm border border-white/10 focus:border-[#007AFF] focus:outline-none resize-none" rows="2" />
-                  {players.length > 0 && (
-                    <div>
-                      <label className="block text-[10px] text-[#666] uppercase tracking-wider mb-1">Tag Players (optional)</label>
-                      <div className="flex flex-wrap gap-1.5 bg-white/5 rounded-lg p-2 border border-white/10 max-h-24 overflow-y-auto">
-                        {players.map(p => {
-                          const isSelected = selectedClipPlayerIds.includes(p.id);
-                          return (
-                            <button key={p.id} type="button" data-testid={`clip-player-tag-${p.id}`}
-                              onClick={() => setSelectedClipPlayerIds(
-                                isSelected ? selectedClipPlayerIds.filter(id => id !== p.id) : [...selectedClipPlayerIds, p.id]
-                              )}
-                              className={`px-2 py-1 text-[10px] font-medium transition-colors ${
-                                isSelected ? 'bg-[#007AFF] text-white' : 'bg-white/5 text-[#888] hover:text-white hover:bg-white/10'
-                              }`}>
-                              #{p.number || '?'} {p.name}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  <button data-testid="save-clip-btn" onClick={handleCreateClip}
-                    className="w-full bg-[#007AFF] hover:bg-[#0066DD] text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors">
-                    Save Clip
-                  </button>
-                </div>
-              </div>
+              <ClipCreateForm
+                clipFormData={clipFormData}
+                setClipFormData={setClipFormData}
+                currentTimestamp={currentTimestamp}
+                players={players}
+                selectedClipPlayerIds={selectedClipPlayerIds}
+                setSelectedClipPlayerIds={setSelectedClipPlayerIds}
+                onClose={() => setShowClipForm(false)}
+                onSave={handleCreateClip}
+              />
             )}
 
             {/* Annotation Form */}

@@ -2,8 +2,12 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, UploadSimple, VideoCamera, Spinner, Users, Plus, Trash, FileText, Warning, ArrowsClockwise } from '@phosphor-icons/react';
+import { ArrowLeft, Spinner } from '@phosphor-icons/react';
 import ManualResultForm from './components/ManualResultForm';
+import UploadPanel from './components/UploadPanel';
+import DeletedVideosDrawer from './components/DeletedVideosDrawer';
+import ConfirmReuploadModal from './components/ConfirmReuploadModal';
+import RosterSection from './components/RosterSection';
 
 const MatchDetail = () => {
   const { matchId } = useParams();
@@ -11,7 +15,6 @@ const MatchDetail = () => {
   const [match, setMatch] = useState(null);
   const [players, setPlayers] = useState([]);
   const [teams, setTeams] = useState([]);
-  const [showRosterPanel, setShowRosterPanel] = useState(false);
   const [showAddPlayer, setShowAddPlayer] = useState(false);
   const [showCsvImport, setShowCsvImport] = useState(false);
   const [playerForm, setPlayerForm] = useState({ name: '', number: '', position: '', team: '', team_id: '' });
@@ -25,25 +28,6 @@ const MatchDetail = () => {
   const [deleting, setDeleting] = useState(false);
   const [deletedVideos, setDeletedVideos] = useState([]);
   const [showDeletedDrawer, setShowDeletedDrawer] = useState(false);
-
-  const fetchDeletedVideos = async () => {
-    try {
-      const res = await axios.get(`${API}/matches/${matchId}/deleted-videos`, { headers: getAuthHeader() });
-      setDeletedVideos(res.data);
-    } catch (err) { /* ignore */ }
-  };
-
-  const handleRestoreVideo = async (videoId) => {
-    if (!window.confirm('Restore this video? Note: any clips, AI markers, and analyses created before deletion are gone — only the video file is recoverable.')) return;
-    try {
-      await axios.post(`${API}/videos/${videoId}/restore`, {}, { headers: getAuthHeader() });
-      setShowDeletedDrawer(false);
-      setDeletedVideos([]);
-      await fetchMatch();
-    } catch (err) {
-      alert('Restore failed: ' + (err.response?.data?.detail || err.message));
-    }
-  };
 
   const fetchMatch = useCallback(async () => {
     try {
@@ -76,7 +60,6 @@ const MatchDetail = () => {
     fetchTeams();
   }, [fetchMatch, fetchPlayers, fetchTeams]);
 
-  // Fetch video processing status when match has a video
   useEffect(() => {
     if (!match?.video_id) { setVideoMeta(null); return; }
     let cancelled = false;
@@ -91,6 +74,25 @@ const MatchDetail = () => {
     return () => { cancelled = true; clearInterval(id); };
   }, [match?.video_id]);
 
+  const fetchDeletedVideos = async () => {
+    try {
+      const res = await axios.get(`${API}/matches/${matchId}/deleted-videos`, { headers: getAuthHeader() });
+      setDeletedVideos(res.data);
+    } catch (err) { /* ignore */ }
+  };
+
+  const handleRestoreVideo = async (videoId) => {
+    if (!window.confirm('Restore this video? Note: any clips, AI markers, and analyses created before deletion are gone — only the video file is recoverable.')) return;
+    try {
+      await axios.post(`${API}/videos/${videoId}/restore`, {}, { headers: getAuthHeader() });
+      setShowDeletedDrawer(false);
+      setDeletedVideos([]);
+      await fetchMatch();
+    } catch (err) {
+      alert('Restore failed: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
   const handleDeleteVideo = async () => {
     if (!match?.video_id) return;
     setDeleting(true);
@@ -98,7 +100,6 @@ const MatchDetail = () => {
       await axios.delete(`${API}/videos/${match.video_id}`, { headers: getAuthHeader() });
       setConfirmReupload(false);
       setVideoMeta(null);
-      // Refresh match so UI returns to upload state
       await fetchMatch();
     } catch (err) {
       alert('Failed to delete video: ' + (err.response?.data?.detail || err.message));
@@ -131,9 +132,7 @@ const MatchDetail = () => {
     e.preventDefault();
     try {
       const res = await axios.post(`${API}/players/import-csv`, {
-        match_id: matchId,
-        csv_data: csvData,
-        team: csvTeam
+        match_id: matchId, csv_data: csvData, team: csvTeam
       }, { headers: getAuthHeader() });
       setCsvData('');
       setCsvTeam('');
@@ -150,9 +149,7 @@ const MatchDetail = () => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
-      setCsvData(ev.target.result);
-    };
+    reader.onload = (ev) => setCsvData(ev.target.result);
     reader.readAsText(file);
   };
 
@@ -162,22 +159,6 @@ const MatchDetail = () => {
       setPlayers(players.filter(p => p.id !== playerId));
     } catch (err) {
       console.error('Failed to delete player:', err);
-    }
-  };
-
-  const handleVideoUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (!file.type.startsWith('video/')) {
-      alert('Please select a valid video file');
-      return;
-    }
-    const fileSizeGB = file.size / (1024 * 1024 * 1024);
-    if (file.size > 1024 * 1024 * 1024) {
-      alert(`Uploading large file (${fileSizeGB.toFixed(2)}GB). This may take several minutes.`);
-      await handleChunkedUpload(file);
-    } else {
-      await handleStandardUpload(file);
     }
   };
 
@@ -261,12 +242,32 @@ const MatchDetail = () => {
     }
   };
 
-  // Group players by team (memoized)
-  const { homeTeamPlayers, awayTeamPlayers, otherPlayers } = useMemo(() => ({
-    homeTeamPlayers: players.filter(p => p.team === match?.team_home),
-    awayTeamPlayers: players.filter(p => p.team === match?.team_away),
-    otherPlayers: players.filter(p => p.team !== match?.team_home && p.team !== match?.team_away)
-  }), [players, match?.team_home, match?.team_away]);
+  const handleVideoUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('video/')) {
+      alert('Please select a valid video file');
+      return;
+    }
+    const fileSizeGB = file.size / (1024 * 1024 * 1024);
+    if (file.size > 1024 * 1024 * 1024) {
+      alert(`Uploading large file (${fileSizeGB.toFixed(2)}GB). This may take several minutes.`);
+      handleChunkedUpload(file);
+    } else {
+      handleStandardUpload(file);
+    }
+  };
+
+  const playerGroups = useMemo(() => {
+    const homeTeamPlayers = players.filter(p => p.team === match?.team_home);
+    const awayTeamPlayers = players.filter(p => p.team === match?.team_away);
+    const otherPlayers = players.filter(p => p.team !== match?.team_home && p.team !== match?.team_away);
+    return [
+      { label: match?.team_home, players: homeTeamPlayers, color: '#007AFF' },
+      { label: match?.team_away, players: awayTeamPlayers, color: '#EF4444' },
+      ...(otherPlayers.length > 0 ? [{ label: 'Other', players: otherPlayers, color: '#A3A3A3' }] : []),
+    ];
+  }, [players, match?.team_home, match?.team_away]);
 
   if (!match) {
     return (
@@ -289,13 +290,10 @@ const MatchDetail = () => {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-8">
-        {/* Manual Result — shown above the upload panel when no video is attached,
-            so coaches can record the outcome without footage */}
         {!match.video_id && (
           <ManualResultForm match={match} players={players} onSaved={() => fetchMatch()} />
         )}
 
-        {/* Match Info + Upload */}
         <div className="bg-[#141414] border border-white/10 p-8 mb-6">
           <div className="flex items-center justify-between mb-6">
             <div>
@@ -307,336 +305,29 @@ const MatchDetail = () => {
             </div>
           </div>
 
-          {!match.video_id ? (
-            <div className="border-2 border-dashed border-white/10 p-12 text-center">
-              <VideoCamera size={64} className="text-[#A3A3A3] mx-auto mb-4" />
-              <h3 className="text-2xl font-bold mb-2" style={{ fontFamily: 'Bebas Neue' }}>Upload Match Video</h3>
-              <p className="text-[#A3A3A3] mb-6">Upload footage to enable AI analysis and annotations</p>
-              {uploading ? (
-                <div className="max-w-md mx-auto">
-                  <div className="bg-[#0A0A0A] h-3 mb-3 rounded-full overflow-hidden">
-                    <div className="bg-[#007AFF] h-3 rounded-full" style={{ width: `${uploadProgress}%`, transition: 'width 0.3s ease' }} />
-                  </div>
-                  <p className="text-sm text-white font-medium mb-1">{uploadProgress}%</p>
-                  {uploadStatus && <p className="text-xs text-[#A3A3A3]" data-testid="upload-status-text">{uploadStatus}</p>}
-                </div>
-              ) : (
-                <label data-testid="upload-video-btn"
-                  className="inline-flex items-center gap-2 bg-[#007AFF] hover:bg-[#005bb5] text-white px-6 py-3 font-bold tracking-wider uppercase transition-colors cursor-pointer">
-                  <UploadSimple size={24} weight="bold" />
-                  Select Video File
-                  <input type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
-                </label>
-              )}
-              {!uploading && !match.video_id && (
-                <button data-testid="show-deleted-link" onClick={() => { fetchDeletedVideos(); setShowDeletedDrawer(true); }}
-                  className="block mt-4 text-xs text-[#666] hover:text-[#A3A3A3] underline underline-offset-2">
-                  Recover a recently deleted video
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="flex flex-wrap items-center gap-3" data-testid="video-status-bar">
-              <div className="flex items-center gap-2 text-[#39FF14]">
-                <VideoCamera size={24} />
-                <span className="font-bold tracking-wider uppercase">Video Uploaded</span>
-              </div>
-              {videoMeta?.processing_status && videoMeta.processing_status !== 'none' && (
-                <span data-testid="processing-status-chip"
-                  className={`text-[10px] tracking-[0.2em] uppercase font-bold px-3 py-1 ${
-                    videoMeta.processing_status === 'completed' ? 'bg-[#10B981]/15 text-[#10B981]' :
-                    videoMeta.processing_status === 'failed' ? 'bg-[#EF4444]/15 text-[#EF4444]' :
-                    'bg-[#FBBF24]/15 text-[#FBBF24]'
-                  }`}>
-                  {videoMeta.processing_status === 'completed' ? 'AI ready' :
-                   videoMeta.processing_status === 'failed' ? 'Processing failed' :
-                   `Processing… ${videoMeta.processing_progress || 0}%`}
-                </span>
-              )}
-              <button data-testid="view-analysis-btn" onClick={() => navigate(`/video/${match.video_id}`)}
-                className="bg-[#007AFF] hover:bg-[#005bb5] text-white px-6 py-3 font-bold tracking-wider uppercase transition-colors">
-                View Analysis
-              </button>
-              <button data-testid="match-insights-btn" onClick={() => navigate(`/match/${matchId}/insights`)}
-                className="flex items-center gap-2 bg-gradient-to-r from-[#A855F7] to-[#FBBF24] hover:opacity-90 text-black px-5 py-3 font-bold tracking-wider uppercase text-xs transition-opacity">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L9.91 8.26L2 9.27L7.91 14.14L6.18 22L12 18.27L17.82 22L16.09 14.14L22 9.27L14.09 8.26L12 2Z"/></svg>
-                AI Insights
-              </button>
-              <button data-testid="reupload-video-btn" onClick={() => setConfirmReupload(true)}
-                className="flex items-center gap-2 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] px-4 py-3 font-bold tracking-wider uppercase text-xs transition-colors"
-                title="Delete this video and upload a new one. Clips and AI analysis will be removed.">
-                <ArrowsClockwise size={14} weight="bold" /> Replace Video
-              </button>
-            </div>
-          )}
+          <UploadPanel match={match} matchId={matchId} videoMeta={videoMeta}
+            uploading={uploading} uploadProgress={uploadProgress} uploadStatus={uploadStatus}
+            onVideoUpload={handleVideoUpload}
+            onShowDeleted={() => { fetchDeletedVideos(); setShowDeletedDrawer(true); }}
+            onConfirmReupload={() => setConfirmReupload(true)}
+            navigate={navigate} />
         </div>
 
-        {/* Recover Deleted Drawer */}
-        {showDeletedDrawer && (
-          <div data-testid="deleted-drawer-overlay" onClick={() => setShowDeletedDrawer(false)}
-            className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center px-4">
-            <div onClick={(e) => e.stopPropagation()}
-              className="bg-[#141414] border border-white/10 max-w-lg w-full max-h-[70vh] flex flex-col">
-              <div className="p-5 border-b border-white/10">
-                <h3 className="text-xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
-                  Recover Deleted Video
-                </h3>
-                <p className="text-xs text-[#A3A3A3] mt-1">
-                  Videos deleted in the last 24 hours can be restored. Clips and AI analysis from before deletion are not recoverable.
-                </p>
-              </div>
-              <div className="flex-1 overflow-y-auto p-4">
-                {deletedVideos.length === 0 ? (
-                  <p className="text-center text-sm text-[#666] py-8">No recently deleted videos for this match.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {deletedVideos.map(v => (
-                      <div key={v.id} data-testid={`deleted-video-${v.id}`}
-                        className="bg-[#0A0A0A] border border-white/10 p-3 flex items-center gap-3">
-                        <Trash size={20} className="text-[#666] flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium text-white truncate">{v.original_filename || v.id}</div>
-                          <div className="text-[10px] text-[#666] tracking-wider">
-                            Deleted {new Date(v.deleted_at).toLocaleString()}
-                          </div>
-                        </div>
-                        <button data-testid={`restore-${v.id}-btn`} onClick={() => handleRestoreVideo(v.id)}
-                          className="text-xs px-3 py-1.5 bg-[#10B981]/15 text-[#10B981] hover:bg-[#10B981]/25 transition-colors font-bold tracking-wider uppercase">
-                          Restore
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="p-4 border-t border-white/10">
-                <button onClick={() => setShowDeletedDrawer(false)}
-                  className="w-full py-2.5 border border-white/10 text-[#A3A3A3] hover:text-white text-xs font-bold tracking-wider uppercase">
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <DeletedVideosDrawer open={showDeletedDrawer} deletedVideos={deletedVideos}
+          onClose={() => setShowDeletedDrawer(false)} onRestore={handleRestoreVideo} />
 
-        {/* Confirm Re-upload Modal */}
-        {confirmReupload && (
-          <div data-testid="confirm-reupload-overlay" onClick={() => !deleting && setConfirmReupload(false)}
-            className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center px-4">
-            <div onClick={(e) => e.stopPropagation()}
-              className="bg-[#141414] border border-[#EF4444]/30 max-w-md w-full p-6">
-              <div className="flex items-start gap-3 mb-3">
-                <Warning size={28} className="text-[#EF4444] flex-shrink-0" weight="fill" />
-                <div className="flex-1">
-                  <h3 className="text-xl font-bold tracking-wider uppercase" style={{ fontFamily: 'Bebas Neue' }}>
-                    Replace Match Video?
-                  </h3>
-                  <p className="text-sm text-[#A3A3A3] mt-2 leading-relaxed">
-                    The current video and everything derived from it will be permanently removed:
-                  </p>
-                  <ul className="text-xs text-[#A3A3A3] mt-2 space-y-1 list-disc pl-5">
-                    <li>The video file and any chunked upload data</li>
-                    <li>All clips created from this video</li>
-                    <li>AI timeline markers and analyses</li>
-                  </ul>
-                  <p className="text-sm text-white mt-3 font-medium">
-                    The match itself, your roster, and folder placement stay intact. You'll be able to upload a fresh video right away.
-                  </p>
-                </div>
-              </div>
-              <div className="flex gap-3 mt-5">
-                <button data-testid="confirm-reupload-btn" onClick={handleDeleteVideo} disabled={deleting}
-                  className="flex-1 bg-[#EF4444] hover:bg-[#DC2626] disabled:opacity-50 text-white py-3 font-bold tracking-wider uppercase text-xs transition-colors flex items-center justify-center gap-2">
-                  {deleting ? 'Deleting…' : <><Trash size={14} weight="bold" /> Delete Video</>}
-                </button>
-                <button onClick={() => setConfirmReupload(false)} disabled={deleting}
-                  className="px-5 py-3 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] text-xs font-bold uppercase">
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <ConfirmReuploadModal open={confirmReupload} deleting={deleting}
+          onConfirm={handleDeleteVideo} onCancel={() => setConfirmReupload(false)} />
 
-        {/* Player Roster Section */}
-        <div className="bg-[#141414] border border-white/10 p-8" data-testid="roster-section">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <Users size={24} className="text-[#007AFF]" />
-              <h3 className="text-2xl font-bold" style={{ fontFamily: 'Bebas Neue' }}>Player Roster</h3>
-              <span className="text-xs text-[#A3A3A3] bg-white/5 px-2 py-1">{players.length} players</span>
-            </div>
-            <div className="flex gap-2">
-              <button data-testid="import-csv-btn"
-                onClick={() => setShowCsvImport(!showCsvImport)}
-                className="flex items-center gap-2 px-4 py-2 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors text-xs font-bold tracking-wider uppercase">
-                <FileText size={16} /> CSV Import
-              </button>
-              <button data-testid="add-player-btn"
-                onClick={() => setShowAddPlayer(!showAddPlayer)}
-                className="flex items-center gap-2 px-4 py-2 bg-[#007AFF] hover:bg-[#005bb5] text-white transition-colors text-xs font-bold tracking-wider uppercase">
-                <Plus size={16} weight="bold" /> Add Player
-              </button>
-            </div>
-          </div>
-
-          {/* CSV Import Form */}
-          {showCsvImport && (
-            <div className="bg-[#0A0A0A] border border-white/10 p-6 mb-6">
-              <h4 className="text-sm font-bold uppercase tracking-wider text-white mb-3">Import from CSV</h4>
-              <p className="text-xs text-[#A3A3A3] mb-4">Upload a CSV file or paste CSV data with columns: <code className="text-[#007AFF]">name, number, position</code></p>
-              <form onSubmit={handleCsvImport} className="space-y-3">
-                <div>
-                  <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">Team Name</label>
-                  <select data-testid="csv-team-select" value={csvTeam}
-                    onChange={(e) => setCsvTeam(e.target.value)}
-                    className="w-full bg-[#141414] border border-white/10 text-white px-4 py-2 focus:border-[#007AFF] focus:outline-none text-sm">
-                    <option value="">Select team...</option>
-                    <option value={match.team_home}>{match.team_home} (Home)</option>
-                    <option value={match.team_away}>{match.team_away} (Away)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">CSV File</label>
-                  <input data-testid="csv-file-input" type="file" accept=".csv,.txt"
-                    onChange={handleFileUpload}
-                    className="w-full text-[#A3A3A3] text-sm file:bg-[#007AFF] file:text-white file:border-0 file:px-4 file:py-2 file:mr-4 file:cursor-pointer" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">Or Paste CSV Data</label>
-                  <textarea data-testid="csv-data-input" value={csvData}
-                    onChange={(e) => setCsvData(e.target.value)}
-                    className="w-full bg-[#141414] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none text-sm font-mono resize-none"
-                    rows="5" placeholder="name,number,position&#10;John Doe,10,Forward&#10;Jane Smith,1,Goalkeeper" />
-                </div>
-                <div className="flex gap-3">
-                  <button data-testid="cancel-csv-btn" type="button" onClick={() => setShowCsvImport(false)}
-                    className="px-4 py-2 border border-white/10 text-white text-xs font-bold tracking-wider uppercase hover:bg-[#1F1F1F] transition-colors">
-                    Cancel
-                  </button>
-                  <button data-testid="submit-csv-btn" type="submit" disabled={!csvData.trim()}
-                    className="px-6 py-2 bg-[#007AFF] hover:bg-[#005bb5] text-white text-xs font-bold tracking-wider uppercase transition-colors disabled:opacity-50">
-                    Import
-                  </button>
-                </div>
-              </form>
-            </div>
-          )}
-
-          {/* Add Player Form */}
-          {showAddPlayer && (
-            <div className="bg-[#0A0A0A] border border-white/10 p-6 mb-6">
-              <h4 className="text-sm font-bold uppercase tracking-wider text-white mb-3">Add Player</h4>
-              <form onSubmit={handleAddPlayer} className="space-y-3">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div>
-                    <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Name *</label>
-                    <input data-testid="player-name-input" type="text" value={playerForm.name}
-                      onChange={(e) => setPlayerForm({ ...playerForm, name: e.target.value })}
-                      className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none"
-                      required />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Number</label>
-                    <input data-testid="player-number-input" type="number" value={playerForm.number}
-                      onChange={(e) => setPlayerForm({ ...playerForm, number: e.target.value })}
-                      className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none" />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Position</label>
-                    <select data-testid="player-position-select" value={playerForm.position}
-                      onChange={(e) => setPlayerForm({ ...playerForm, position: e.target.value })}
-                      className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none">
-                      <option value="">Select...</option>
-                      <option value="Goalkeeper">Goalkeeper</option>
-                      <option value="Defender">Defender</option>
-                      <option value="Midfielder">Midfielder</option>
-                      <option value="Forward">Forward</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Match Team</label>
-                    <select data-testid="player-team-select" value={playerForm.team}
-                      onChange={(e) => setPlayerForm({ ...playerForm, team: e.target.value })}
-                      className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none">
-                      <option value="">{match.team_home} (default)</option>
-                      <option value={match.team_home}>{match.team_home}</option>
-                      <option value={match.team_away}>{match.team_away}</option>
-                    </select>
-                  </div>
-                </div>
-                {teams.length > 0 && (
-                  <div>
-                    <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Registered Team & Season (optional)</label>
-                    <select data-testid="player-registered-team-select" value={playerForm.team_id}
-                      onChange={(e) => setPlayerForm({ ...playerForm, team_id: e.target.value })}
-                      className="w-full bg-[#141414] border border-white/10 text-white px-3 py-2 text-sm focus:border-[#007AFF] focus:outline-none">
-                      <option value="">None (match-only player)</option>
-                      {teams.map(t => (
-                        <option key={t.id} value={t.id}>{t.name} — {t.season}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <button data-testid="cancel-add-player-btn" type="button" onClick={() => setShowAddPlayer(false)}
-                    className="px-3 py-2 border border-white/10 text-white text-xs hover:bg-[#1F1F1F] transition-colors">
-                    Cancel
-                  </button>
-                  <button data-testid="submit-add-player-btn" type="submit"
-                    className="px-4 py-2 bg-[#007AFF] hover:bg-[#005bb5] text-white text-xs font-bold tracking-wider uppercase transition-colors">
-                    Add
-                  </button>
-                </div>
-              </form>
-            </div>
-          )}
-
-          {/* Player List */}
-          {players.length === 0 ? (
-            <div className="text-center py-12 border border-dashed border-white/10">
-              <Users size={48} className="text-[#A3A3A3] mx-auto mb-3" />
-              <p className="text-[#A3A3A3] mb-1">No players added yet</p>
-              <p className="text-xs text-[#666]">Add players manually or import from CSV</p>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {[
-                { label: match.team_home, players: homeTeamPlayers, color: '#007AFF' },
-                { label: match.team_away, players: awayTeamPlayers, color: '#EF4444' },
-                ...(otherPlayers.length > 0 ? [{ label: 'Other', players: otherPlayers, color: '#A3A3A3' }] : [])
-              ].filter(g => g.players.length > 0).map(group => (
-                <div key={group.label}>
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="w-3 h-3" style={{ backgroundColor: group.color }} />
-                    <h4 className="text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3]">
-                      {group.label} ({group.players.length})
-                    </h4>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                    {group.players.sort((a, b) => (a.number || 99) - (b.number || 99)).map(player => (
-                      <div key={player.id} data-testid={`player-card-${player.id}`}
-                        className="flex items-center gap-3 bg-[#0A0A0A] border border-white/5 px-4 py-3 group hover:border-white/10 transition-colors">
-                        <div className="w-8 h-8 flex items-center justify-center text-sm font-bold"
-                          style={{ backgroundColor: group.color + '20', color: group.color }}>
-                          {player.number || '—'}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-white font-medium truncate">{player.name}</p>
-                          <p className="text-[10px] text-[#666] uppercase tracking-wider">{player.position || 'Unknown'}</p>
-                        </div>
-                        <button data-testid={`delete-player-${player.id}-btn`} onClick={() => handleDeletePlayer(player.id)}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity text-[#666] hover:text-[#EF4444]">
-                          <Trash size={14} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <RosterSection
+          match={match} players={players} teams={teams} playerGroups={playerGroups}
+          showAddPlayer={showAddPlayer} setShowAddPlayer={setShowAddPlayer}
+          showCsvImport={showCsvImport} setShowCsvImport={setShowCsvImport}
+          playerForm={playerForm} setPlayerForm={setPlayerForm}
+          csvData={csvData} setCsvData={setCsvData}
+          csvTeam={csvTeam} setCsvTeam={setCsvTeam}
+          onAddPlayer={handleAddPlayer} onCsvImport={handleCsvImport}
+          onFileChange={handleFileUpload} onDeletePlayer={handleDeletePlayer} />
       </main>
     </div>
   );

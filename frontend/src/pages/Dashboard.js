@@ -2,8 +2,15 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
-import { Plus, SignOut, VideoCamera, CalendarBlank, Trophy, FolderSimple, FolderOpen, Lock, LockOpen, DotsThreeVertical, PencilSimple, Trash, CaretRight, CaretDown, ShareNetwork, Copy, Check, Shield, ChartLineUp, Globe, UploadSimple, At } from '@phosphor-icons/react';
+import { Plus, VideoCamera, CaretRight, Globe, ChartLineUp } from '@phosphor-icons/react';
 import CoachPulseCard from './components/CoachPulseCard';
+import DashboardHeader from './components/DashboardHeader';
+import FolderSidebar from './components/FolderSidebar';
+import MatchCard from './components/MatchCard';
+import CreateMatchModal from './components/CreateMatchModal';
+import FolderFormModal from './components/FolderFormModal';
+import ShareFolderModal from './components/ShareFolderModal';
+import BulkActionBar from './components/BulkActionBar';
 
 const Dashboard = () => {
   const [matches, setMatches] = useState([]);
@@ -23,6 +30,36 @@ const Dashboard = () => {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMatchIds, setSelectedMatchIds] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [unreadMentions, setUnreadMentions] = useState(0);
+  const navigate = useNavigate();
+  const user = getCurrentUser();
+
+  const fetchMatches = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/matches`, { headers: getAuthHeader() });
+      setMatches(response.data);
+    } catch (err) { console.error('Failed to fetch matches:', err); }
+  }, []);
+
+  const fetchFolders = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/folders`, { headers: getAuthHeader() });
+      setFolders(response.data);
+      const expanded = {};
+      response.data.forEach(f => { expanded[f.id] = true; });
+      setExpandedFolders(prev => ({ ...expanded, ...prev }));
+    } catch (err) { console.error('Failed to fetch folders:', err); }
+  }, []);
+
+  useEffect(() => { fetchMatches(); fetchFolders(); }, [fetchMatches, fetchFolders]);
+
+  useEffect(() => {
+    let cancelled = false;
+    axios.get(`${API}/coach-network/mentions`, { headers: getAuthHeader() })
+      .then((res) => { if (!cancelled) setUnreadMentions((res.data || []).filter((m) => !m.read_at).length); })
+      .catch(() => { /* silent */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const toggleMatchSelection = (id) => {
     setSelectedMatchIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -66,37 +103,6 @@ const Dashboard = () => {
       alert('Bulk delete failed: ' + (err.response?.data?.detail || err.message));
     } finally { setBulkBusy(false); }
   };
-  const navigate = useNavigate();
-  const user = getCurrentUser();
-
-  const fetchMatches = useCallback(async () => {
-    try {
-      const response = await axios.get(`${API}/matches`, { headers: getAuthHeader() });
-      setMatches(response.data);
-    } catch (err) { console.error('Failed to fetch matches:', err); }
-  }, []);
-
-  const fetchFolders = useCallback(async () => {
-    try {
-      const response = await axios.get(`${API}/folders`, { headers: getAuthHeader() });
-      setFolders(response.data);
-      const expanded = {};
-      response.data.forEach(f => { expanded[f.id] = true; });
-      setExpandedFolders(prev => ({ ...expanded, ...prev }));
-    } catch (err) { console.error('Failed to fetch folders:', err); }
-  }, []);
-
-  useEffect(() => { fetchMatches(); fetchFolders(); }, [fetchMatches, fetchFolders]);
-
-  // Mentions badge — best-effort poll on mount. Failures silently ignored.
-  const [unreadMentions, setUnreadMentions] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    axios.get(`${API}/coach-network/mentions`, { headers: getAuthHeader() })
-      .then((res) => { if (!cancelled) setUnreadMentions((res.data || []).filter((m) => !m.read_at).length); })
-      .catch(() => { /* silent */ });
-    return () => { cancelled = true; };
-  }, []);
 
   const handleCreateMatch = async (e) => {
     e.preventDefault();
@@ -148,13 +154,11 @@ const Dashboard = () => {
   };
 
   const handleToggleShare = async (folder) => {
-    // If already shared, just open the modal to show link / allow revoke
     if (folder.share_token) {
       setSharingFolder(folder);
       setShowShareModal(true);
       return;
     }
-    // Otherwise generate a new share token
     try {
       const res = await axios.post(`${API}/folders/${folder.id}/share`, {}, { headers: getAuthHeader() });
       setFolders(prev => prev.map(f => f.id === folder.id ? { ...f, share_token: res.data.share_token } : f));
@@ -178,20 +182,6 @@ const Dashboard = () => {
     }
   };
 
-  const copyShareLink = () => {
-    const url = `${window.location.origin}/api/og/folder/${sharingFolder.share_token}`;
-    try {
-      navigator.clipboard.writeText(url).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }).catch(() => {
-        fallbackCopy(url);
-      });
-    } catch {
-      fallbackCopy(url);
-    }
-  };
-
   const fallbackCopy = (text) => {
     const ta = document.createElement('textarea');
     ta.value = text;
@@ -209,6 +199,18 @@ const Dashboard = () => {
     document.body.removeChild(ta);
   };
 
+  const copyShareLink = () => {
+    const url = `${window.location.origin}/api/og/folder/${sharingFolder.share_token}`;
+    try {
+      navigator.clipboard.writeText(url).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }).catch(() => { fallbackCopy(url); });
+    } catch {
+      fallbackCopy(url);
+    }
+  };
+
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
@@ -219,7 +221,22 @@ const Dashboard = () => {
     setExpandedFolders(prev => ({ ...prev, [folderId]: !prev[folderId] }));
   };
 
-  // Build a flat list of folder items with depth for rendering
+  const openNewFolder = () => {
+    setEditingFolder(null);
+    setFolderFormData({
+      name: '',
+      parent_id: (selectedFolderId && selectedFolderId !== '__none__') ? selectedFolderId : null,
+      is_private: false,
+    });
+    setShowFolderModal(true);
+  };
+
+  const openEditFolder = (folder) => {
+    setEditingFolder(folder);
+    setFolderFormData({ name: folder.name, parent_id: folder.parent_id, is_private: folder.is_private });
+    setShowFolderModal(true);
+  };
+
   const flatFolderList = useMemo(() => {
     const result = [];
     const addChildren = (parentId, depth) => {
@@ -228,197 +245,50 @@ const Dashboard = () => {
         const hasChildren = folders.some(f => f.parent_id === folder.id);
         const isExpanded = expandedFolders[folder.id] !== false;
         result.push({ ...folder, depth, hasChildren, isExpanded });
-        if (hasChildren && isExpanded) {
-          addChildren(folder.id, depth + 1);
-        }
+        if (hasChildren && isExpanded) addChildren(folder.id, depth + 1);
       }
     };
     addChildren(null, 0);
     return result;
   }, [folders, expandedFolders]);
 
-  const unfolderedCount = matches.filter(m => !m.folder_id).length;
   const displayMatches = selectedFolderId === '__none__'
     ? matches.filter(m => !m.folder_id)
     : selectedFolderId
     ? matches.filter(m => m.folder_id === selectedFolderId)
     : matches;
 
+  const selectedFolderName = selectedFolderId === '__none__'
+    ? 'Unsorted Matches'
+    : selectedFolderId
+    ? (folders.find(f => f.id === selectedFolderId)?.name || 'Folder')
+    : 'Match Library';
+
   return (
     <div className="min-h-screen bg-[#0A0A0A]">
-      <header className="sticky top-0 z-50 bg-[#0A0A0A] border-b border-white/10 px-4 sm:px-6 py-3 sm:py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <img src="/logo-mark-96.png" alt="Soccer Scout 11" data-testid="dashboard-logo"
-              className="h-7 sm:h-9 w-auto flex-shrink-0" />
-          </div>
-          <div className="flex items-center gap-2 sm:gap-6 flex-shrink-0">
-            <button data-testid="clubs-nav-btn" onClick={() => navigate('/clubs')}
-              className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-xs text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors border border-white/10 font-bold uppercase tracking-wider">
-              <Shield size={16} /> Clubs & Teams
-            </button>
-            <button data-testid="coach-network-nav-btn" onClick={() => navigate('/coach-network')}
-              className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-xs text-[#A855F7] hover:text-white hover:bg-[#A855F7]/15 transition-colors border border-[#A855F7]/30 font-bold uppercase tracking-wider">
-              <Globe size={16} weight="bold" /> Coach Network
-            </button>
-            <button data-testid="mentions-nav-btn" onClick={() => navigate('/mentions')}
-              className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-xs text-[#A855F7] hover:text-white hover:bg-[#A855F7]/15 transition-colors border border-[#A855F7]/30 font-bold uppercase tracking-wider relative">
-              <At size={16} weight="bold" /> Mentions
-              {unreadMentions > 0 && (
-                <span data-testid="mentions-unread-badge"
-                  className="absolute -top-1.5 -right-1.5 bg-[#A855F7] text-white text-[9px] font-bold tracking-wider px-1.5 py-0.5 min-w-[18px] text-center">
-                  {unreadMentions > 9 ? '9+' : unreadMentions}
-                </span>
-              )}
-            </button>
-            {['admin', 'owner'].includes((user?.role || '').toLowerCase()) && (
-              <button data-testid="admin-nav-btn" onClick={() => navigate('/admin/users')}
-                className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-xs text-[#FBBF24] hover:text-white hover:bg-[#FBBF24]/15 transition-colors border border-[#FBBF24]/30 font-bold uppercase tracking-wider">
-                <Shield size={16} weight="bold" /> Admin
-              </button>
-            )}
-            {/* Mobile icon-only versions */}
-            <button data-testid="clubs-nav-btn-mobile" onClick={() => navigate('/clubs')} aria-label="Clubs & Teams"
-              className="sm:hidden p-2 text-[#A3A3A3] hover:text-white border border-white/10">
-              <Shield size={18} />
-            </button>
-            <button data-testid="coach-network-nav-btn-mobile" onClick={() => navigate('/coach-network')} aria-label="Coach Network"
-              className="sm:hidden p-2 text-[#A855F7] border border-[#A855F7]/30">
-              <Globe size={18} weight="bold" />
-            </button>
-            <button data-testid="mentions-nav-btn-mobile" onClick={() => navigate('/mentions')} aria-label="Mentions"
-              className="sm:hidden p-2 text-[#A855F7] border border-[#A855F7]/30 relative">
-              <At size={18} weight="bold" />
-              {unreadMentions > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 bg-[#A855F7] text-white text-[9px] font-bold tracking-wider px-1.5 py-0.5 min-w-[18px] text-center">
-                  {unreadMentions > 9 ? '9+' : unreadMentions}
-                </span>
-              )}
-            </button>
-            {['admin', 'owner'].includes((user?.role || '').toLowerCase()) && (
-              <button data-testid="admin-nav-btn-mobile" onClick={() => navigate('/admin/users')} aria-label="Admin"
-                className="sm:hidden p-2 text-[#FBBF24] border border-[#FBBF24]/30">
-                <Shield size={18} weight="bold" />
-              </button>
-            )}
-            <div className="hidden md:block text-right">
-              <p className="text-sm text-[#A3A3A3]">{user?.name}</p>
-              <p className="text-xs text-[#A3A3A3] uppercase tracking-wider">{user?.role}</p>
-            </div>
-            <button data-testid="logout-btn" onClick={handleLogout} aria-label="Logout"
-              className="p-2 hover:bg-[#1F1F1F] transition-colors border border-white/10">
-              <SignOut size={20} className="text-[#A3A3A3]" />
-            </button>
-          </div>
-        </div>
-      </header>
+      <DashboardHeader user={user} unreadMentions={unreadMentions}
+        onNavigate={navigate} onLogout={handleLogout} />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 flex flex-col lg:flex-row gap-4 lg:gap-6">
-        {/* Folder Sidebar */}
-        <aside className="w-full lg:w-64 lg:flex-shrink-0" data-testid="folder-sidebar">
-          <div className="bg-[#141414] border border-white/10 p-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3]">Folders</h3>
-              <button data-testid="create-folder-btn"
-                onClick={() => { setEditingFolder(null); setFolderFormData({ name: '', parent_id: (selectedFolderId && selectedFolderId !== '__none__') ? selectedFolderId : null, is_private: false }); setShowFolderModal(true); }}
-                className="p-1 hover:bg-[#1F1F1F] transition-colors text-[#007AFF]">
-                <Plus size={18} weight="bold" />
-              </button>
-            </div>
+        <FolderSidebar
+          matches={matches}
+          flatFolderList={flatFolderList}
+          selectedFolderId={selectedFolderId}
+          setSelectedFolderId={setSelectedFolderId}
+          folderMenuId={folderMenuId}
+          setFolderMenuId={setFolderMenuId}
+          onToggleExpand={toggleFolderExpand}
+          onOpenNewFolder={openNewFolder}
+          onEditFolder={openEditFolder}
+          onShareFolder={handleToggleShare}
+          onTrendsFolder={(id) => navigate(`/folder/${id}/trends`)}
+          onDeleteFolder={handleDeleteFolder}
+        />
 
-            <button data-testid="all-matches-folder-btn" onClick={() => setSelectedFolderId(null)}
-              className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors mb-1 ${
-                selectedFolderId === null ? 'bg-[#007AFF]/10 text-[#007AFF] border-l-2 border-[#007AFF]' : 'text-[#A3A3A3] hover:bg-[#1F1F1F] hover:text-white'
-              }`}>
-              <FolderOpen size={18} />
-              <span className="flex-1 truncate">All Matches</span>
-              <span className="text-[10px] opacity-60">{matches.length}</span>
-            </button>
-
-            <button data-testid="unfoldered-matches-btn" onClick={() => setSelectedFolderId('__none__')}
-              className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors mb-2 ${
-                selectedFolderId === '__none__' ? 'bg-[#007AFF]/10 text-[#007AFF] border-l-2 border-[#007AFF]' : 'text-[#A3A3A3] hover:bg-[#1F1F1F] hover:text-white'
-              }`}>
-              <VideoCamera size={18} />
-              <span className="flex-1 truncate">Unsorted</span>
-              <span className="text-[10px] opacity-60">{unfolderedCount}</span>
-            </button>
-
-            <div className="border-t border-white/5 pt-2">
-              {flatFolderList.map(folder => {
-                const matchCount = matches.filter(m => m.folder_id === folder.id).length;
-                const isSelected = selectedFolderId === folder.id;
-                return (
-                  <div key={folder.id} style={{ paddingLeft: `${folder.depth * 12}px` }}>
-                    <div data-testid={`folder-item-${folder.id}`}
-                      className={`flex items-center gap-1 px-2 py-1.5 text-sm transition-colors group relative cursor-pointer ${
-                        isSelected ? 'bg-[#007AFF]/10 text-[#007AFF]' : 'text-[#A3A3A3] hover:bg-[#1F1F1F] hover:text-white'
-                      }`}>
-                      {folder.hasChildren ? (
-                        <button onClick={(e) => { e.stopPropagation(); toggleFolderExpand(folder.id); }}
-                          className="p-0.5 hover:bg-white/10 transition-colors flex-shrink-0">
-                          {folder.isExpanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
-                        </button>
-                      ) : <div className="w-4" />}
-                      <button className="flex-1 flex items-center gap-2 min-w-0 text-left"
-                        onClick={() => setSelectedFolderId(folder.id)}>
-                        <FolderSimple size={16} className="flex-shrink-0" />
-                        <span className="truncate text-xs">{folder.name}</span>
-                        {folder.is_private && <Lock size={10} className="text-[#EF4444] flex-shrink-0" />}
-                        {folder.share_token && <ShareNetwork size={10} className="text-[#4ADE80] flex-shrink-0" />}
-                        <span className="text-[10px] opacity-50 ml-auto flex-shrink-0">{matchCount}</span>
-                      </button>
-                      <button data-testid={`folder-menu-${folder.id}-btn`}
-                        onClick={(e) => { e.stopPropagation(); setFolderMenuId(folderMenuId === folder.id ? null : folder.id); }}
-                        className="p-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 hover:bg-white/10">
-                        <DotsThreeVertical size={14} />
-                      </button>
-                      {folderMenuId === folder.id && (
-                        <div className="absolute right-0 top-full z-50 bg-[#1F1F1F] border border-white/10 py-1 min-w-[120px] shadow-xl"
-                          onClick={(e) => e.stopPropagation()}>
-                          <button data-testid={`edit-folder-${folder.id}-btn`}
-                            onClick={() => { setEditingFolder(folder); setFolderFormData({ name: folder.name, parent_id: folder.parent_id, is_private: folder.is_private }); setShowFolderModal(true); setFolderMenuId(null); }}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[#A3A3A3] hover:bg-white/5 hover:text-white">
-                            <PencilSimple size={12} /> Rename
-                          </button>
-                          {!folder.is_private && (
-                            <button data-testid={`share-folder-${folder.id}-btn`}
-                              onClick={() => { handleToggleShare(folder); setFolderMenuId(null); }}
-                              className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-white/5 ${
-                                folder.share_token ? 'text-[#4ADE80]' : 'text-[#A3A3A3] hover:text-white'
-                              }`}>
-                              <ShareNetwork size={12} /> {folder.share_token ? 'Sharing On' : 'Share'}
-                            </button>
-                          )}
-                          <button data-testid={`folder-trends-${folder.id}-btn`}
-                            onClick={() => { navigate(`/folder/${folder.id}/trends`); setFolderMenuId(null); }}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[#A855F7] hover:bg-[#A855F7]/10">
-                            <ChartLineUp size={12} /> Season Trends
-                          </button>
-                          <button data-testid={`delete-folder-${folder.id}-btn`}
-                            onClick={() => { handleDeleteFolder(folder.id); setFolderMenuId(null); }}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-[#EF4444] hover:bg-[#EF4444]/10">
-                            <Trash size={12} /> Delete
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </aside>
-
-        {/* Main Content */}
         <main className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-8">
             <div>
-              <h2 className="text-4xl font-bold mb-2" style={{ fontFamily: 'Bebas Neue' }}>
-                {selectedFolderId === '__none__' ? 'Unsorted Matches' :
-                 selectedFolderId ? (folders.find(f => f.id === selectedFolderId)?.name || 'Folder') :
-                 'Match Library'}
-              </h2>
+              <h2 className="text-4xl font-bold mb-2" style={{ fontFamily: 'Bebas Neue' }}>{selectedFolderName}</h2>
               <p className="text-[#A3A3A3] tracking-wide">{displayMatches.length} match{displayMatches.length !== 1 ? 'es' : ''}</p>
             </div>
             {selectedFolderId && selectedFolderId !== '__none__' && (
@@ -440,54 +310,27 @@ const Dashboard = () => {
             </button>
           </div>
 
-          {/* Coach Network CTA Card — appears when not in selection mode */}
           {!selectionMode && (
             <>
               <CoachPulseCard />
               <button data-testid="coach-network-cta-card" onClick={() => navigate('/coach-network')}
-              className="w-full mb-6 group flex items-center gap-4 bg-gradient-to-r from-[#1B0F2E] via-[#0F1A2E] to-[#0A0A0A] border border-[#A855F7]/30 hover:border-[#A855F7]/60 hover:from-[#2A1547] transition-all px-5 py-4 text-left">
-              <div className="w-12 h-12 bg-[#A855F7]/15 border border-[#A855F7]/30 flex items-center justify-center flex-shrink-0">
-                <Globe size={24} weight="bold" className="text-[#A855F7]" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-[10px] font-bold tracking-[0.3em] uppercase text-[#A855F7] mb-1">Coach Network</div>
-                <div className="text-base font-bold text-white truncate">See how your coaching stacks up — anonymized</div>
-                <div className="text-xs text-[#A3A3A3] mt-0.5 truncate">Platform benchmarks · player position trends · recruiter-level distribution</div>
-              </div>
-              <CaretRight size={20} className="text-[#A855F7] group-hover:translate-x-1 transition-transform flex-shrink-0" />
-            </button>
+                className="w-full mb-6 group flex items-center gap-4 bg-gradient-to-r from-[#1B0F2E] via-[#0F1A2E] to-[#0A0A0A] border border-[#A855F7]/30 hover:border-[#A855F7]/60 hover:from-[#2A1547] transition-all px-5 py-4 text-left">
+                <div className="w-12 h-12 bg-[#A855F7]/15 border border-[#A855F7]/30 flex items-center justify-center flex-shrink-0">
+                  <Globe size={24} weight="bold" className="text-[#A855F7]" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] font-bold tracking-[0.3em] uppercase text-[#A855F7] mb-1">Coach Network</div>
+                  <div className="text-base font-bold text-white truncate">See how your coaching stacks up — anonymized</div>
+                  <div className="text-xs text-[#A3A3A3] mt-0.5 truncate">Platform benchmarks · player position trends · recruiter-level distribution</div>
+                </div>
+                <CaretRight size={20} className="text-[#A855F7] group-hover:translate-x-1 transition-transform flex-shrink-0" />
+              </button>
             </>
           )}
 
-          {/* Bulk action bar */}
           {selectionMode && (
-            <div data-testid="bulk-action-bar"
-              className="sticky top-0 z-30 bg-[#FBBF24]/15 border border-[#FBBF24]/30 px-4 py-3 flex items-center gap-3 mb-4 -mx-4 md:mx-0 backdrop-blur">
-              <span className="text-sm font-bold tracking-wider uppercase text-[#FBBF24]">
-                {selectedMatchIds.length} selected
-              </span>
-              <div className="ml-auto flex flex-wrap gap-2">
-                <select data-testid="bulk-move-select"
-                  disabled={selectedMatchIds.length === 0 || bulkBusy}
-                  onChange={(e) => { if (e.target.value !== '__none__') bulkMove(e.target.value === '' ? null : e.target.value); e.target.value = '__none__'; }}
-                  defaultValue="__none__"
-                  className="bg-[#0A0A0A] border border-white/10 text-xs text-[#A3A3A3] px-3 py-2 focus:outline-none">
-                  <option value="__none__" disabled>Move to folder…</option>
-                  <option value="">No folder (root)</option>
-                  {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                </select>
-                <button data-testid="bulk-set-competition-btn" onClick={bulkSetCompetition}
-                  disabled={selectedMatchIds.length === 0 || bulkBusy}
-                  className="text-xs px-3 py-2 bg-[#007AFF]/15 text-[#007AFF] hover:bg-[#007AFF]/25 disabled:opacity-50 font-bold tracking-wider uppercase">
-                  Set Competition
-                </button>
-                <button data-testid="bulk-delete-btn" onClick={bulkDelete}
-                  disabled={selectedMatchIds.length === 0 || bulkBusy}
-                  className="text-xs px-3 py-2 bg-[#EF4444]/15 text-[#EF4444] hover:bg-[#EF4444]/25 disabled:opacity-50 font-bold tracking-wider uppercase">
-                  Delete
-                </button>
-              </div>
-            </div>
+            <BulkActionBar selectedCount={selectedMatchIds.length} bulkBusy={bulkBusy} folders={folders}
+              onMove={bulkMove} onSetCompetition={bulkSetCompetition} onDelete={bulkDelete} />
           )}
 
           {displayMatches.length === 0 ? (
@@ -499,249 +342,30 @@ const Dashboard = () => {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {displayMatches.map((match) => (
-                <div key={match.id} data-testid={`match-card-${match.id}`}
-                  className={`bg-[#141414] border p-6 hover:bg-[#1F1F1F] transition-colors cursor-pointer group relative ${
-                    selectionMode && selectedMatchIds.includes(match.id) ? 'border-[#FBBF24]' : 'border-white/10'
-                  }`}
-                  onClick={() => selectionMode ? toggleMatchSelection(match.id) : navigate(`/match/${match.id}`)}>
-                  {selectionMode && (
-                    <div data-testid={`select-${match.id}`}
-                      className={`absolute top-3 left-3 w-6 h-6 rounded border-2 flex items-center justify-center ${
-                        selectedMatchIds.includes(match.id) ? 'bg-[#FBBF24] border-[#FBBF24]' : 'bg-transparent border-white/30'
-                      }`}>
-                      {selectedMatchIds.includes(match.id) && (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
-                      )}
-                    </div>
-                  )}
-                  {!selectionMode && folders.length > 0 && (
-                    <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={(e) => e.stopPropagation()}>
-                      <select data-testid={`move-match-${match.id}-select`}
-                        value={match.folder_id || ''}
-                        onChange={(e) => handleMoveMatch(match.id, e.target.value || null)}
-                        className="bg-[#0A0A0A] border border-white/10 text-[10px] text-[#A3A3A3] px-2 py-1 focus:outline-none focus:border-[#007AFF]">
-                        <option value="">No folder</option>
-                        {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                      </select>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2 mb-4">
-                    <Trophy size={20} className="text-[#007AFF]" />
-                    <p className="text-xs text-[#A3A3A3] uppercase tracking-wider">{match.competition || 'Friendly'}</p>
-                  </div>
-                  <h3 className="text-2xl font-bold mb-2" style={{ fontFamily: 'Bebas Neue' }}>
-                    {match.team_home} vs {match.team_away}
-                  </h3>
-                  <div className="flex items-center gap-2 text-sm text-[#A3A3A3]">
-                    <CalendarBlank size={16} />
-                    <span>{new Date(match.date + 'T00:00:00').toLocaleDateString()}</span>
-                  </div>
-                  {match.video_id && (
-                    <div className="mt-4">
-                      {match.processing_status === 'completed' ? (
-                        <div className="flex items-center gap-2 text-[#4ADE80] text-sm">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                          <span>Analysis Ready</span>
-                        </div>
-                      ) : match.processing_status === 'processing' || match.processing_status === 'queued' ? (
-                        <div className="flex items-center gap-2 text-[#007AFF] text-sm">
-                          <div className="w-3 h-3 border-2 border-[#007AFF] border-t-transparent rounded-full animate-spin" />
-                          <span>Processing ({match.processing_progress || 0}%)</span>
-                        </div>
-                      ) : match.processing_status === 'failed' ? (
-                        <div className="flex items-center gap-2 text-[#EF4444] text-sm">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
-                          <span>Processing Failed</span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 text-[#39FF14] text-sm">
-                          <VideoCamera size={16} />
-                          <span>Video uploaded</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {!match.video_id && match.has_manual_result && match.manual_result && (
-                    <div className="mt-4 flex items-center gap-2 flex-wrap" data-testid={`manual-badge-${match.id}`}>
-                      <span className="text-[10px] tracking-[0.2em] uppercase font-bold text-[#60A5FA] bg-[#60A5FA]/15 border border-[#60A5FA]/30 px-2 py-1">
-                        No Video — Manual Result
-                      </span>
-                      <span className="text-sm font-bold text-white" style={{ fontFamily: 'Bebas Neue' }}>
-                        {match.manual_result.home_score} – {match.manual_result.away_score}
-                      </span>
-                      {match.manual_result.outcome && (
-                        <span className="text-[10px] tracking-wider uppercase font-bold px-1.5 py-0.5"
-                          style={{
-                            color: match.manual_result.outcome === 'W' ? '#10B981' : match.manual_result.outcome === 'L' ? '#EF4444' : '#FBBF24',
-                            backgroundColor: (match.manual_result.outcome === 'W' ? '#10B981' : match.manual_result.outcome === 'L' ? '#EF4444' : '#FBBF24') + '20',
-                          }}>
-                          {match.manual_result.outcome}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  {!match.video_id && !match.has_manual_result && (
-                    <div className="mt-4 flex items-center gap-2 text-[#A3A3A3] text-xs" data-testid={`pending-badge-${match.id}`}>
-                      <UploadSimple size={14} />
-                      <span>No video or result yet</span>
-                    </div>
-                  )}
-                </div>
+                <MatchCard key={match.id} match={match} folders={folders}
+                  selectionMode={selectionMode}
+                  isSelected={selectedMatchIds.includes(match.id)}
+                  onNavigate={navigate}
+                  onToggleSelect={toggleMatchSelection}
+                  onMoveMatch={handleMoveMatch} />
               ))}
             </div>
           )}
         </main>
       </div>
 
-      {/* Create Match Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/80 overflow-y-auto z-50 p-4 sm:p-6" data-testid="create-match-modal">
-          <div className="bg-[#141414] border border-white/10 w-full max-w-lg p-6 sm:p-8 mx-auto my-4 sm:my-8">
-            <h3 className="text-3xl font-bold mb-6" style={{ fontFamily: 'Bebas Neue' }}>Create New Match</h3>
-            <form onSubmit={handleCreateMatch} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">Home Team</label>
-                <input data-testid="home-team-input" type="text" value={formData.team_home}
-                  onChange={(e) => setFormData({ ...formData, team_home: e.target.value })}
-                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none" required />
-              </div>
-              <div>
-                <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">Away Team</label>
-                <input data-testid="away-team-input" type="text" value={formData.team_away}
-                  onChange={(e) => setFormData({ ...formData, team_away: e.target.value })}
-                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none" required />
-              </div>
-              <div>
-                <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">Date</label>
-                <input data-testid="match-date-input" type="date" value={formData.date}
-                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none" required />
-              </div>
-              <div>
-                <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">Competition</label>
-                <input data-testid="competition-input" type="text" value={formData.competition}
-                  onChange={(e) => setFormData({ ...formData, competition: e.target.value })}
-                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none"
-                  placeholder="e.g., Premier League, Champions League" />
-              </div>
-              <div className="flex gap-4 mt-6">
-                <button data-testid="cancel-create-btn" type="button" onClick={() => setShowCreateModal(false)}
-                  className="flex-1 bg-transparent border border-white/10 text-white py-3 font-bold tracking-wider uppercase hover:bg-[#1F1F1F] transition-colors">
-                  Cancel
-                </button>
-                <button data-testid="submit-create-btn" type="submit" disabled={loading}
-                  className="flex-1 bg-[#007AFF] hover:bg-[#005bb5] text-white py-3 font-bold tracking-wider uppercase transition-colors disabled:opacity-50">
-                  {loading ? 'Creating...' : 'Create'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <CreateMatchModal open={showCreateModal} onClose={() => setShowCreateModal(false)}
+        onSubmit={handleCreateMatch} formData={formData} setFormData={setFormData} loading={loading} />
 
-      {/* Folder Create/Edit Modal */}
-      {showFolderModal && (
-        <div className="fixed inset-0 bg-black/80 overflow-y-auto z-50 p-4 sm:p-6" data-testid="folder-modal">
-          <div className="bg-[#141414] border border-white/10 w-full max-w-md p-6 sm:p-8 mx-auto my-4 sm:my-8">
-            <h3 className="text-3xl font-bold mb-6" style={{ fontFamily: 'Bebas Neue' }}>
-              {editingFolder ? 'Edit Folder' : 'New Folder'}
-            </h3>
-            <form onSubmit={handleCreateFolder} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">Folder Name</label>
-                <input data-testid="folder-name-input" type="text" value={folderFormData.name}
-                  onChange={(e) => setFolderFormData({ ...folderFormData, name: e.target.value })}
-                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none"
-                  placeholder="e.g., Season 2025-26" required />
-              </div>
-              <div>
-                <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">Parent Folder</label>
-                <select data-testid="folder-parent-select"
-                  value={folderFormData.parent_id || ''}
-                  onChange={(e) => setFolderFormData({ ...folderFormData, parent_id: e.target.value || null })}
-                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none">
-                  <option value="">None (Root level)</option>
-                  {folders.filter(f => f.id !== editingFolder?.id).map(f => (
-                    <option key={f.id} value={f.id}>{f.name}</option>
-                  ))}
-                </select>
-              </div>
-              <label className="flex items-center gap-3 cursor-pointer" data-testid="folder-privacy-toggle">
-                <div className={`w-10 h-6 rounded-full transition-colors relative ${folderFormData.is_private ? 'bg-[#EF4444]' : 'bg-[#39FF14]/30'}`}
-                  onClick={(e) => { e.preventDefault(); setFolderFormData({ ...folderFormData, is_private: !folderFormData.is_private }); }}>
-                  <div className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-transform ${folderFormData.is_private ? 'translate-x-5' : 'translate-x-1'}`} />
-                </div>
-                <div className="flex items-center gap-2">
-                  {folderFormData.is_private ? <Lock size={16} className="text-[#EF4444]" /> : <LockOpen size={16} className="text-[#39FF14]" />}
-                  <span className="text-sm text-white">{folderFormData.is_private ? 'Private' : 'Public'}</span>
-                </div>
-              </label>
-              <div className="flex gap-4 mt-6">
-                <button data-testid="cancel-folder-btn" type="button"
-                  onClick={() => { setShowFolderModal(false); setEditingFolder(null); }}
-                  className="flex-1 bg-transparent border border-white/10 text-white py-3 font-bold tracking-wider uppercase hover:bg-[#1F1F1F] transition-colors">
-                  Cancel
-                </button>
-                <button data-testid="submit-folder-btn" type="submit"
-                  className="flex-1 bg-[#007AFF] hover:bg-[#005bb5] text-white py-3 font-bold tracking-wider uppercase transition-colors">
-                  {editingFolder ? 'Save' : 'Create'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <FolderFormModal open={showFolderModal}
+        onClose={() => { setShowFolderModal(false); setEditingFolder(null); }}
+        onSubmit={handleCreateFolder}
+        folderFormData={folderFormData} setFolderFormData={setFolderFormData}
+        editingFolder={editingFolder} folders={folders} />
 
-      {/* Share Modal */}
-      {showShareModal && sharingFolder && (
-        <div className="fixed inset-0 bg-black/80 overflow-y-auto z-50 p-4 sm:p-6" data-testid="share-folder-modal">
-          <div className="bg-[#141414] border border-white/10 w-full max-w-md p-6 sm:p-8 mx-auto my-4 sm:my-8">
-            <div className="flex items-center gap-3 mb-6">
-              <ShareNetwork size={28} className="text-[#4ADE80]" />
-              <h3 className="text-3xl font-bold" style={{ fontFamily: 'Bebas Neue' }}>Share Folder</h3>
-            </div>
-            {sharingFolder.share_token ? (
-              <div>
-                <p className="text-sm text-[#A3A3A3] mb-4">
-                  Anyone with this link can view <strong className="text-white">{sharingFolder.name}</strong> and its matches, analyses, clips, and annotations — no login required.
-                </p>
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="flex-1 bg-[#0A0A0A] border border-white/10 text-[#007AFF] px-4 py-3 text-sm font-mono truncate select-all">
-                    {window.location.origin}/api/og/folder/{sharingFolder.share_token}
-                  </div>
-                  <button data-testid="copy-share-link-btn" onClick={copyShareLink}
-                    className={`px-4 py-3 font-bold tracking-wider uppercase transition-colors flex items-center gap-2 text-sm ${
-                      copied ? 'bg-[#4ADE80] text-black' : 'bg-[#007AFF] hover:bg-[#005bb5] text-white'
-                    }`}>
-                    {copied ? <><Check size={16} weight="bold" /> Copied</> : <><Copy size={16} /> Copy</>}
-                  </button>
-                </div>
-                <div className="text-[10px] text-[#10B981] tracking-[0.15em] uppercase font-bold mb-3 flex items-center gap-1.5">
-                  <Check size={11} weight="bold" /> Smart link — unfurls with rich preview in WhatsApp, Slack, Twitter
-                </div>
-                <a data-testid="folder-preview-link" target="_blank" rel="noopener noreferrer"
-                  href={`${window.location.origin}/shared/${sharingFolder.share_token}`}
-                  className="block text-xs text-[#A3A3A3] hover:text-white underline underline-offset-2 mb-6">
-                  Open public folder in new tab →
-                </a>
-                <button data-testid="revoke-share-btn"
-                  onClick={handleRevokeShare}
-                  className="w-full bg-transparent border border-[#EF4444]/30 text-[#EF4444] py-2 text-xs font-bold tracking-wider uppercase hover:bg-[#EF4444]/10 transition-colors">
-                  Revoke Share Link
-                </button>
-              </div>
-            ) : (
-              <p className="text-sm text-[#A3A3A3]">Sharing has been revoked for this folder.</p>
-            )}
-            <button data-testid="close-share-modal-btn"
-              onClick={() => setShowShareModal(false)}
-              className="w-full mt-4 bg-transparent border border-white/10 text-white py-3 font-bold tracking-wider uppercase hover:bg-[#1F1F1F] transition-colors">
-              Close
-            </button>
-          </div>
-        </div>
-      )}
+      <ShareFolderModal open={showShareModal} sharingFolder={sharingFolder}
+        onClose={() => setShowShareModal(false)}
+        onCopy={copyShareLink} onRevoke={handleRevokeShare} copied={copied} />
     </div>
   );
 };
