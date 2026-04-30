@@ -45,6 +45,23 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 
 ## What's Been Implemented
 
+### Code Quality Report Cleanup + Pipeline Extraction (Apr 30, 2026)
+**Two refactors completed in the same session (user chose option c).**
+
+**(a) SERVER_BOOT_ID consolidation + React hook/key cleanup**
+- `runtime.py` is now the single source of truth for `SERVER_BOOT_ID` / `SERVER_BOOT_TIME`. `db.py` re-exports them for backwards compat. `server.py` imports from `runtime`. `routes/videos.py` imports directly (lazy-import-with-cache hack removed).
+- Verified at runtime: `/api/heartbeat` boot_id exactly matches `/api/videos/{id}/processing-status` server_boot_id.
+- React hook deps: Dashboard/MatchDetail/TeamRoster/SharedView/SharedClipView fetch functions wrapped in `useCallback` with correct deps. All `// eslint-disable-line react-hooks/exhaustive-deps` comments removed where safe (kept 1 intentional in VideoAnalysis for mount-only load).
+- Array-index keys: MatchInsights/SeasonTrends/PlayerSeasonTrends/CoachNetwork list keys changed from `{i}` to content-derived (`${i}-${text.slice(0,32)}`) on every dynamic list. Only fixed-length static lists (10-star rating, tab indicator dots) retain index keys.
+
+**(b) Full extraction of run_auto_processing + FFmpeg pipeline from server.py → services/processing.py**
+- `services/processing.py` now owns the ENTIRE auto-processing pipeline: `run_auto_processing`, `prepare_video_sample`, `prepare_video_segments_720p`, `run_single_analysis`, `parse_and_store_markers`, `build_roster_context`, `build_analysis_prompts`.
+- Decoupled from server.py via `auto_create_clips_callback` dependency injection — service module never imports server.
+- `_emergent_key()` helper reads `EMERGENT_LLM_KEY` at call time (addresses iter9 concern about module-time env capture).
+- server.py keeps 7 thin 3-line wrapper functions so every existing call site (finalize_chunked_upload, reprocess, generate_analysis, generate_trimmed_analysis, resume_interrupted_processing) works unchanged.
+- `server.py` shrunk from 2373 → 1995 lines (-378, -16%). Combined with prior refactors, server.py is down ~35% from its 2500-line peak.
+- **Verified**: 103/106 pytest (unchanged baseline), +13 new refactor regression tests all green, zero frontend console errors, zero React key warnings. Reprocess endpoint responds correctly on real video; generate_analysis + generate_trimmed_analysis return 404 cleanly on missing video with no import errors from the new module.
+
 ### Post-Game Spoken Summary + Auto-Reel from Voice Key Moments (Apr 30, 2026)
 **Premise**: At the final whistle, a coach taps a button, dictates a 30-90 second recap, and gets a polished match summary saved to MongoDB — plus optionally builds a shareable highlight reel from every voice-tagged key_moment with one click.
 
@@ -470,7 +487,8 @@ Build a site to upload soccer match videos for in-depth game analysis. Features 
 - **Admin role assignment** — currently no flow to promote a user to `admin`/`owner`. The `/coach-pulse/send-weekly` blast endpoint requires this role, so an admin-promotion mechanism is needed before the weekly blast can run.
 - **Resend domain verification** — Once a custom domain is verified at resend.com/domains, swap `SENDER_EMAIL` away from `onboarding@resend.dev` so coach pulse emails can deliver to all subscribers (not just the Resend account owner).
 - **APScheduler-based weekly cron** — currently `/send-weekly` is manual. Add a scheduled job that hits this endpoint every Monday 8am UTC with admin auth.
-- Full extraction of AI auto-processing pipeline (`run_auto_processing`, `prepare_video_sample`, FFmpeg multi-segment compression) from `server.py` into `services/processing.py` — DEFERRED due to high regression risk on the core AI-pipeline / chunked-upload coupling
+- Deduplicate `services/storage.py` vs server.py's storage functions (server.py still has its own copies of `put_object_sync`, `get_object_sync`, `read_chunk_data`, etc. — works but is redundant; low-risk cleanup)
+- Address remaining "Insecure localStorage" and "Expensive JSX Computation" items from the Code Quality Report
 - Dedicated "Manage Templates" modal once a coach exceeds 6 saved templates
 - Bulk-share clips picker on Dashboard (cross-match version)
 - Season stats dashboard per player (aggregate across teams/seasons)
