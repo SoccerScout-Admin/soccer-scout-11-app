@@ -27,6 +27,8 @@ const ManualResultForm = ({ match, players, onSaved }) => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [quickGoalFlash, setQuickGoalFlash] = useState(null);
+  const [finishing, setFinishing] = useState(false);
+  const [aiSummary, setAiSummary] = useState(null);
 
   /**
    * Live-match logging helper: a single tap on the Home/Away Goal buttons bumps
@@ -69,7 +71,9 @@ const ManualResultForm = ({ match, players, onSaved }) => {
         setExisting(null);
       }
     } catch { /* 404 = none yet */ }
-  }, [match.id]);
+    // Load any existing AI summary so we don't re-generate on every page load
+    if (match.insights?.summary) setAiSummary(match.insights.summary);
+  }, [match.id, match.insights?.summary]);
 
   useEffect(() => { loadExisting(); }, [loadExisting]);
 
@@ -118,9 +122,41 @@ const ManualResultForm = ({ match, players, onSaved }) => {
       setExisting(null);
       setHomeScore(0); setAwayScore(0); setNotes(''); setEvents([]);
       setEditing(false);
+      setAiSummary(null);
       if (onSaved) onSaved(null);
     } catch (err) {
       alert('Failed to delete: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  const handleFinish = async () => {
+    if (!existing) return;
+    setFinishing(true);
+    setError(null);
+    try {
+      const res = await axios.post(`${API}/matches/${match.id}/finish`, {}, { headers: getAuthHeader() });
+      setAiSummary(res.data.summary);
+      setExisting((prev) => ({ ...(prev || {}), is_final: true, finished_at: res.data.finished_at }));
+      if (onSaved) onSaved({ ...(existing || {}), is_final: true });
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to finish match');
+    } finally {
+      setFinishing(false);
+    }
+  };
+
+  const handleUnlock = async () => {
+    if (!window.confirm('Unlock this match? You can re-edit the score and events. The AI recap stays saved.')) return;
+    try {
+      await axios.post(`${API}/matches/${match.id}/unlock`, {}, { headers: getAuthHeader() });
+      setExisting((prev) => {
+        const next = { ...(prev || {}) };
+        delete next.is_final;
+        delete next.finished_at;
+        return next;
+      });
+    } catch (err) {
+      alert('Failed to unlock: ' + (err.response?.data?.detail || err.message));
     }
   };
 
@@ -128,23 +164,53 @@ const ManualResultForm = ({ match, players, onSaved }) => {
   if (existing && !editing) {
     const outcome = existing.outcome;
     const outcomeColor = outcome === 'W' ? '#10B981' : outcome === 'L' ? '#EF4444' : '#FBBF24';
+    const isLocked = !!existing.is_final;
     return (
       <div data-testid="manual-result-summary" className="bg-gradient-to-br from-[#0F1A2E] to-[#141414] border border-[#60A5FA]/30 p-6 mb-6">
         <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
           <div className="flex items-center gap-3">
             <Trophy size={22} weight="fill" className="text-[#60A5FA]" />
             <div>
-              <div className="text-[10px] tracking-[0.2em] uppercase text-[#60A5FA]">Manual Result — No Video</div>
-              <div className="text-xs text-[#A3A3A3] mt-0.5">Counted in season trends</div>
+              <div className="text-[10px] tracking-[0.2em] uppercase text-[#60A5FA] flex items-center gap-2">
+                <span>Manual Result — No Video</span>
+                {isLocked && (
+                  <span data-testid="match-locked-chip"
+                    className="text-[9px] tracking-[0.2em] uppercase font-bold px-1.5 py-0.5 bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30">
+                    Final
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-[#A3A3A3] mt-0.5">
+                {isLocked ? 'Locked — final whistle blown' : 'Counted in season trends'}
+              </div>
             </div>
           </div>
-          <div className="flex gap-2">
-            <button data-testid="edit-manual-result-btn" onClick={() => setEditing(true)}
-              className="flex items-center gap-1.5 text-xs font-bold tracking-wider uppercase px-3 py-2 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors">
-              <PencilSimple size={14} weight="bold" /> Edit
-            </button>
+          <div className="flex gap-2 flex-wrap">
+            {!isLocked && (
+              <button data-testid="edit-manual-result-btn" onClick={() => setEditing(true)}
+                className="flex items-center gap-1.5 text-xs font-bold tracking-wider uppercase px-3 py-2 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors">
+                <PencilSimple size={14} weight="bold" /> Edit
+              </button>
+            )}
+            {!isLocked && (
+              <button data-testid="finish-match-btn" onClick={handleFinish} disabled={finishing}
+                className="flex items-center gap-1.5 text-xs font-bold tracking-wider uppercase px-3 py-2 bg-gradient-to-r from-[#10B981] to-[#059669] text-white hover:opacity-90 transition-opacity disabled:opacity-50">
+                {finishing ? (
+                  <><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> Generating recap…</>
+                ) : (
+                  <><Check size={14} weight="bold" /> Finish Match</>
+                )}
+              </button>
+            )}
+            {isLocked && (
+              <button data-testid="unlock-match-btn" onClick={handleUnlock}
+                className="flex items-center gap-1.5 text-xs font-bold tracking-wider uppercase px-3 py-2 border border-[#FBBF24]/30 text-[#FBBF24] hover:bg-[#FBBF24]/10 transition-colors">
+                <PencilSimple size={14} weight="bold" /> Unlock
+              </button>
+            )}
             <button data-testid="delete-manual-result-btn" onClick={handleDelete}
-              className="flex items-center gap-1.5 text-xs font-bold tracking-wider uppercase px-3 py-2 border border-[#EF4444]/30 text-[#EF4444] hover:bg-[#EF4444]/15 transition-colors">
+              disabled={isLocked}
+              className="flex items-center gap-1.5 text-xs font-bold tracking-wider uppercase px-3 py-2 border border-[#EF4444]/30 text-[#EF4444] hover:bg-[#EF4444]/15 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
               <Trash size={14} weight="bold" /> Remove
             </button>
           </div>
@@ -194,6 +260,26 @@ const ManualResultForm = ({ match, players, onSaved }) => {
           <div className="mt-4 bg-[#0A0A0A] border border-white/5 p-3">
             <div className="text-[10px] tracking-wider uppercase text-[#A3A3A3] mb-1">Coach's Notes</div>
             <p className="text-sm text-[#E5E5E5] whitespace-pre-wrap leading-relaxed">{existing.notes}</p>
+          </div>
+        )}
+
+        {aiSummary && (
+          <div data-testid="ai-recap" className="mt-4 bg-gradient-to-br from-[#1B0F2E] to-[#0A0A0A] border border-[#A855F7]/30 p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-7 h-7 bg-[#A855F7]/15 border border-[#A855F7]/30 flex items-center justify-center flex-shrink-0">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="#A855F7">
+                  <path d="M12 2L9.91 8.26L2 9.27L7.91 14.14L6.18 22L12 18.27L17.82 22L16.09 14.14L22 9.27L14.09 8.26L12 2Z"/>
+                </svg>
+              </div>
+              <div className="text-[10px] tracking-[0.2em] uppercase text-[#A855F7] font-bold">AI Match Recap</div>
+            </div>
+            <p className="text-sm text-[#E5E5E5] leading-relaxed whitespace-pre-wrap">{aiSummary}</p>
+          </div>
+        )}
+
+        {error && (
+          <div data-testid="finish-error" className="mt-3 text-xs text-[#EF4444] bg-[#EF4444]/10 border border-[#EF4444]/30 px-3 py-2">
+            {error}
           </div>
         )}
       </div>

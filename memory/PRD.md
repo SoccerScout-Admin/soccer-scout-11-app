@@ -2,6 +2,20 @@
 
 ## What's Been Implemented
 
+### Finish Match → AI Recap + Ben Buursma Promotion (Apr 30, 2026 — iter19)
+
+**Finish Match (1-tap AI recap)**
+- New `POST /api/matches/{id}/finish` endpoint — takes a saved manual_result, sets `is_final=true` + `finished_at`, calls Gemini 2.5 Flash via Emergent LLM key to generate a 80-120 word match recap (lead with result, integrate goals + key moments chronologically, end with one tactical takeaway). Falls back to a deterministic plain-English summary if the LLM is unavailable. Persists to `match.insights.summary` (same field used by `spoken_summary`, so existing UI keeps working).
+- `POST /api/matches/{id}/unlock` — clears `is_final` so the coach can edit again. AI recap is preserved.
+- Added `insights: Optional[dict]` to the `Match` Pydantic model so callers can read `summary_source` / `summary_generated_at`.
+- New "Finish Match" button on `ManualResultForm` summary view — green gradient with spinner during generation. After click: FINAL chip + "Locked — final whistle blown" subtitle + purple "AI MATCH RECAP" card with full narrative. Edit/Remove buttons hidden when locked; Unlock button takes their place.
+- 8 new pytest cases in `test_finish_match.py`: schema, 400 without manual_result, happy path with real Gemini call, 409 on second call, unlock+refinish loop, 404 unknown match, auth-required, deterministic-recap unit test, prompt-builder unit test. **Real LLM call verified end-to-end** — test recap quote: *"Arsenal secured a 2-1 victory over Chelsea in a dramatic Premier League contest…"*
+
+**Admin Promotion**
+- Promoted **Ben Buursma** (Ben.buursma@gmail.com) from `coach` → `admin` via direct DB update. Recorded in `test_credentials.md`.
+
+**Verified**: pytest **151/151 passing** (143 → +8). Live screenshot confirmed full flow: Finish click → "Generating recap…" spinner → AI recap renders within ~5s → match locked. Lint clean.
+
 ### Platform avg Processing-Time Chip + Tap-to-Add-Goal (Apr 30, 2026 — iter18)
 
 **Platform avg Processing-Time Chip (Coach Network)**

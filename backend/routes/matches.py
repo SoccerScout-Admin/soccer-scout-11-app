@@ -22,6 +22,7 @@ class Match(BaseModel):
     video_id: Optional[str] = None
     has_manual_result: bool = False
     manual_result: Optional[dict] = None
+    insights: Optional[dict] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -172,6 +173,175 @@ async def get_manual_result(
     if match is None:
         raise HTTPException(status_code=404, detail="Match not found")
     return match.get("manual_result") or {}
+
+
+# ===== Finish Match — locks scoreline + auto-generates AI recap =====
+
+
+class FinishMatchResponse(BaseModel):
+    status: str = "finished"
+    summary: str
+    is_locked: bool = True
+    finished_at: str
+
+
+def _build_match_recap_prompt(match: dict) -> str:
+    """Compact, fact-rich prompt the LLM can turn into a 1-paragraph narrative."""
+    mr = match.get("manual_result") or {}
+    home, away = match.get("team_home", "Home"), match.get("team_away", "Away")
+    hs, as_ = mr.get("home_score", 0), mr.get("away_score", 0)
+    outcome = mr.get("outcome") or ("W" if hs > as_ else "L" if hs < as_ else "D")
+    competition = match.get("competition") or "Friendly"
+    notes = (mr.get("notes") or "").strip()
+    events = mr.get("events") or []
+
+    event_lines = []
+    for e in events:
+        minute = e.get("minute") or 0
+        team = e.get("team") or "—"
+        kind = (e.get("type") or "event").title()
+        desc = (e.get("description") or "").strip()
+        line = f"  • {minute}' — {team}: {kind}"
+        if desc:
+            line += f" ({desc})"
+        event_lines.append(line)
+
+    return (
+        f"Match: {home} vs {away}\n"
+        f"Final score: {hs}-{as_} ({outcome} for {home})\n"
+        f"Competition: {competition}\n"
+        f"Date: {match.get('date', 'unknown')}\n"
+        f"Events ({len(events)}):\n" + ("\n".join(event_lines) if event_lines else "  (none recorded)")
+        + (f"\nCoach's notes:\n{notes}" if notes else "")
+    )
+
+
+async def _generate_match_recap(match: dict) -> Optional[str]:
+    """Run a 1-paragraph recap through Gemini via Emergent LLM key.
+    Returns None if the LLM isn't configured or generation fails — the caller
+    falls back to a deterministic plain-English summary so Finish Match still works."""
+    import os
+    import logging
+    logger = logging.getLogger(__name__)
+    key = os.environ.get("EMERGENT_LLM_KEY")
+    if not key:
+        return None
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(
+            api_key=key,
+            session_id=f"finish-match-{match['id']}",
+            system_message=(
+                "You are a sports broadcaster writing a single-paragraph match recap "
+                "(80–120 words) for a youth/amateur soccer coach. "
+                "Lead with the result, integrate goal scorers and key moments in chronological order, "
+                "end with one tactical takeaway the coach can use in their next session. "
+                "Plain text only — no markdown, no headers, no lists, no quotes."
+            ),
+        ).with_model("gemini", "gemini-2.5-flash")
+        msg = UserMessage(text=_build_match_recap_prompt(match))
+        text = (await chat.send_message(msg)).strip()
+        # Strip any accidental code-fences or quotes
+        import re
+        text = re.sub(r"^```(?:text)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
+        text = text.strip("\"'\u201c\u201d\u2018\u2019").strip()
+        return text or None
+    except Exception as e:
+        logger.warning("[finish-match] Gemini recap failed: %s — using deterministic fallback", str(e)[:160])
+        return None
+
+
+def _deterministic_recap(match: dict) -> str:
+    """Plain-English fallback when LLM isn't available or fails."""
+    mr = match.get("manual_result") or {}
+    home, away = match.get("team_home", "Home"), match.get("team_away", "Away")
+    hs, as_ = mr.get("home_score", 0), mr.get("away_score", 0)
+    outcome = mr.get("outcome") or ("W" if hs > as_ else "L" if hs < as_ else "D")
+    competition = match.get("competition") or "Friendly"
+    events = mr.get("events") or []
+    goals = [e for e in events if (e.get("type") or "").lower() == "goal"]
+
+    if outcome == "W":
+        verb = "took the win"
+    elif outcome == "L":
+        verb = "fell"
+    else:
+        verb = "drew"
+
+    intro = f"{home} {verb} {hs}-{as_} against {away} in {competition}."
+    if goals:
+        goal_summary = ", ".join(
+            f"{g.get('minute', '?')}' {g.get('team', '—')}" for g in goals[:6]
+        )
+        intro += f" Goal timeline: {goal_summary}."
+    if mr.get("notes"):
+        intro += f" Coach's note: {mr['notes'][:160]}"
+    return intro
+
+
+@router.post("/matches/{match_id}/finish", response_model=FinishMatchResponse)
+async def finish_match(
+    match_id: str, current_user: dict = Depends(get_current_user),
+):
+    """Lock the scoreline + events and auto-generate a 1-paragraph AI recap.
+
+    Preconditions:
+      - Match must have a `manual_result` (i.e. POST /manual-result first).
+      - Cannot be called twice (manual_result.is_final blocks it).
+
+    Side effects:
+      - Sets manual_result.is_final = True and finished_at = now.
+      - Generates a recap via Gemini and stores it in match.insights.summary
+        (matching the spoken_summary contract so existing UI surfaces it).
+      - Falls back to a deterministic plain-English recap if Gemini is unavailable.
+    """
+    match = await db.matches.find_one(
+        {"id": match_id, "user_id": current_user["id"]}, {"_id": 0},
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    mr = match.get("manual_result") or {}
+    if not mr:
+        raise HTTPException(status_code=400, detail="Add a manual result first (score + events) before finishing")
+    if mr.get("is_final"):
+        raise HTTPException(status_code=409, detail="Match already finished — unlock from the form to edit")
+
+    summary = await _generate_match_recap(match)
+    summary_source = "ai_recap"
+    if not summary:
+        summary = _deterministic_recap(match)
+        summary_source = "deterministic_recap"
+
+    finished_at = datetime.now(timezone.utc).isoformat()
+    mr["is_final"] = True
+    mr["finished_at"] = finished_at
+
+    insights = match.get("insights") or {}
+    insights["summary"] = summary
+    insights["summary_source"] = summary_source
+    insights["summary_generated_at"] = finished_at
+
+    await db.matches.update_one(
+        {"id": match_id},
+        {"$set": {"manual_result": mr, "has_manual_result": True, "insights": insights}},
+    )
+    return FinishMatchResponse(
+        status="finished", summary=summary, is_locked=True, finished_at=finished_at
+    )
+
+
+@router.post("/matches/{match_id}/unlock")
+async def unlock_match(
+    match_id: str, current_user: dict = Depends(get_current_user),
+):
+    """Clear is_final so the coach can edit again. Keeps the AI recap."""
+    res = await db.matches.update_one(
+        {"id": match_id, "user_id": current_user["id"]},
+        {"$unset": {"manual_result.is_final": "", "manual_result.finished_at": ""}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Match not found")
+    return {"status": "unlocked"}
 
 
 # ===== Bulk match operations =====
