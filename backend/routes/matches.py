@@ -83,6 +83,46 @@ async def update_match(
     return {"status": "updated"}
 
 
+@router.delete("/matches/{match_id}")
+async def delete_match(
+    match_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Delete a single match and cascade-delete its derived data.
+
+    Same semantics as bulk-delete: hard-delete clips/analyses/markers for the
+    match's video, soft-delete the video so the 24h restore window applies,
+    then remove the match document itself.
+    """
+    match = await db.matches.find_one(
+        {"id": match_id, "user_id": current_user["id"]},
+        {"_id": 0, "id": 1, "video_id": 1},
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    video_id = match.get("video_id")
+    if video_id:
+        await db.clips.delete_many(
+            {"video_id": video_id, "user_id": current_user["id"]}
+        )
+        await db.analyses.delete_many(
+            {"video_id": video_id, "user_id": current_user["id"]}
+        )
+        await db.markers.delete_many(
+            {"video_id": video_id, "user_id": current_user["id"]}
+        )
+        await db.videos.update_one(
+            {"id": video_id, "user_id": current_user["id"]},
+            {"$set": {
+                "is_deleted": True,
+                "deleted_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+
+    await db.matches.delete_one({"id": match_id})
+    return {"status": "deleted", "id": match_id}
+
+
 @router.get("/matches/{match_id}/deleted-videos")
 async def list_deleted_videos(
     match_id: str, current_user: dict = Depends(get_current_user)

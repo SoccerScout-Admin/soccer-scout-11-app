@@ -1,4 +1,4 @@
-import { CalendarBlank, Trophy, VideoCamera, UploadSimple } from '@phosphor-icons/react';
+import { CalendarBlank, Trophy, VideoCamera, UploadSimple, Trash } from '@phosphor-icons/react';
 
 const VideoStatus = ({ match }) => {
   const status = match.processing_status;
@@ -65,7 +65,7 @@ const ManualResultBadge = ({ match }) => {
   );
 };
 
-const MatchCard = ({ match, folders, selectionMode, isSelected, onNavigate, onToggleSelect, onMoveMatch }) => (
+const MatchCard = ({ match, folders, selectionMode, isSelected, onNavigate, onToggleSelect, onMoveMatch, onDeleteMatch }) => (
   <div data-testid={`match-card-${match.id}`}
     className={`bg-[#141414] border p-6 hover:bg-[#1F1F1F] transition-colors cursor-pointer group relative ${
       selectionMode && isSelected ? 'border-[#FBBF24]' : 'border-white/10'
@@ -83,16 +83,24 @@ const MatchCard = ({ match, folders, selectionMode, isSelected, onNavigate, onTo
         )}
       </div>
     )}
-    {!selectionMode && folders.length > 0 && (
-      <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity"
+    {!selectionMode && (
+      <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2"
         onClick={(e) => e.stopPropagation()}>
-        <select data-testid={`move-match-${match.id}-select`}
-          value={match.folder_id || ''}
-          onChange={(e) => onMoveMatch(match.id, e.target.value || null)}
-          className="bg-[#0A0A0A] border border-white/10 text-[10px] text-[#A3A3A3] px-2 py-1 focus:outline-none focus:border-[#007AFF]">
-          <option value="">No folder</option>
-          {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-        </select>
+        {folders.length > 0 && (
+          <select data-testid={`move-match-${match.id}-select`}
+            value={match.folder_id || ''}
+            onChange={(e) => onMoveMatch(match.id, e.target.value || null)}
+            className="bg-[#0A0A0A] border border-white/10 text-[10px] text-[#A3A3A3] px-2 py-1 focus:outline-none focus:border-[#007AFF]">
+            <option value="">No folder</option>
+            {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+          </select>
+        )}
+        <button data-testid={`delete-match-${match.id}-btn`}
+          onClick={(e) => { e.stopPropagation(); onDeleteMatch(match); }}
+          aria-label={`Delete ${match.team_home} vs ${match.team_away}`}
+          className="w-7 h-7 flex items-center justify-center border border-white/10 bg-[#0A0A0A] text-[#A3A3A3] hover:text-[#EF4444] hover:border-[#EF4444]/40 transition-colors">
+          <Trash size={14} weight="bold" />
+        </button>
       </div>
     )}
     <div className="flex items-center gap-2 mb-4">

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, Spinner } from '@phosphor-icons/react';
+import { ArrowLeft, Spinner, Trash } from '@phosphor-icons/react';
 import ManualResultForm from './components/ManualResultForm';
 import UploadPanel from './components/UploadPanel';
 import DeletedVideosDrawer from './components/DeletedVideosDrawer';
@@ -306,14 +306,33 @@ const MatchDetail = () => {
         )}
 
         <div className="bg-[#141414] border border-white/10 p-8 mb-6">
-          <div className="flex items-center justify-between mb-6">
-            <div>
+          <div className="flex items-start justify-between mb-6 gap-4">
+            <div className="min-w-0">
               <p className="text-xs text-[#A3A3A3] uppercase tracking-wider mb-2">{match.competition || 'Friendly'}</p>
               <h2 className="text-5xl font-bold mb-2" style={{ fontFamily: 'Bebas Neue' }}>
                 {match.team_home} vs {match.team_away}
               </h2>
               <p className="text-[#A3A3A3]">{new Date(match.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
             </div>
+            <button
+              data-testid="delete-match-detail-btn"
+              onClick={async () => {
+                const confirmMsg = `Delete match "${match.team_home} vs ${match.team_away}"? `
+                  + (match.video_id
+                    ? 'The video enters the 24h restore window. Clips and AI analyses are removed permanently.'
+                    : 'This cannot be undone.');
+                if (!window.confirm(confirmMsg)) return;
+                try {
+                  await axios.delete(`${API}/matches/${matchId}`, { headers: getAuthHeader() });
+                  navigate('/');
+                } catch (err) {
+                  alert('Failed to delete match: ' + (err.response?.data?.detail || err.message));
+                }
+              }}
+              className="flex-shrink-0 flex items-center gap-2 border border-[#EF4444]/30 text-[#EF4444] hover:bg-[#EF4444]/10 hover:border-[#EF4444] px-4 py-2 text-xs font-bold tracking-wider uppercase transition-colors"
+              aria-label="Delete this match">
+              <Trash size={14} weight="bold" /> Delete Match
+            </button>
           </div>
 
           <UploadPanel match={match} matchId={matchId} videoMeta={videoMeta}

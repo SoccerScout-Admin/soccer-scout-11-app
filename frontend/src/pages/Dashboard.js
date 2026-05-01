@@ -154,6 +154,20 @@ const Dashboard = () => {
     } catch (err) { console.error('Failed to move match:', err); }
   };
 
+  const handleDeleteMatch = async (match) => {
+    const confirmMsg = `Delete match "${match.team_home} vs ${match.team_away}"? `
+      + (match.video_id
+        ? 'The video enters the 24h restore window. Clips and AI analyses are removed permanently.'
+        : 'This cannot be undone.');
+    if (!window.confirm(confirmMsg)) return;
+    try {
+      await axios.delete(`${API}/matches/${match.id}`, { headers: getAuthHeader() });
+      setMatches(prev => prev.filter(m => m.id !== match.id));
+    } catch (err) {
+      alert('Failed to delete match: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
   const handleToggleShare = async (folder) => {
     if (folder.share_token) {
       setSharingFolder(folder);
@@ -353,7 +367,8 @@ const Dashboard = () => {
                   isSelected={selectedMatchIds.includes(match.id)}
                   onNavigate={navigate}
                   onToggleSelect={toggleMatchSelection}
-                  onMoveMatch={handleMoveMatch} />
+                  onMoveMatch={handleMoveMatch}
+                  onDeleteMatch={handleDeleteMatch} />
               ))}
             </div>
           )}
