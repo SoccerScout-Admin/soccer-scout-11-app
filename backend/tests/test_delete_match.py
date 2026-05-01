@@ -16,13 +16,7 @@ import os
 import uuid
 import pytest
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://video-scout-11.preview.emergentagent.com').rstrip('/')
-
-
-def _run_async(coro):
-    # Lazy import — shared loop lives in conftest.py
-    from conftest import run_async  # type: ignore
-    return run_async(coro)
+from tests.conftest import BASE_URL, run_async as _run_async  # noqa: F401
 
 
 def _auth_as(email: str, password: str, api_client) -> dict:

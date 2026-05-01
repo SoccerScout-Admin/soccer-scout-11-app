@@ -2,6 +2,31 @@
 
 ## What's Been Implemented
 
+### Delete Matches + Password Reset + Admin Bootstrap (May 1, 2026 — iter23)
+
+**Delete individual matches** — user was stuck with duplicate match entries and had no UI to remove them individually (only bulk delete existed).
+- **Backend**: New `DELETE /api/matches/{id}` reusing the same cascade semantics as the existing bulk-delete — hard-deletes clips/analyses/markers, soft-deletes the video (24h restore window), then removes the match doc. 404 on unknown id, 401 without auth, 404 on cross-user attempt.
+- **Frontend**: Hover-reveal trash icon on every `MatchCard` (alongside the move-to-folder dropdown) with a context-aware confirm prompt. A prominent red "Delete Match" button on the `MatchDetail` header for when coaches are already inside a match.
+- 5 new pytest cases: `test_delete_match_requires_auth`, `test_delete_match_unknown_id_returns_404`, `test_delete_match_happy_path`, `test_delete_match_cross_user_rejected`, `test_delete_match_cascades_clips_analyses_markers`.
+
+**Forgot-password flow** — user forgot his deployed-env password.
+- **Backend** (`routes/password_reset.py`, 170 lines): `POST /api/auth/forgot-password` ALWAYS returns `{status:"sent"}` 200 regardless of whether the email exists (prevents account enumeration). When the email is registered, it generates a high-entropy token via `secrets.token_urlsafe(32)`, stores ONLY the sha256 hash in `password_reset_tokens` (plaintext goes in the email), 60-min TTL. `POST /api/auth/reset-password` validates the token via hash lookup, rejects replay (checks `used_at`), enforces password policy (min 8 chars + letter + digit), re-bcrypts the new password, marks token used. Email template is branded (Bebas Neue + blue accent) and dispatched through the existing `send_or_queue` helper so it benefits from Resend quota-deferred retries.
+- **Frontend**: "Forgot password?" link below the login password input; clicking opens a modal with an email input. After submit, the success state always shows "If an account exists for X, you'll receive a reset link" — never reveals registration status. New `/reset-password?token=...` SPA route with password-strength validation and a confirmation step.
+
+**Admin bootstrap** — separate escape hatch so user can self-promote to admin on a fresh environment without database access.
+- **Backend**: `POST /api/admin/bootstrap {secret}` (auth-required) — uses `hmac.compare_digest` against `ADMIN_BOOTSTRAP_SECRET` env var, constant-time. Logs all attempts at WARNING level for audit. Idempotent: second call on an already-admin account returns `{status:"already_admin"}` instead of erroring. Returns 503 if `ADMIN_BOOTSTRAP_SECRET` is unset on the server.
+- **Frontend**: New `/admin/claim` protected route with a single password-field input for the secret. Calls the bootstrap endpoint and refreshes the local user cache via `/auth/me` on success. Shows purple "Admin access granted" state with "Dashboard" + "Open Admin" navigation buttons.
+
+**Env additions**:
+- `ADMIN_BOOTSTRAP_SECRET` — 43-char URL-safe random token (gen via `secrets.token_urlsafe(32)`)
+- `PUBLIC_APP_URL` — used to construct the reset link inside the email
+
+**Tests added**: 14 new pytest cases (5 delete-match + 9 password-reset/bootstrap). Full suite: **176 passed, 35 skipped, 1 flake** (`test_admin_preview_403_for_non_admin`, passes in isolation — unrelated ordering issue).
+
+**Also fixed**: `test_voice_annotations.py::TestAuthAndValidation::test_empty_audio_returns_400` and `test_oversized_audio_returns_413` were failing due to stale `TESTCOACH_VIDEO_ID` seed data. Added a `live_video_id` fixture that skips gracefully when the seed video no longer exists — same pattern iter17 used for `test_video_routes.py`.
+
+**Live verification** (preview pod): Created throwaway user → `/api/auth/forgot-password` → extracted raw token from queued email → `/api/auth/reset-password` worked → old password fails 401 → new password works 200 → replay 400. Admin bootstrap as coach: 403 on bad secret → 200 promoted on good secret → `/auth/me` reports `role:admin` → second call returns `already_admin`. Frontend: `/admin/claim` form renders, `/reset-password?token=...` page loads; MatchCard trash icon + MatchDetail "Delete Match" button both functional in the screenshot.
+
 ### P2 Code-Quality Cleanup + Live E2E Verification (Apr 30, 2026 — iter22)
 
 **P2 perf/correctness fixes** (user asked for C):

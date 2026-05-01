@@ -67,6 +67,17 @@ def real_audio_bytes():
         return f.read()
 
 
+@pytest.fixture(scope="module")
+def live_video_id(coach_headers):
+    """Return TESTCOACH_VIDEO_ID if it still exists in the DB, else skip the
+    tests that depend on it. Prevents stale test data from breaking the suite
+    when the seed video is cleaned up."""
+    r = requests.get(f"{BASE_URL}/api/videos/{TESTCOACH_VIDEO_ID}/metadata", headers=coach_headers)
+    if r.status_code != 200:
+        pytest.skip(f"seed video {TESTCOACH_VIDEO_ID} no longer exists; validation tests depend on it")
+    return TESTCOACH_VIDEO_ID
+
+
 def _silent_wav(seconds=0.5, rate=16000) -> bytes:
     """Create a tiny but technically valid WAV (>1KB) of silence."""
     buf = io.BytesIO()
@@ -108,21 +119,21 @@ class TestAuthAndValidation:
         )
         assert r.status_code == 404, f"cross-user leak? got {r.status_code}: {r.text[:200]}"
 
-    def test_empty_audio_returns_400(self, coach_headers):
+    def test_empty_audio_returns_400(self, coach_headers, live_video_id):
         r = requests.post(
             f"{BASE_URL}/api/voice-annotations",
             headers=coach_headers,
-            data={"video_id": TESTCOACH_VIDEO_ID, "timestamp": "1.0"},
+            data={"video_id": live_video_id, "timestamp": "1.0"},
             files={"audio": ("v.wav", b"\x00" * 50, "audio/wav")},  # <1KB
         )
         assert r.status_code == 400, f"got {r.status_code}: {r.text[:200]}"
 
-    def test_oversized_audio_returns_413(self, coach_headers):
+    def test_oversized_audio_returns_413(self, coach_headers, live_video_id):
         big = b"\x00" * (25 * 1024 * 1024 + 100)  # >25MB
         r = requests.post(
             f"{BASE_URL}/api/voice-annotations",
             headers=coach_headers,
-            data={"video_id": TESTCOACH_VIDEO_ID, "timestamp": "1.0"},
+            data={"video_id": live_video_id, "timestamp": "1.0"},
             files={"audio": ("v.wav", big, "audio/wav")},
         )
         assert r.status_code == 413, f"got {r.status_code}: {r.text[:200]}"

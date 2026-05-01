@@ -3,6 +3,7 @@ import '@/App.css';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import axios from 'axios';
 import AuthPage from './pages/AuthPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
 import Dashboard from './pages/Dashboard';
 import MatchDetail from './pages/MatchDetail';
 import VideoAnalysis from './pages/VideoAnalysis';
@@ -22,6 +23,7 @@ import PlayerSeasonTrends from './pages/PlayerSeasonTrends';
 import CoachNetwork from './pages/CoachNetwork';
 import MentionsInbox from './pages/MentionsInbox';
 import AdminUsers from './pages/AdminUsers';
+import AdminClaim from './pages/AdminClaim';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -88,6 +90,7 @@ function App() {
         <PWAInstallPrompt />
         <Routes>
           <Route path="/auth" element={<AuthPage setIsAuthenticated={setIsAuthenticated} />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route
             path="/"
             element={
@@ -188,6 +191,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <AdminUsers />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/claim"
+            element={
+              <ProtectedRoute>
+                <AdminClaim />
               </ProtectedRoute>
             }
           />

@@ -7,6 +7,10 @@ import '../styles/logo-intro.css';
 
 const AuthPage = ({ setIsAuthenticated }) => {
   const [isLogin, setIsLogin] = useState(true);
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotSent, setForgotSent] = useState(false);
+  const [forgotBusy, setForgotBusy] = useState(false);
   // Show the intro animation only on the first time per session — returning
   // users skip it. Computed at mount so re-renders don't re-fire it.
   const showIntro = useMemo(() => {
@@ -50,6 +54,22 @@ const AuthPage = ({ setIsAuthenticated }) => {
       setError(err.response?.data?.detail || 'Authentication failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleForgot = async (e) => {
+    e.preventDefault();
+    if (!forgotEmail.trim()) return;
+    setForgotBusy(true);
+    try {
+      await axios.post(`${API}/auth/forgot-password`, { email: forgotEmail.trim() });
+      setForgotSent(true);
+    } catch (err) {
+      // The backend intentionally returns 200 regardless to prevent
+      // enumeration, so errors here would be network-level only.
+      setForgotSent(true);
+    } finally {
+      setForgotBusy(false);
     }
   };
 
@@ -132,6 +152,13 @@ const AuthPage = ({ setIsAuthenticated }) => {
                   required
                 />
               </div>
+              {isLogin && (
+                <button type="button" data-testid="forgot-password-link"
+                  onClick={() => { setShowForgot(true); setForgotSent(false); setForgotEmail(formData.email); }}
+                  className="mt-2 text-xs text-[#007AFF] hover:underline">
+                  Forgot password?
+                </button>
+              )}
             </div>
 
             {!isLogin && (
@@ -167,6 +194,46 @@ const AuthPage = ({ setIsAuthenticated }) => {
           </form>
         </div>
       </div>
+
+      {showForgot && (
+        <div data-testid="forgot-password-modal"
+          className="fixed inset-0 z-50 bg-black/70 flex items-start justify-center overflow-y-auto"
+          onClick={() => setShowForgot(false)}>
+          <div className="bg-[#141414] border border-white/10 max-w-md w-full mx-auto my-8 p-8"
+            onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-2xl font-bold mb-3" style={{ fontFamily: 'Bebas Neue' }}>Forgot password</h3>
+            {forgotSent ? (
+              <div>
+                <p className="text-sm text-[#CFCFCF] mb-6">
+                  If an account exists for <span className="text-white font-semibold">{forgotEmail}</span>, you'll receive a reset link at that address shortly. It expires in 60 minutes.
+                </p>
+                <button data-testid="forgot-close-btn" onClick={() => setShowForgot(false)}
+                  className="w-full bg-[#007AFF] hover:bg-[#005bb5] text-white py-3 font-bold tracking-wider uppercase transition-colors">Close</button>
+              </div>
+            ) : (
+              <form onSubmit={handleForgot}>
+                <p className="text-sm text-[#A3A3A3] mb-4">Enter your email and we'll send you a secure reset link.</p>
+                <div className="relative mb-5">
+                  <Envelope size={20} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#A3A3A3]" />
+                  <input data-testid="forgot-email-input"
+                    type="email" value={forgotEmail}
+                    onChange={(e) => setForgotEmail(e.target.value)}
+                    className="w-full bg-[#0A0A0A] border border-white/10 text-white pl-12 pr-4 py-3 focus:border-[#007AFF] focus:outline-none"
+                    placeholder="you@example.com" required autoFocus />
+                </div>
+                <div className="flex gap-3">
+                  <button type="button" onClick={() => setShowForgot(false)}
+                    className="flex-1 border border-white/10 text-white py-3 font-bold tracking-wider uppercase hover:bg-[#1F1F1F] transition-colors">Cancel</button>
+                  <button data-testid="forgot-submit-btn" type="submit" disabled={forgotBusy}
+                    className="flex-1 bg-[#007AFF] hover:bg-[#005bb5] text-white py-3 font-bold tracking-wider uppercase transition-colors disabled:opacity-50">
+                    {forgotBusy ? 'Sending...' : 'Send Reset Link'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

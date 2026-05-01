@@ -3,8 +3,15 @@
 Only users with role `admin` or `owner` can access these endpoints. The single
 admin bootstrap flow (e.g. the first user being promoted via mongosh) remains
 unchanged; once there's one admin, they can promote others from the UI.
+
+`/admin/bootstrap` is an escape-hatch for fresh environments — it lets an
+authenticated user self-elevate to `admin` if they know the
+`ADMIN_BOOTSTRAP_SECRET` from the server's env. Constant-time compare, audit
+logged, no-op if the caller is already admin.
 """
+import hmac
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
@@ -26,6 +33,42 @@ def _require_admin(user: dict):
 
 class RoleUpdate(BaseModel):
     role: str
+
+
+class BootstrapRequest(BaseModel):
+    secret: str
+
+
+@router.post("/admin/bootstrap")
+async def bootstrap_admin(
+    body: BootstrapRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Self-promote the authenticated caller to `admin` if `secret` matches
+    the server's `ADMIN_BOOTSTRAP_SECRET` env var.
+
+    Designed for fresh environments where no admin exists yet. Silent no-op
+    if the caller is already admin/owner. Always logs the attempt (success or
+    failure) at WARNING level for audit trails.
+    """
+    expected = os.environ.get("ADMIN_BOOTSTRAP_SECRET", "")
+    if not expected:
+        logger.warning("[admin-bootstrap] rejected — ADMIN_BOOTSTRAP_SECRET is not configured")
+        raise HTTPException(status_code=503, detail="Admin bootstrap is not configured on this server.")
+
+    # Constant-time compare to prevent timing attacks on the secret.
+    if not hmac.compare_digest(body.secret.encode("utf-8"), expected.encode("utf-8")):
+        logger.warning("[admin-bootstrap] rejected for user=%s — bad secret", current_user.get("email"))
+        raise HTTPException(status_code=403, detail="Invalid bootstrap secret.")
+
+    current_role = (current_user.get("role") or "").lower()
+    if current_role in ("admin", "owner"):
+        logger.info("[admin-bootstrap] no-op for user=%s (already %s)", current_user.get("email"), current_role)
+        return {"status": "already_admin", "role": current_role}
+
+    await db.users.update_one({"id": current_user["id"]}, {"$set": {"role": "admin"}})
+    logger.warning("[admin-bootstrap] GRANTED admin to user=%s (id=%s)", current_user.get("email"), current_user.get("id"))
+    return {"status": "promoted", "role": "admin"}
 
 
 @router.get("/admin/users")
