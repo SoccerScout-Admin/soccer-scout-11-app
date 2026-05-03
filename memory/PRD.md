@@ -2,6 +2,35 @@
 
 ## What's Been Implemented
 
+### Scout Board — Public Recruiting Listings (Phase 1) (May 3, 2026 — iter24)
+
+**Scouts and college coaches can post projected recruiting needs; coaches and players browse them.**
+
+**New role**: `scout` (and `college_coach`) added to `VALID_ROLES`. Exposed on the register form as "Scout / College Coach". Scouts have full access to platform but can additionally create listings.
+
+**Backend** (`routes/scout_listings.py`, ~330 lines):
+- `POST /api/scout-listings` (auth + role gate) — creates a listing with `verified=false`. Validates controlled lists (positions: GK/CB/FB/CM/DM/AM/LW/RW/ST; levels: NCAA D1/D2/D3, NAIA, JUCO, Pro Academy, MLS Next, ECNL, Other; grad_years within current year ± 8).
+- `GET /api/scout-listings` (public) — filters: `positions`, `grad_years`, `level`, `region` (substring), `q` (search school_name or description), `verified_only` (default true). Returns cards WITHOUT contact_email or website_url — those fields are only on the detail endpoint for registered users.
+- `GET /api/scout-listings/{id}` (public, best-effort auth) — full listing; contact fields redacted for anonymous viewers with `_contact_gated: true` marker.
+- `GET /api/scout-listings/my` (auth) — owner's listings including unverified drafts.
+- `PATCH /api/scout-listings/{id}` (auth, owner) — any edit resets `verified=false` so admin re-approves.
+- `DELETE /api/scout-listings/{id}` (auth, owner) — hard delete.
+- `POST /api/scout-listings/{id}/logo` + `GET .../logo/view` — 5MB max school logo upload via Object Storage (reuses the players-profile-pic pattern).
+- Admin: `GET /api/admin/scout-listings?status=pending|verified|all` + `POST /admin/scout-listings/{id}/verify` + `.../unverify`.
+
+**Frontend**:
+- `/scouts` (public) — searchable feed with filter panel (position multi-select chips, level dropdown, grad year dropdown, region text, keyword search). Green "Verified ✓" badge on approved listings. Anonymous footer nudge: "Contact info is visible to registered coaches only → Log in".
+- `/scouts/:id` — full listing page with hero (logo + name + verified/pending chip), positions chips, grad-year chips, coach's notes prose block, requirements + timeline cards, and a gated "Get in Touch" section (website link + mailto) that shows "Log in or sign up →" for anon viewers.
+- `/scouts/new` + `/scouts/edit/:id` (auth) — full form with position chips, grad-year chips, logo upload with preview, controlled-list validation. Yellow callout explains admin review requirement.
+- `/admin/scouts` — 3-tab verification queue (Pending / Verified / All) with green "Verify" and yellow "Unverify" action buttons, inline listing preview.
+- Dashboard nav: new green "Scouts" button in the header (visible to everyone).
+
+**14 new pytest cases** (`test_scout_listings.py`): auth + role gate, full CRUD round-trip, patch resets verification, public feed hides unverified + redacts contact fields, detail contact-gating, all 5 filter axes (positive + negative matches), controlled-list validation (bad position / level / year), admin verify + unverify + pending queue + admin-gated endpoints. All passing.
+
+**Live E2E verified via curl**: create → list (empty by default, shows with `verified_only=false`) → admin verify → appears on public feed → detail endpoint redacts contact for anon viewer, shows full for authed user → positions/grad_years/search filters all match correctly → delete.
+
+**Phase 2 deferred** (per user request): "Express interest" button that emails scout + auto-attaches player dossier, in-app messaging threads between scout and coach, OG cards for scout listings. To be shipped next session after user tests phase 1.
+
 ### Delete Matches + Password Reset + Admin Bootstrap (May 1, 2026 — iter23)
 
 **Delete individual matches** — user was stuck with duplicate match entries and had no UI to remove them individually (only bulk delete existed).

@@ -22,7 +22,7 @@ from routes.auth import get_current_user
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-VALID_ROLES = {"coach", "analyst", "admin", "owner"}
+VALID_ROLES = {"coach", "analyst", "admin", "owner", "scout", "college_coach"}
 
 
 def _require_admin(user: dict):

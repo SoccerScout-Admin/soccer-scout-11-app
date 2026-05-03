@@ -173,6 +173,7 @@ const AuthPage = ({ setIsAuthenticated }) => {
                   <option value="coach">Coach</option>
                   <option value="analyst">Analyst</option>
                   <option value="player">Player</option>
+                  <option value="scout">Scout / College Coach</option>
                 </select>
               </div>
             )}

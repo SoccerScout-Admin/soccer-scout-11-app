@@ -24,6 +24,10 @@ import CoachNetwork from './pages/CoachNetwork';
 import MentionsInbox from './pages/MentionsInbox';
 import AdminUsers from './pages/AdminUsers';
 import AdminClaim from './pages/AdminClaim';
+import AdminScouts from './pages/AdminScouts';
+import ScoutBrowse from './pages/ScoutBrowse';
+import ScoutListingDetail from './pages/ScoutListingDetail';
+import ScoutListingForm from './pages/ScoutListingForm';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -202,6 +206,32 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route
+            path="/admin/scouts"
+            element={
+              <ProtectedRoute>
+                <AdminScouts />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="/scouts" element={<ScoutBrowse />} />
+          <Route
+            path="/scouts/new"
+            element={
+              <ProtectedRoute>
+                <ScoutListingForm />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/scouts/edit/:listingId"
+            element={
+              <ProtectedRoute>
+                <ScoutListingForm />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="/scouts/:listingId" element={<ScoutListingDetail />} />
         </Routes>
       </BrowserRouter>
     </div>

@@ -1,4 +1,4 @@
-import { SignOut, Shield, Globe, At } from '@phosphor-icons/react';
+import { SignOut, Shield, Globe, At, Buildings } from '@phosphor-icons/react';
 
 const NavButton = ({ onClick, testId, mobileTestId, ariaLabel, Icon, colorClass, borderClass, label, badge }) => (
   <>
@@ -34,6 +34,9 @@ const DashboardHeader = ({ user, unreadMentions, onNavigate, onLogout }) => {
             className="h-7 sm:h-9 w-auto flex-shrink-0" />
         </div>
         <div className="flex items-center gap-2 sm:gap-6 flex-shrink-0">
+          <NavButton onClick={() => onNavigate('/scouts')}
+            testId="scouts-nav-btn" mobileTestId="scouts-nav-btn-mobile" ariaLabel="Scout Board"
+            Icon={Buildings} colorClass="text-[#10B981]" borderClass="border-[#10B981]/30" label="Scouts" />
           <NavButton onClick={() => onNavigate('/clubs')}
             testId="clubs-nav-btn" mobileTestId="clubs-nav-btn-mobile" ariaLabel="Clubs & Teams"
             Icon={Shield} colorClass="text-[#A3A3A3]" borderClass="border-white/10" label="Clubs & Teams" />
