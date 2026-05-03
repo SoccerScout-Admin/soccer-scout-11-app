@@ -2,6 +2,34 @@
 
 ## What's Been Implemented
 
+### Scout Stickiness — View Tracking + Weekly Digest (May 3, 2026 — iter25)
+
+**Goal**: keep scouts coming back to Soccer Scout 11 by giving them measurable signal that their listings are working.
+
+**Backend** (`services/scout_digest.py`, ~210 lines):
+- New collection `scout_listing_views` with `(listing_id, viewer_key, event, viewed_at)`. `viewer_key` is `u:<user_id>` for authed viewers and `a:<sha256(ip|ua)[:16]>` for anonymous, with a 24h dedup window per (listing, viewer_key, event).
+- `record_view(listing_id, viewer_user_id?, anon_fingerprint?, event="view"|"contact_click")` — best-effort upsert with dedup.
+- `listing_insights(listing_id)` — returns `{views_total, views_7d, views_30d, unique_coaches_7d, contact_clicks_7d}` via aggregation.
+- `send_weekly_digest(triggered_by)` — for each scout-role user, builds a per-listing rollup email and dispatches via `send_or_queue`. Smart skip: scouts with zero recent views AND no listings are silenced when triggered by the cron (avoids low-value emails).
+- New routes (`routes/scout_listings.py`):
+  - `GET /api/scout-listings/{id}` — now records a view (skips owner self-views).
+  - `POST /api/scout-listings/{id}/contact-click` — pinged from frontend when website link or mailto is clicked.
+  - `GET /api/scout-listings/{id}/insights` — owner-only, 404 for everyone else.
+  - `GET /api/scout-listings/my` — now embeds `insights{}` per listing.
+  - `POST /api/admin/scout-listings/send-weekly-digest` — admin-only manual trigger.
+- New cron job: **`scout_digest_weekly`** — APScheduler CronTrigger Mon 09:00 UTC (1h after coach pulse).
+
+**Frontend**:
+- `/scouts/my` — new "My Listings" page with per-listing 3-stat tile (Views 7d / Unique coaches / Contact clicks), green/yellow verification chip, edit + view buttons, info card explaining the Monday digest.
+- `/scouts` header now shows a "My Listings" button (next to "+ Post Listing") for scout/admin users.
+- Listing detail page now pings `/contact-click` whenever the website link or contact email is clicked.
+
+**Email design**: branded HTML email with Bebas Neue header, scout name greeting, per-listing rows showing 7d views / unique coaches / contact clicks in big green/blue/yellow numerals, verified or pending chip, "Open Scout Board" CTA. Empty-state copy nudges first-time posters.
+
+**9 new pytest tests** (`test_scout_digest.py`): dedup logic via direct service-layer calls (HTTP transport mutates X-Forwarded-For at the K8s ingress so headers-based fingerprint tests are fragile — service-layer is the truth), owner-self-views-not-counted, authed-non-owner-counts-unique, insights-owner-only-404-for-others, contact-click increments + dedupes + 404s for unknown listing, my-listings embeds insights, digest-endpoint admin-only, digest queues an email with school name + view-count headers + CTA link. All passing. Total scout suite: **23/23 green**.
+
+**Live E2E verified via curl + screenshot**: created listing → 5 distinct anon+authed views with proper dedup → owner self-views did NOT inflate count → contact-click recorded → admin-triggered digest sent emails to all 3 scouts in db with full HTML body → `/scouts/my` UI renders 3-stat tiles → `/scouts` header shows "My Listings" + "+ Post Listing" buttons.
+
 ### Scout Board — Public Recruiting Listings (Phase 1) (May 3, 2026 — iter24)
 
 **Scouts and college coaches can post projected recruiting needs; coaches and players browse them.**

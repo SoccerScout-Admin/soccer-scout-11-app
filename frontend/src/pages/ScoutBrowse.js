@@ -66,10 +66,16 @@ const ScoutBrowse = () => {
             </div>
           </div>
           {isScout && (
-            <button data-testid="new-listing-btn" onClick={() => navigate('/scouts/new')}
-              className="flex items-center gap-2 bg-[#10B981] hover:bg-[#0EA975] text-white px-4 py-2 text-xs font-bold tracking-wider uppercase transition-colors flex-shrink-0">
-              <Plus size={16} weight="bold" /> Post Listing
-            </button>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button data-testid="my-listings-btn" onClick={() => navigate('/scouts/my')}
+                className="text-xs font-bold tracking-wider uppercase border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] px-3 py-2 transition-colors hidden sm:inline-block">
+                My Listings
+              </button>
+              <button data-testid="new-listing-btn" onClick={() => navigate('/scouts/new')}
+                className="flex items-center gap-2 bg-[#10B981] hover:bg-[#0EA975] text-white px-4 py-2 text-xs font-bold tracking-wider uppercase transition-colors">
+                <Plus size={16} weight="bold" /> Post Listing
+              </button>
+            </div>
           )}
         </div>
       </header>

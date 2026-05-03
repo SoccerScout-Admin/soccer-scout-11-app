@@ -1891,6 +1891,14 @@ def start_coach_pulse_scheduler():
             except Exception as e:
                 logger.error("[apscheduler] email queue retry crashed: %s", e)
 
+        async def _scout_digest_job():
+            try:
+                from services.scout_digest import send_weekly_digest
+                result = await send_weekly_digest(triggered_by="apscheduler")
+                logger.info("[apscheduler] scout weekly digest: %s", result)
+            except Exception as e:
+                logger.error("[apscheduler] scout weekly digest crashed: %s", e)
+
         _scheduler = AsyncIOScheduler(timezone="UTC")
         _scheduler.add_job(
             _weekly_job,
@@ -1906,9 +1914,16 @@ def start_coach_pulse_scheduler():
             replace_existing=True,
             misfire_grace_time=600,
         )
+        _scheduler.add_job(
+            _scout_digest_job,
+            CronTrigger(day_of_week="mon", hour=9, minute=0, timezone="UTC"),
+            id="scout_digest_weekly",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
         _scheduler.start()
         logger.info(
-            "[apscheduler] scheduler started — coach_pulse_weekly (Mon 08:00 UTC) + email_queue_retry (every 30 min)"
+            "[apscheduler] scheduler started — coach_pulse_weekly (Mon 08:00 UTC) + email_queue_retry (every 30 min) + scout_digest_weekly (Mon 09:00 UTC)"
         )
     except Exception as e:
         logger.error("[apscheduler] failed to start scheduler: %s", e)

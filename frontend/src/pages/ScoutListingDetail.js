@@ -186,6 +186,7 @@ const ScoutListingDetail = () => {
             <div data-testid="contact-visible" className="space-y-3">
               {listing.website_url && (
                 <a href={listing.website_url} target="_blank" rel="noopener noreferrer"
+                  onClick={() => { axios.post(`${API}/scout-listings/${listingId}/contact-click`, {}, { headers: getAuthHeader() }).catch(() => {}); }}
                   className="flex items-center gap-3 text-[#007AFF] hover:text-white transition-colors">
                   <Globe size={20} />
                   <span className="text-sm font-medium break-all">{listing.website_url}</span>
@@ -193,6 +194,7 @@ const ScoutListingDetail = () => {
               )}
               {listing.contact_email && (
                 <a href={`mailto:${listing.contact_email}?subject=Interest%20in%20${encodeURIComponent(listing.school_name)}`}
+                  onClick={() => { axios.post(`${API}/scout-listings/${listingId}/contact-click`, {}, { headers: getAuthHeader() }).catch(() => {}); }}
                   className="flex items-center gap-3 text-[#10B981] hover:text-white transition-colors">
                   <Envelope size={20} />
                   <span className="text-sm font-medium">{listing.contact_email}</span>

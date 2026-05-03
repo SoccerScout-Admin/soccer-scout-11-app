@@ -28,6 +28,7 @@ import AdminScouts from './pages/AdminScouts';
 import ScoutBrowse from './pages/ScoutBrowse';
 import ScoutListingDetail from './pages/ScoutListingDetail';
 import ScoutListingForm from './pages/ScoutListingForm';
+import ScoutMyListings from './pages/ScoutMyListings';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -215,6 +216,14 @@ function App() {
             }
           />
           <Route path="/scouts" element={<ScoutBrowse />} />
+          <Route
+            path="/scouts/my"
+            element={
+              <ProtectedRoute>
+                <ScoutMyListings />
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="/scouts/new"
             element={

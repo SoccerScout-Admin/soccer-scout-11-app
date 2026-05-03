@@ -31,6 +31,9 @@ from starlette.concurrency import run_in_threadpool
 
 from db import APP_NAME, db
 from routes.auth import get_current_user
+from services.scout_digest import (
+    listing_insights, my_listings_with_insights, record_view, send_weekly_digest,
+)
 from services.storage import get_object_sync, put_object_sync
 
 router = APIRouter()
@@ -207,11 +210,8 @@ async def list_scout_listings(
 
 @router.get("/scout-listings/my")
 async def my_scout_listings(current_user: dict = Depends(get_current_user)):
-    """Listings owned by the current user, including unverified drafts."""
-    listings = await db.scout_listings.find(
-        {"user_id": current_user["id"]}, {"_id": 0}
-    ).sort("created_at", -1).to_list(100)
-    return listings
+    """Listings owned by the current user, with view + click insights."""
+    return await my_listings_with_insights(current_user["id"])
 
 
 # ---------- DETAIL (public, contact redacted for anon) ----------
@@ -235,15 +235,59 @@ async def _optional_user(authorization: Optional[str]) -> Optional[dict]:
 async def get_scout_listing(
     listing_id: str,
     authorization: Optional[str] = Header(default=None),
+    user_agent: Optional[str] = Header(default=None),
+    x_forwarded_for: Optional[str] = Header(default=None),
 ):
     listing = await db.scout_listings.find_one({"id": listing_id}, {"_id": 0, "school_logo_path": 0})
     if not listing:
         raise HTTPException(status_code=404, detail="Listing not found")
 
     viewer = await _optional_user(authorization)
+    viewer_id = viewer["id"] if viewer else None
+    # Only the owner viewing their own listing should NOT count as a view.
+    if not viewer or viewer_id != listing.get("user_id"):
+        anon_fingerprint = None
+        if not viewer_id:
+            anon_fingerprint = f"{x_forwarded_for or 'noip'}|{user_agent or 'noua'}"
+        try:
+            await record_view(listing_id, viewer_user_id=viewer_id, anon_fingerprint=anon_fingerprint)
+        except Exception:
+            # View tracking is best-effort — never block a listing fetch on it
+            pass
+
     if not viewer:
         return _redact_contact(listing)
     return listing
+
+
+@router.post("/scout-listings/{listing_id}/contact-click")
+async def record_contact_click(
+    listing_id: str,
+    authorization: Optional[str] = Header(default=None),
+    user_agent: Optional[str] = Header(default=None),
+    x_forwarded_for: Optional[str] = Header(default=None),
+):
+    """Frontend pings this when a viewer clicks the website link or contact email."""
+    if not await db.scout_listings.find_one({"id": listing_id}, {"_id": 0, "id": 1}):
+        raise HTTPException(status_code=404, detail="Listing not found")
+    viewer = await _optional_user(authorization)
+    viewer_id = viewer["id"] if viewer else None
+    anon_fp = None if viewer_id else f"{x_forwarded_for or 'noip'}|{user_agent or 'noua'}"
+    await record_view(listing_id, viewer_user_id=viewer_id, anon_fingerprint=anon_fp, event="contact_click")
+    return {"status": "ok"}
+
+
+@router.get("/scout-listings/{listing_id}/insights")
+async def get_listing_insights(
+    listing_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Owner-only insights — view + click counts across rolling windows."""
+    listing = await db.scout_listings.find_one(
+        {"id": listing_id, "user_id": current_user["id"]}, {"_id": 0, "id": 1}
+    )
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    return await listing_insights(listing_id)
 
 
 # ---------- UPDATE ----------
@@ -395,3 +439,10 @@ async def admin_unverify_scout_listing(
         {"$set": {"verified": False, "verified_at": None, "verified_by": None}},
     )
     return {"status": "unverified"}
+
+
+@router.post("/admin/scout-listings/send-weekly-digest")
+async def admin_send_scout_digest(current_user: dict = Depends(get_current_user)):
+    """Admin-only: manually trigger the weekly scout digest for testing."""
+    _require_admin(current_user)
+    return await send_weekly_digest(triggered_by="manual")
