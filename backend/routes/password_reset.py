@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 
 from db import db
@@ -40,8 +40,27 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _public_app_url() -> str:
-    """Frontend base URL used in the reset link."""
+def _public_app_url(request: Optional[Request] = None) -> str:
+    """Frontend base URL used in the reset link.
+
+    Resolution order:
+    1. The actual host the request came in on (X-Forwarded-Host or request.url) —
+       this is the source of truth: whichever domain the user used to request
+       a reset is the domain the email link should point to. Works automatically
+       across preview, production, and any custom domain.
+    2. `PUBLIC_APP_URL` env var as a manual override.
+    3. Empty string fallback (link becomes a relative path).
+    """
+    if request is not None:
+        forwarded_host = request.headers.get("x-forwarded-host")
+        forwarded_proto = request.headers.get("x-forwarded-proto", "https")
+        if forwarded_host:
+            return f"{forwarded_proto}://{forwarded_host}".rstrip("/")
+        # request.url already reflects the public URL when behind a trust proxy
+        host = request.url.netloc
+        if host:
+            scheme = request.url.scheme or "https"
+            return f"{scheme}://{host}".rstrip("/")
     return os.environ.get("PUBLIC_APP_URL", "").rstrip("/")
 
 
@@ -88,7 +107,7 @@ class ResetPasswordRequest(BaseModel):
 
 
 @router.post("/auth/forgot-password")
-async def forgot_password(body: ForgotPasswordRequest):
+async def forgot_password(body: ForgotPasswordRequest, request: Request):
     """Always returns a generic 200 response — even when the email is unknown —
     to prevent account enumeration. Internally, if the email is registered,
     we create a single-use token and email the reset link.
@@ -113,7 +132,7 @@ async def forgot_password(body: ForgotPasswordRequest):
             "used_at": None,
         })
 
-        base = _public_app_url()
+        base = _public_app_url(request)
         reset_url = f"{base}/reset-password?token={raw_token}" if base else f"/reset-password?token={raw_token}"
         try:
             await send_or_queue(
