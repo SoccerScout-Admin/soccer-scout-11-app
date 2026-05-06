@@ -32,6 +32,7 @@ const Dashboard = () => {
   const [selectedMatchIds, setSelectedMatchIds] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [unreadMentions, setUnreadMentions] = useState(0);
+  const [unreadMessages, setUnreadMessages] = useState(0);
   const navigate = useNavigate();
   const user = getCurrentUser();
 
@@ -58,6 +59,9 @@ const Dashboard = () => {
     let cancelled = false;
     axios.get(`${API}/coach-network/mentions`, { headers: getAuthHeader() })
       .then((res) => { if (!cancelled) setUnreadMentions((res.data || []).filter((m) => !m.read_at).length); })
+      .catch(() => { /* silent */ });
+    axios.get(`${API}/messages/unread-count`, { headers: getAuthHeader() })
+      .then((res) => { if (!cancelled) setUnreadMessages(res.data?.unread || 0); })
       .catch(() => { /* silent */ });
     return () => { cancelled = true; };
   }, []);
@@ -285,7 +289,7 @@ const Dashboard = () => {
 
   return (
     <div className="min-h-screen bg-[#0A0A0A]">
-      <DashboardHeader user={user} unreadMentions={unreadMentions}
+      <DashboardHeader user={user} unreadMentions={unreadMentions} unreadMessages={unreadMessages}
         onNavigate={navigate} onLogout={handleLogout} />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 flex flex-col lg:flex-row gap-4 lg:gap-6">

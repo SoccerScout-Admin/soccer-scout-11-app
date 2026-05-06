@@ -144,6 +144,116 @@ def _paste_brand_lockup(img: Image.Image, position: str = "right") -> None:
         draw.ellipse((W - bw - 84, H - 50, W - bw - 72, H - 38), fill=ACCENT)
 
 
+def render_scout_listing_card(
+    school_name: str,
+    level: str = "",
+    region: str = "",
+    positions: Optional[List[str]] = None,
+    grad_years: Optional[List[int]] = None,
+    description: str = "",
+    school_logo_bytes: Optional[bytes] = None,
+    verified: bool = False,
+) -> bytes:
+    """Render OG card for a scout listing (1200x630 PNG).
+
+    Layout: dark gradient bg, school name big on left, optional logo on right,
+    sub-line for level + region + grad years, position chips, and a 2-line
+    description preview at the bottom. Verified listings get a small green
+    SealCheck icon next to the name.
+    """
+    img = Image.new("RGB", (W, H), BG_BOTTOM)
+    _gradient_bg(img)
+    draw = ImageDraw.Draw(img)
+
+    # Green accent bar (matches the scout-board aesthetic)
+    SCOUT_ACCENT = (16, 185, 129)
+    draw.rectangle([(0, 0), (8, H)], fill=SCOUT_ACCENT)
+
+    # Top label
+    label_font = _load_font(FONT_BOLD, 22)
+    label = "VERIFIED RECRUITING LISTING" if verified else "RECRUITING LISTING"
+    draw.text((64, 56), label, font=label_font, fill=SCOUT_ACCENT)
+
+    # School logo on right
+    crest_box = 220
+    crest_x = W - crest_box - 64
+    crest_y = (H - crest_box) // 2 - 30
+    if school_logo_bytes:
+        crest = _fit_image(school_logo_bytes, crest_box)
+        if crest:
+            backing = Image.new("RGBA", (crest_box + 32, crest_box + 32), (255, 255, 255, 18))
+            img.paste(backing, (crest_x - 16, crest_y - 16), backing)
+            img.paste(crest, (crest_x, crest_y), crest)
+    text_max_w = (crest_x - 64 - 32) if school_logo_bytes else (W - 128)
+
+    # School name (huge)
+    name_font = _fit_text(draw, school_name, FONT_BOLD, text_max_w, start_size=96, min_size=48)
+    draw.text((64, 110), school_name, font=name_font, fill=WHITE)
+    name_bbox = draw.textbbox((64, 110), school_name, font=name_font)
+    sub_y = name_bbox[3] + 18
+
+    # Sub-line: level • region • Class of YYYY[, YYYY]
+    sub_parts = []
+    if level:
+        sub_parts.append(level)
+    if region:
+        sub_parts.append(region)
+    if grad_years:
+        years_str = ", ".join(str(y) for y in sorted(grad_years)[:3])
+        sub_parts.append(f"Class of {years_str}")
+    sub_line = "  •  ".join(sub_parts)
+    sub_font = _load_font(FONT_REG, 28)
+    draw.text((64, sub_y), sub_line, font=sub_font, fill=SUBTLE)
+
+    # Position chips
+    chip_y = sub_y + 60
+    if positions:
+        chip_font = _load_font(FONT_BOLD, 24)
+        x = 64
+        for pos in positions[:8]:
+            text_w = draw.textbbox((0, 0), pos, font=chip_font)[2]
+            chip_w = text_w + 32
+            chip_h = 44
+            if x + chip_w > text_max_w:
+                break
+            draw.rectangle((x, chip_y, x + chip_w, chip_y + chip_h),
+                           fill=(0, 122, 255, 50), outline=(0, 122, 255), width=2)
+            draw.text((x + 16, chip_y + 8), pos, font=chip_font, fill=ACCENT)
+            x += chip_w + 12
+
+    # Description preview (3 lines max, ellipsis if truncated)
+    if description:
+        desc_y = H - 200
+        desc_font = _load_font(FONT_REG, 26)
+        # Word-wrap manually to up to 3 lines, max 80 chars per line.
+        words = description.replace("\n", " ").split()
+        lines: list[str] = []
+        current = ""
+        max_w = W - 128
+        for w in words:
+            attempt = (current + " " + w).strip()
+            if draw.textbbox((0, 0), attempt, font=desc_font)[2] <= max_w:
+                current = attempt
+            else:
+                if current:
+                    lines.append(current)
+                if len(lines) >= 3:
+                    break
+                current = w
+        if current and len(lines) < 3:
+            lines.append(current)
+        if len(lines) >= 3 and current and current != lines[-1]:
+            lines[-1] = lines[-1].rstrip(".,;: ") + "…"
+        for i, line in enumerate(lines[:3]):
+            draw.text((64, desc_y + i * 36), line, font=desc_font, fill=(220, 220, 220))
+
+    _paste_brand_lockup(img)
+
+    out = BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
 def render_team_card(
     team_name: str,
     season: str,

@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 from db import db
-from services.og_card import render_folder_card, render_clip_card, render_player_card, render_match_recap_card
+from services.og_card import render_folder_card, render_clip_card, render_player_card, render_match_recap_card, render_scout_listing_card
 from services.storage import get_object_sync
 
 router = APIRouter()
@@ -491,6 +491,58 @@ async def og_club_image(share_token: str):
         player_count,
         logo_bytes,
         [],
+    )
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+
+# ---------- Scout listings ----------
+
+@router.get("/og/scout-listing/{listing_id}")
+async def og_scout_listing(listing_id: str, request: Request):
+    """HTML page with OG meta tags so social media unfurls the listing card."""
+    listing = await db.scout_listings.find_one({"id": listing_id}, {"_id": 0})
+    if not listing:
+        return HTMLResponse(
+            "<html><body><h1>Listing not found</h1></body></html>",
+            status_code=404,
+        )
+    title = f"{listing['school_name']} — Recruiting Listing"
+    if listing.get("level"):
+        title += f" · {listing['level']}"
+    description = (listing.get("description") or "")[:280]
+    spa_url = f"/scouts/{listing_id}"
+    image_url = f"{_public_base(request)}/api/og/scout-listing/{listing_id}/image.png"
+    return HTMLResponse(_og_html(title, description, image_url, spa_url))
+
+
+@router.get("/og/scout-listing/{listing_id}/image.png")
+async def og_scout_listing_image(listing_id: str):
+    listing = await db.scout_listings.find_one({"id": listing_id}, {"_id": 0})
+    if not listing:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    logo_bytes = None
+    if listing.get("school_logo_path"):
+        try:
+            logo_bytes, _ct = await run_in_threadpool(get_object_sync, listing["school_logo_path"])
+        except Exception:
+            logo_bytes = None
+
+    png = await run_in_threadpool(
+        render_scout_listing_card,
+        listing.get("school_name", ""),
+        listing.get("level", ""),
+        listing.get("region", ""),
+        listing.get("positions") or [],
+        listing.get("grad_years") or [],
+        listing.get("description", ""),
+        logo_bytes,
+        bool(listing.get("verified")),
     )
     return Response(
         content=png,

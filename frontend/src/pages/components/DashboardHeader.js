@@ -1,4 +1,4 @@
-import { SignOut, Shield, Globe, At, Buildings } from '@phosphor-icons/react';
+import { SignOut, Shield, Globe, At, Buildings, ChatCircle } from '@phosphor-icons/react';
 
 const NavButton = ({ onClick, testId, mobileTestId, ariaLabel, Icon, colorClass, borderClass, label, badge }) => (
   <>
@@ -24,7 +24,7 @@ const NavButton = ({ onClick, testId, mobileTestId, ariaLabel, Icon, colorClass,
   </>
 );
 
-const DashboardHeader = ({ user, unreadMentions, onNavigate, onLogout }) => {
+const DashboardHeader = ({ user, unreadMentions, unreadMessages = 0, onNavigate, onLogout }) => {
   const isAdmin = ['admin', 'owner'].includes((user?.role || '').toLowerCase());
   return (
     <header className="sticky top-0 z-50 bg-[#0A0A0A] border-b border-white/10 px-4 sm:px-6 py-3 sm:py-4">
@@ -37,6 +37,10 @@ const DashboardHeader = ({ user, unreadMentions, onNavigate, onLogout }) => {
           <NavButton onClick={() => onNavigate('/scouts')}
             testId="scouts-nav-btn" mobileTestId="scouts-nav-btn-mobile" ariaLabel="Scout Board"
             Icon={Buildings} colorClass="text-[#10B981]" borderClass="border-[#10B981]/30" label="Scouts" />
+          <NavButton onClick={() => onNavigate('/messages')}
+            testId="messages-nav-btn" mobileTestId="messages-nav-btn-mobile" ariaLabel="Messages"
+            Icon={ChatCircle} colorClass="text-[#10B981]" borderClass="border-[#10B981]/30" label="Inbox"
+            badge={unreadMessages} />
           <NavButton onClick={() => onNavigate('/clubs')}
             testId="clubs-nav-btn" mobileTestId="clubs-nav-btn-mobile" ariaLabel="Clubs & Teams"
             Icon={Shield} colorClass="text-[#A3A3A3]" borderClass="border-white/10" label="Clubs & Teams" />

@@ -2,6 +2,30 @@
 
 ## What's Been Implemented
 
+### Scout Board Phase 2 — Express Interest + In-App Messaging + OG Cards + Floating Insights (May 6, 2026 — iter27)
+
+**1. Express Interest CTA** — green button on every public listing detail (visible to authed coaches who are NOT the owner).
+- `POST /api/scout-listings/{id}/express-interest {message}` opens (or reuses) a 1:1 message thread, appends the coach's message, queues an email to the scout via Resend with the coach's name + message + branded "Reply in App →" CTA, and increments the listing's `contact_clicks_7d` metric.
+- Self-interest blocked with 400. Min 10 chars enforced. Message capped at 5000 chars.
+- Frontend `ExpressInterestModal` opens from listing detail. After send, navigates the coach straight to `/messages/{thread_id}` so they can keep typing.
+
+**2. In-app Messaging** (`routes/messaging.py`, ~310 lines):
+- New collections: `message_threads` (1:1 threads keyed by sorted `participant_pair` so duplicates are impossible) and `messages` (one doc per message).
+- Endpoints: `/messages/threads/open`, `/threads`, `/threads/{id}`, `/threads/{id}/reply`, `/threads/{id}/read`, `/unread-count`.
+- Frontend `/messages` and `/messages/:threadId`: split-pane (thread list + active conversation). Auto-scrolls to bottom on new messages. Mobile collapses to single-pane with back-link. iMessage-style bubbles (mine = green right-aligned, theirs = grey left-aligned). Auto-marks-read on open.
+- New "Inbox" icon in Dashboard header with unread badge that pulls from `/messages/unread-count`.
+
+**3. OG cards for scout listings** (`services/og_card.py::render_scout_listing_card` + `routes/og.py`):
+- New 1200×630 PNG card with green accent bar, "VERIFIED RECRUITING LISTING" header, school name (auto-shrinking up to 96px), level/region/grad-year sub-line, position chip row, 3-line description preview, optional school logo.
+- `GET /api/og/scout-listing/{id}` — HTML with og:title / og:description / og:image. `GET /api/og/scout-listing/{id}/image.png` — dynamic PNG with 5min cache.
+- Scouts can paste their listing URL on Twitter/LinkedIn/Slack and get a rich unfurl preview.
+
+**4. Floating insights chip** — on `/scouts/:id`, when viewer IS the owner, a fixed-position green chip in the bottom-right shows "N views · M clicks · past 7d". Click = navigate to `/scouts/my`.
+
+**13 new pytest tests** (`test_scout_phase2.py`): express-interest auth/self-block/short-msg/unknown-listing/happy-path, thread dedup by participant pair, 404 for non-participants, full reply+read flow, self-thread/unknown-user rejected, OG HTML meta tags, OG PNG validity (1200×630), 404 for unknown listing OG. All passing.
+
+**Live E2E verified via curl + screenshot**: 12-step end-to-end run all green; Messages page renders both empty states correctly with header Inbox icon wired.
+
 ### Roster CSV Import — Bulk Add Players to a Team (May 6, 2026 — iter26)
 
 **Goal**: let coaches build a team roster from a spreadsheet instead of typing 25+ players one at a time.

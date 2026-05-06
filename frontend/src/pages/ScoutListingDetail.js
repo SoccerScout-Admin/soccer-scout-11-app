@@ -4,8 +4,10 @@ import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
 import {
   ArrowLeft, SealCheck, GraduationCap, MapPin, Globe,
-  Envelope, Buildings, PencilSimple, Trash, Clock, Star,
+  Envelope, Buildings, PencilSimple, Trash, Clock, Star, Eye,
+  PaperPlaneRight,
 } from '@phosphor-icons/react';
+import ExpressInterestModal from './components/ExpressInterestModal';
 
 const ScoutListingDetail = () => {
   const { listingId } = useParams();
@@ -14,6 +16,8 @@ const ScoutListingDetail = () => {
   const [listing, setListing] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [ownerInsights, setOwnerInsights] = useState(null);
+  const [showInterestModal, setShowInterestModal] = useState(false);
 
   const fetchListing = useCallback(async () => {
     setLoading(true);
@@ -29,6 +33,14 @@ const ScoutListingDetail = () => {
   }, [listingId, user]);
 
   useEffect(() => { fetchListing(); }, [fetchListing]);
+
+  // Fetch owner-only insights once we know we're viewing our own listing.
+  useEffect(() => {
+    if (!user || !listing || listing.user_id !== user.id) return;
+    axios.get(`${API}/scout-listings/${listingId}/insights`, { headers: getAuthHeader() })
+      .then(res => setOwnerInsights(res.data))
+      .catch(() => setOwnerInsights(null));
+  }, [user, listing, listingId]);
 
   const handleDelete = async () => {
     if (!window.confirm('Delete this listing? This cannot be undone.')) return;
@@ -184,6 +196,13 @@ const ScoutListingDetail = () => {
             </div>
           ) : (
             <div data-testid="contact-visible" className="space-y-3">
+              {!isOwner && (
+                <button data-testid="express-interest-btn"
+                  onClick={() => setShowInterestModal(true)}
+                  className="w-full flex items-center justify-center gap-2 bg-[#10B981] hover:bg-[#0EA975] text-white py-3 font-bold tracking-wider uppercase text-xs transition-colors mb-2">
+                  <PaperPlaneRight size={16} weight="fill" /> Express Interest
+                </button>
+              )}
               {listing.website_url && (
                 <a href={listing.website_url} target="_blank" rel="noopener noreferrer"
                   onClick={() => { axios.post(`${API}/scout-listings/${listingId}/contact-click`, {}, { headers: getAuthHeader() }).catch(() => {}); }}
@@ -204,6 +223,34 @@ const ScoutListingDetail = () => {
           )}
         </div>
       </main>
+
+      {/* Floating insights chip — owner-only */}
+      {ownerInsights && (
+        <div data-testid="floating-insights-chip"
+          className="fixed bottom-5 right-5 z-30 bg-[#10B981] text-white px-4 py-3 shadow-lg border border-[#0EA975] flex items-center gap-2 hover:bg-[#0EA975] cursor-pointer"
+          onClick={() => navigate('/scouts/my')}
+          title="See full insights">
+          <Eye size={20} weight="fill" />
+          <div className="text-xs">
+            <div className="text-[10px] uppercase tracking-wider opacity-80">past 7d</div>
+            <div className="text-base font-bold leading-tight">
+              {ownerInsights.views_7d} {ownerInsights.views_7d === 1 ? 'view' : 'views'}
+              {ownerInsights.contact_clicks_7d > 0 && ` · ${ownerInsights.contact_clicks_7d} click${ownerInsights.contact_clicks_7d === 1 ? '' : 's'}`}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showInterestModal && (
+        <ExpressInterestModal
+          listingId={listingId}
+          schoolName={listing.school_name}
+          onClose={() => setShowInterestModal(false)}
+          onSent={(data) => {
+            navigate(`/messages/${data.thread_id}`);
+          }}
+        />
+      )}
     </div>
   );
 };
