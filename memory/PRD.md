@@ -2,6 +2,26 @@
 
 ## What's Been Implemented
 
+### Player Dossier Attachment on Express Interest (May 6, 2026 — iter28)
+
+**Goal**: turn "I have a great kid for you" into "I have a great kid for you — here's the full profile" with one click. Closes the loop between coaches and scouts on the Scout Board.
+
+**Backend**:
+- New `GET /api/players/my-shared` — returns the caller's players that have a public `share_token` enabled (from the existing player-dossier share infra). Sorted by name. Used to populate the dropdown in Express Interest.
+- `POST /scout-listings/{id}/express-interest` already accepted `player_dossier_share_token` from iter27. Now exercised end-to-end:
+  - Token is validated against `players` collection scoped to the caller's `user_id` — bogus tokens 404, cross-user tokens 404 (coach can't attach a scout's player).
+  - On success, both the in-app message body and the email HTML get a "— View player dossier: https://…/player/{token}" line appended.
+
+**Frontend** (`ExpressInterestModal.js`):
+- New "Attach Player Dossier (optional)" dropdown above the message textarea.
+- Pre-fetches the user's shared players on mount.
+- Empty state ("You don't have any public player dossiers yet — share a profile from the dossier page first") if they haven't shared anyone yet.
+- Green confirmation chip below the picker once selected: "✓ Dossier link will be added at the end of your message."
+
+**4 new pytest tests** (`test_scout_phase2.py`): my-shared lists only shared players (not all owned), happy path attaches dossier link to both message body and email HTML, bogus token 404s, cross-user token 404s. Suite is now 17/17 passing.
+
+**Live E2E verified via curl**: created shared player → my-shared returns it → express interest with token successfully appends dossier URL to both message + email → bogus token rejected → cross-user attach rejected.
+
 ### Scout Board Phase 2 — Express Interest + In-App Messaging + OG Cards + Floating Insights (May 6, 2026 — iter27)
 
 **1. Express Interest CTA** — green button on every public listing detail (visible to authed coaches who are NOT the owner).

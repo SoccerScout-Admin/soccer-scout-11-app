@@ -1,13 +1,21 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../../App';
-import { X, PaperPlaneRight, Warning } from '@phosphor-icons/react';
+import { X, PaperPlaneRight, Warning, Paperclip } from '@phosphor-icons/react';
 
 const ExpressInterestModal = ({ listingId, schoolName, onClose, onSent }) => {
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  const [sharedPlayers, setSharedPlayers] = useState([]);
+  const [attachToken, setAttachToken] = useState('');
   const user = getCurrentUser();
+
+  useEffect(() => {
+    axios.get(`${API}/players/my-shared`, { headers: getAuthHeader() })
+      .then(res => setSharedPlayers(res.data || []))
+      .catch(() => setSharedPlayers([]));
+  }, []);
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -18,9 +26,11 @@ const ExpressInterestModal = ({ listingId, schoolName, onClose, onSent }) => {
     }
     setSending(true);
     try {
+      const payload = { message: message.trim() };
+      if (attachToken) payload.player_dossier_share_token = attachToken;
       const res = await axios.post(
         `${API}/scout-listings/${listingId}/express-interest`,
-        { message: message.trim() },
+        payload,
         { headers: getAuthHeader() },
       );
       onSent(res.data);
@@ -55,6 +65,34 @@ const ExpressInterestModal = ({ listingId, schoolName, onClose, onSent }) => {
             Send a personal note. The recruiter receives an email immediately and can reply
             in-app from their inbox. Your message also opens a private thread under <span className="text-[#10B981] font-bold">Messages</span>.
           </p>
+
+          <div>
+            <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2 flex items-center gap-1.5">
+              <Paperclip size={12} weight="bold" /> Attach Player Dossier <span className="text-[#666] normal-case tracking-normal font-normal">(optional)</span>
+            </label>
+            {sharedPlayers.length === 0 ? (
+              <div data-testid="no-shared-players" className="text-xs text-[#666] bg-[#0A0A0A] border border-white/10 px-3 py-3">
+                You don't have any public player dossiers yet. Share a player profile from their dossier page first, then come back here to attach it.
+              </div>
+            ) : (
+              <select data-testid="dossier-attach-select"
+                value={attachToken} onChange={(e) => setAttachToken(e.target.value)}
+                className="w-full bg-[#0A0A0A] border border-white/10 text-white px-3 py-3 focus:border-[#10B981] focus:outline-none text-sm">
+                <option value="">— No attachment —</option>
+                {sharedPlayers.map(p => (
+                  <option key={p.id} value={p.share_token}>
+                    #{p.number ?? '—'} {p.name}{p.position ? ` (${p.position})` : ''}
+                  </option>
+                ))}
+              </select>
+            )}
+            {attachToken && (
+              <p data-testid="attach-confirm" className="text-[11px] text-[#10B981] mt-1">
+                ✓ Dossier link will be added at the end of your message.
+              </p>
+            )}
+          </div>
+
           <div>
             <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">Your Message</label>
             <textarea data-testid="interest-message-input"

@@ -113,6 +113,23 @@ async def delete_player(player_id: str, current_user: dict = Depends(get_current
     return {"status": "deleted"}
 
 
+@router.get("/players/my-shared")
+async def my_shared_players(current_user: dict = Depends(get_current_user)):
+    """Players I own that have a public dossier share_token enabled.
+
+    Used by the Express Interest modal so coaches can attach an existing
+    public dossier to their outreach without leaving the page.
+    """
+    rows = await db.players.find(
+        {
+            "user_id": current_user["id"],
+            "share_token": {"$exists": True, "$ne": None},
+        },
+        {"_id": 0, "id": 1, "name": 1, "number": 1, "position": 1, "share_token": 1},
+    ).sort("name", 1).to_list(200)
+    return rows
+
+
 @router.post("/players/{player_id}/teams/{team_id}")
 async def add_player_to_team(
     player_id: str, team_id: str, current_user: dict = Depends(get_current_user)

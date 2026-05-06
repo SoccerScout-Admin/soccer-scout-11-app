@@ -292,6 +292,119 @@ def test_open_thread_unknown_user_returns_404(coach_user):
     assert r.status_code == 404
 
 
+# ---------- dossier attachment ----------
+
+def _create_player(headers, name="Test Athlete", number=9, position="ST"):
+    r = requests.post(
+        f"{BASE_URL}/api/players",
+        headers=headers,
+        json={"name": name, "number": number, "position": position},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _share_player(headers, player_id):
+    r = requests.post(f"{BASE_URL}/api/players/{player_id}/share", headers=headers)
+    assert r.status_code == 200
+    return r.json()["share_token"]
+
+
+def test_my_shared_players_lists_only_shared(coach_user):
+    # Create one shared and one unshared
+    shared = _create_player(coach_user["headers"], name="Shared P", number=1)
+    _create_player(coach_user["headers"], name="Unshared P", number=2)
+    token = _share_player(coach_user["headers"], shared["id"])
+
+    r = requests.get(f"{BASE_URL}/api/players/my-shared", headers=coach_user["headers"])
+    assert r.status_code == 200
+    rows = r.json()
+    names = [p["name"] for p in rows]
+    assert "Shared P" in names
+    assert "Unshared P" not in names
+    assert any(p["share_token"] == token for p in rows)
+
+    async def go():
+        from db import db
+        await db.players.delete_many({"user_id": coach_user["id"]})
+    _run_async(go())
+
+
+def test_express_interest_attaches_dossier(listing, coach_user, scout_user):
+    player = _create_player(coach_user["headers"], name="Striker Sam", number=9, position="ST")
+    token = _share_player(coach_user["headers"], player["id"])
+
+    r = requests.post(
+        f"{BASE_URL}/api/scout-listings/{listing['id']}/express-interest",
+        headers=coach_user["headers"],
+        json={
+            "message": "Have a striker who'd fit your profile.",
+            "player_dossier_share_token": token,
+        },
+    )
+    assert r.status_code == 200, r.text
+    thread_id = r.json()["thread_id"]
+
+    # Message body contains dossier link
+    r = requests.get(
+        f"{BASE_URL}/api/messages/threads/{thread_id}", headers=coach_user["headers"]
+    )
+    msg_body = r.json()["messages"][0]["body"]
+    assert f"/player/{token}" in msg_body
+    assert "View player dossier" in msg_body
+
+    # Email HTML contains dossier link
+    async def assert_email():
+        from db import db
+        doc = await db.email_queue.find_one(
+            {"to_email": scout_user["email"], "kind": "scout_interest"},
+            sort=[("created_at", -1)],
+        )
+        assert doc is not None
+        assert f"/player/{token}" in doc["html"]
+        assert "View player dossier" in doc["html"]
+    _run_async(assert_email())
+
+    async def cleanup():
+        from db import db
+        await db.players.delete_many({"id": player["id"]})
+    _run_async(cleanup())
+
+
+def test_express_interest_rejects_bogus_dossier(listing, coach_user):
+    r = requests.post(
+        f"{BASE_URL}/api/scout-listings/{listing['id']}/express-interest",
+        headers=coach_user["headers"],
+        json={
+            "message": "trying to attach a fake token",
+            "player_dossier_share_token": "BOGUS",
+        },
+    )
+    assert r.status_code == 404
+    assert "dossier" in r.json()["detail"].lower()
+
+
+def test_express_interest_rejects_cross_user_dossier(listing, coach_user, scout_user):
+    """Coach can't attach a player owned by the scout."""
+    scout_player = _create_player(scout_user["headers"], name="Scout's Player", number=99)
+    scout_token = _share_player(scout_user["headers"], scout_player["id"])
+
+    r = requests.post(
+        f"{BASE_URL}/api/scout-listings/{listing['id']}/express-interest",
+        headers=coach_user["headers"],
+        json={
+            "message": "trying to attach someone else's dossier",
+            "player_dossier_share_token": scout_token,
+        },
+    )
+    assert r.status_code == 404
+
+    async def cleanup():
+        from db import db
+        await db.players.delete_many({"id": scout_player["id"]})
+    _run_async(cleanup())
+
+
 # ---------- OG card ----------
 
 def test_og_html_meta_tags(listing):
