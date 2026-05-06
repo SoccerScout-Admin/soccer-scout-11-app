@@ -2,6 +2,34 @@
 
 ## What's Been Implemented
 
+### Roster CSV Import — Bulk Add Players to a Team (May 6, 2026 — iter26)
+
+**Goal**: let coaches build a team roster from a spreadsheet instead of typing 25+ players one at a time.
+
+**Backend** (`routes/players.py`):
+- `POST /api/teams/{team_id}/players/import` — accepts `multipart/form-data` CSV file. Returns `{imported, skipped, errors:[{row,reason}], parsed:[…]}`.
+- `?dry_run=true` returns the parsed payload without writing — powers the preview/confirm flow.
+- **Tolerant header aliases**: `name` matches `name|player|player name|full name|fullname|athlete`; `number` matches `number|no|no.|#|jersey|jersey number|shirt|shirt no`; `position` matches `position|pos|pos.|primary position`. Case- and spacing-insensitive.
+- **UTF-8 BOM handling**: Excel saves with `\ufeff` prefix; we strip it so coaches don't get cryptic decode failures.
+- **Validation**: empty file → 400; missing `name` column → 400 with helpful message listing accepted aliases; >1MB → 413; team ownership enforced; season cap reused.
+- **Soft errors**: bad jersey numbers (e.g. "Goalkeeper" or "9.5" in the number column) are reported as warnings, but the row is still imported with `number=null`. Empty rows skipped silently.
+- `GET /api/players/import-template.csv` — public endpoint that downloads a starter CSV with canonical headers + 3 example rows. No auth required since it's static.
+
+**Frontend** (`components/RosterImportModal.js`, ~170 lines):
+- Drag-and-drop dropzone with click-to-browse fallback.
+- Inline CSV format help block with monospace example + green "Download CSV Template" link.
+- After file selected, automatically calls `dry_run=true` and shows:
+  - Green banner: "Found N players ready to import" + skipped count
+  - Yellow warnings panel listing per-row issues
+  - Scrollable table preview of all parsed rows
+  - "Choose different file" reset + "Import N Players" confirm
+- After confirm, refreshes the team's player list and shows a summary alert.
+- Mounted on `/team/:teamId` next to the existing "Add Player" / "Add Existing" buttons as a green "Import CSV" button.
+
+**12 new pytest tests** (`test_roster_import.py`): auth required, unknown-team 404, empty file 400, missing-name-column 400, oversized file 413, header alias tolerance ("Player Name" / "Jersey Number" / "Pos."), dry-run does not write, real import inserts rows with correct team_ids, bad number reports warning + still imports, empty rows skipped, public template download with attachment header, Excel BOM handled. All passing.
+
+**Live E2E verified via curl + screenshot**: dry-run on a 7-row CSV returned 6 parsed players + 3 warnings (Goalkeeper / Not A Number / 9.5) → real import inserted 6 players → team now lists all 6 with correct numbers/positions → empty file → 400 → missing name column → 400 → unknown team → 404 → unauthenticated → 401. Frontend modal opens cleanly with drop zone, format help, and template download button.
+
 ### Scout Stickiness — View Tracking + Weekly Digest (May 3, 2026 — iter25)
 
 **Goal**: keep scouts coming back to Soccer Scout 11 by giving them measurable signal that their listings are working.

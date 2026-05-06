@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, Users, Plus, Trash, Upload, UserCircle, CalendarBlank, Shield, ShareNetwork, Copy, Check, X, UserPlus } from '@phosphor-icons/react';
+import { ArrowLeft, Users, Plus, Trash, Upload, UserCircle, CalendarBlank, Shield, ShareNetwork, Copy, Check, X, UserPlus, FileCsv } from '@phosphor-icons/react';
+import RosterImportModal from './components/RosterImportModal';
 
 const TeamRoster = () => {
   const { teamId } = useParams();
@@ -17,6 +18,7 @@ const TeamRoster = () => {
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showAddExisting, setShowAddExisting] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [eligible, setEligible] = useState([]);
   const [eligibleLoading, setEligibleLoading] = useState(false);
 
@@ -219,6 +221,10 @@ const TeamRoster = () => {
             <button data-testid="add-existing-player-btn" onClick={openAddExisting}
               className="flex items-center gap-2 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors">
               <UserPlus size={14} weight="bold" /> Add Existing
+            </button>
+            <button data-testid="import-roster-btn" onClick={() => setShowImport(true)}
+              className="flex items-center gap-2 border border-[#10B981]/40 text-[#10B981] hover:bg-[#10B981]/10 px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors">
+              <FileCsv size={14} weight="bold" /> Import CSV
             </button>
             <button data-testid="add-player-btn" onClick={() => setShowAddPlayer(true)}
               className="flex items-center gap-2 bg-[#007AFF] hover:bg-[#005bb5] text-white px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors">
@@ -482,6 +488,21 @@ const TeamRoster = () => {
             )}
           </div>
         </div>
+      )}
+
+      {showImport && (
+        <RosterImportModal
+          teamId={teamId}
+          teamName={team?.name || 'Team'}
+          onClose={() => setShowImport(false)}
+          onImported={(result) => {
+            fetchPlayers();
+            const msg = result.errors?.length
+              ? `Imported ${result.imported} player${result.imported === 1 ? '' : 's'} with ${result.errors.length} warning${result.errors.length === 1 ? '' : 's'}.`
+              : `Imported ${result.imported} player${result.imported === 1 ? '' : 's'} successfully.`;
+            alert(msg);
+          }}
+        />
       )}
     </div>
   );

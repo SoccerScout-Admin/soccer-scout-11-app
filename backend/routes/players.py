@@ -193,6 +193,192 @@ async def import_csv(input: CsvImport, current_user: dict = Depends(get_current_
     return {"imported": imported}
 
 
+# ---------- Roster file import (CSV) ----------
+
+# Accept a wide range of column header spellings — coaches paste from Excel,
+# Google Sheets, or print rosters where conventions vary wildly.
+_HEADER_ALIASES = {
+    "name": {"name", "player", "player name", "full name", "fullname", "athlete"},
+    "number": {"number", "no", "no.", "#", "jersey", "jersey number", "shirt", "shirt no"},
+    "position": {"position", "pos", "pos.", "primary position"},
+}
+
+
+def _normalize_header(h: str) -> str:
+    return (h or "").strip().lower().replace("_", " ")
+
+
+def _resolve_columns(fieldnames: list[str]) -> dict[str, Optional[str]]:
+    """Map our canonical fields → the actual CSV header that was used."""
+    resolved: dict[str, Optional[str]] = {"name": None, "number": None, "position": None}
+    for canonical, aliases in _HEADER_ALIASES.items():
+        for actual in fieldnames or []:
+            if _normalize_header(actual) in aliases:
+                resolved[canonical] = actual
+                break
+    return resolved
+
+
+@router.get("/players/import-template.csv")
+async def download_roster_template():
+    """A starter CSV with the canonical headers + 3 example rows.
+
+    Coaches can download this, fill it in Excel/Google Sheets, save as CSV,
+    and upload back. Public — no auth needed because it's a static template.
+    """
+    from fastapi.responses import Response
+    body = (
+        "name,number,position\n"
+        "Jane Doe,9,ST\n"
+        "Maria Lopez,4,CB\n"
+        "Sam Lee,10,CM\n"
+    )
+    return Response(
+        content=body,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="roster-template.csv"'},
+    )
+
+
+@router.post("/teams/{team_id}/players/import")
+async def import_team_roster(
+    team_id: str,
+    file: UploadFile = File(...),
+    dry_run: bool = False,
+    current_user: dict = Depends(get_current_user),
+):
+    """Bulk-import players to a team from a CSV file.
+
+    Returns `{imported, skipped, errors: [{row, reason}], parsed: [...]}`.
+    With `dry_run=true` we report what *would* happen without writing anything,
+    so the UI can show a preview/confirm flow.
+
+    Accepts ~tolerant headers (case-insensitive, alias-aware). Empty-name
+    rows are skipped silently. Bad jersey numbers are reported but the row
+    is still imported with `number=null`. Numbers must fit 0..999 to fit a
+    reasonable jersey range.
+    """
+    team = await db.teams.find_one(
+        {"id": team_id, "user_id": current_user["id"]}, {"_id": 0, "id": 1, "name": 1}
+    )
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty file uploaded.")
+    if len(raw) > 1 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 1MB).")
+
+    try:
+        # Try utf-8-sig first to strip Excel's BOM, fall back to latin-1.
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = raw.decode("latin-1")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not decode file: {exc}")
+
+    reader = csv.DictReader(io.StringIO(text))
+    fieldnames = reader.fieldnames or []
+    columns = _resolve_columns(fieldnames)
+    if not columns["name"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Could not find a 'name' column. Accepted headers: "
+                "name, player, player name, full name, athlete."
+            ),
+        )
+
+    parsed: list[dict] = []
+    errors: list[dict] = []
+    skipped = 0
+
+    for idx, row in enumerate(reader, start=2):  # row 1 is the header
+        raw_name = (row.get(columns["name"]) or "").strip()
+        if not raw_name:
+            skipped += 1
+            continue
+
+        # Number — optional. We want clear feedback if the user wrote "9.5" or
+        # "GK" in the number column.
+        num_value: Optional[int] = None
+        if columns["number"]:
+            raw_num = (row.get(columns["number"]) or "").strip()
+            if raw_num:
+                try:
+                    num_value = int(raw_num)
+                    if num_value < 0 or num_value > 999:
+                        raise ValueError("out of range")
+                except (ValueError, TypeError):
+                    errors.append({
+                        "row": idx,
+                        "reason": f"Invalid jersey number '{raw_num}' for {raw_name} — imported with no number.",
+                    })
+                    num_value = None
+
+        position = None
+        if columns["position"]:
+            position = (row.get(columns["position"]) or "").strip() or None
+
+        parsed.append({
+            "row": idx,
+            "name": raw_name,
+            "number": num_value,
+            "position": position,
+        })
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "imported": 0,
+            "skipped": skipped,
+            "errors": errors,
+            "parsed": parsed,
+            "team_id": team_id,
+            "team_name": team["name"],
+        }
+
+    if not parsed:
+        return {
+            "dry_run": False,
+            "imported": 0,
+            "skipped": skipped,
+            "errors": errors,
+            "parsed": [],
+            "team_id": team_id,
+            "team_name": team["name"],
+        }
+
+    # Bulk insert — validate season cap once on the team itself.
+    await _enforce_season_cap(current_user["id"], None, [team_id])
+    docs = []
+    for item in parsed:
+        player = Player(
+            user_id=current_user["id"],
+            match_id=None,
+            team_ids=[team_id],
+            name=item["name"],
+            number=item["number"],
+            position=item["position"],
+            team=team["name"],
+        )
+        docs.append(player.model_dump())
+    if docs:
+        await db.players.insert_many(docs)
+
+    return {
+        "dry_run": False,
+        "imported": len(docs),
+        "skipped": skipped,
+        "errors": errors,
+        "parsed": parsed,
+        "team_id": team_id,
+        "team_name": team["name"],
+    }
+
+
 @router.post("/players/{player_id}/profile-pic")
 async def upload_profile_pic(
     player_id: str,
