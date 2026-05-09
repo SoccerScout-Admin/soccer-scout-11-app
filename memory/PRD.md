@@ -2,6 +2,50 @@
 
 ## What's Been Implemented
 
+### AI Auto-Zoom Highlights — Wide + Close-up Stitched Clips (May 9, 2026 — iter29)
+
+**Goal**: every goal clip (and any user-selected clip) gets a duplicate close-up sibling — same action, AI-cropped tight to the ball/players. The two get stitched into a single mp4 that plays the wide shot then the close-up so coaches can review the play twice.
+
+**Backend** (`services/close_up_processor.py`, ~330 lines):
+- **Pipeline (per clip)**: extract wide segment → send to **Gemini 3.1 Pro** for bbox+zoom analysis → ffmpeg `crop+scale` for the close-up → ffmpeg concat for wide+close-up → save stitched mp4 to `/var/video_chunks/close_ups/{clip_id}.mp4`.
+- **AI prompt**: returns strict JSON `{x_pct, y_pct, w_pct, h_pct, zoom_level: 1.5|2.0|2.5, reasoning}`. Tighter zoom (2.5) for finishing actions, wider (1.5) for build-up. Tolerant JSON parser handles markdown-fenced responses, clamps out-of-range values, snaps zoom to one of the documented levels. Falls back to centered 2× crop on any failure so users always get SOMETHING.
+- **In-process async worker**: tiny single-consumer asyncio queue so ffmpeg + Gemini calls don't pile up. Survives within the FastAPI process; on restart, stuck clips just stay in `processing` state and need a manual retry (acceptable for a free-tier demo).
+- **Per-clip status**: `close_up_status` ∈ `{pending, processing, ready, failed}` with `close_up_path`, `close_up_bbox`, and `close_up_error` for diagnostics.
+
+**Endpoints** (in server.py — clips routes live there, not `routes/clips.py`):
+- `GET /api/clips/{id}/extract` — now serves `close_up_path` directly (zero re-encoding) when status is `ready`. Falls back to chunk-reassembly + ffmpeg cut otherwise.
+- `POST /api/clips/{id}/generate-close-up` — queues a manual close-up. No-ops on `ready`/`pending`/`processing`.
+- `POST /api/clips/{id}/close-up/retry` — clears failed state and re-queues.
+- **Auto-trigger**: `auto_create_clips_from_markers` (used by the AI marker → clip pipeline) automatically enqueues every `clip_type == "goal"` clip after creation.
+
+**Frontend** (`pages/components/ClipsSidebar.js` + `VideoAnalysis.js`):
+- Each `ClipCard` now shows a colored status pill:
+  - 🎬 **Wide + Close-up** (green) when ready
+  - **Generating close-up** (yellow, pulsing dot) when pending/processing
+  - **Close-up failed** (red) when failed
+- Non-goal clips get an "Add close-up" button. Failed clips get a "Retry close-up" button.
+- VideoAnalysis polls `/clips/video/{videoId}` every 8s while any clip is in flight so the badge flips automatically when ffmpeg finishes (~30-90s for typical 8s clip).
+
+**15 new pytest tests** (`test_close_up_processor.py`):
+- Pure-logic unit tests: clean JSON, markdown-fenced JSON, out-of-range clamping, garbage-fallback, empty-fallback, zoom snap-to-nearest.
+- Crop-box math: center-frame correctness, left-edge clamp, right-edge clamp, libx264-required even dimensions.
+- HTTP: unknown-clip 404, unauth 401, no-op on already-ready, `/extract` byte-for-byte serves the close-up file.
+- All passing.
+
+**Live E2E verified via curl**: synthetic 2s mp4 → /extract serves it byte-for-byte → routes correctly 404 unknown clips and 401 unauth → no-op on ready state.
+
+### Code Quality Sweep (May 7, 2026 — iter28b)
+
+Applied high-value, low-risk fixes from the code review:
+- **Hardcoded test-secret leakage**: tests/test_iter11/test_annotation_templates were already using env vars; only Ruff E741 ambiguous variable names (`l` instead of `listing`) needed cleanup in `test_scout_listings.py`.
+- **Unused locals**: removed dead `clips_before_ids` / `original_player_ids` setup in `test_regression_sweep.py`.
+- **E731 lambda assignments** in `coach_network.py::compute_benchmarks` → renamed to `_avg` / `_median` named functions.
+- **Empty catch blocks (8 sites)**: added `console.warn` with context in `push.js`, `SpokenSummaryPanel.js`, `ScoutingPacketModal.js`, `ManualResultForm.js`, `LiveCoachingMic.js`, `ShareReelModal.js` so silent failures aren't invisible anymore.
+- **Expensive JSX computations**: wrapped `FolderFormModal` parent dropdown filter and `ManualResultForm` per-team player buckets in `useMemo`. (`SharedView` and `RosterSection` were either already memoized in iter22 or O(N≤5) so not worth the closure overhead.)
+- **`express_interest()` complexity**: extracted `_resolve_dossier_url`, `_build_interest_email_html`, `_record_contact_click_view` helpers — main handler dropped from 115 lines to ~40.
+- Backend lint: 100% clean (`ruff check /app/backend`). Frontend lint: 100% clean (`eslint /app/frontend/src`).
+- **Skipped (intentional)**: localStorage→httpOnly cookies (full auth rewrite, not justified by the theoretical XSS risk on a single-tenant coach SaaS); large-component splits of Dashboard/ClubManager/MatchDetail (working code, high regression risk vs. theoretical readability gain).
+
 ### Player Dossier Attachment on Express Interest (May 6, 2026 — iter28)
 
 **Goal**: turn "I have a great kid for you" into "I have a great kid for you — here's the full profile" with one click. Closes the loop between coaches and scouts on the Scout Board.

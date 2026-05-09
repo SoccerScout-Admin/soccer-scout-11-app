@@ -1333,12 +1333,35 @@ async def ai_suggest_clip_tags(clip_id: str, current_user: dict = Depends(get_cu
 
 @api_router.get("/clips/{clip_id}/extract")
 async def extract_clip_video(clip_id: str, current_user: dict = Depends(get_current_user)):
-    """Extract actual video segment for a clip using ffmpeg and return as streaming MP4"""
+    """Extract actual video segment for a clip using ffmpeg and return as streaming MP4.
+
+    If the clip has a ready AI close-up (`close_up_status="ready"` + an
+    on-disk file at `close_up_path`), we serve that pre-stitched mp4
+    directly — no re-encoding needed.
+    """
     import subprocess
-    
+
     clip = await db.clips.find_one({"id": clip_id, "user_id": current_user["id"]}, {"_id": 0})
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+
+    safe_title = "".join(c for c in clip["title"] if c.isalnum() or c in " -_").strip()[:50] or "clip"
+
+    # AI close-up shortcut — pre-rendered wide+zoom stitched mp4.
+    close_up_path = clip.get("close_up_path") if clip.get("close_up_status") == "ready" else None
+    if close_up_path and os.path.exists(close_up_path):
+        async def stream_close_up():
+            with open(close_up_path, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+        return StreamingResponse(
+            stream_close_up(), media_type="video/mp4",
+            headers={"Content-Disposition": f'attachment; filename="{safe_title}.mp4"'},
+        )
+
     video = await db.videos.find_one({"id": clip["video_id"], "is_deleted": False}, {"_id": 0})
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
@@ -1398,9 +1421,7 @@ async def extract_clip_video(clip_id: str, current_user: dict = Depends(get_curr
         
         if result.returncode != 0 or not os.path.exists(out_path):
             raise HTTPException(status_code=500, detail="Failed to extract clip")
-        
-        safe_title = "".join(c for c in clip["title"] if c.isalnum() or c in " -_").strip()[:50] or "clip"
-        
+
         async def stream_and_cleanup():
             try:
                 with open(out_path, 'rb') as f:
@@ -1428,6 +1449,58 @@ async def extract_clip_video(clip_id: str, current_user: dict = Depends(get_curr
                 except Exception:
                     pass
         raise HTTPException(status_code=500, detail=f"Clip extraction failed: {str(e)[:200]}")
+
+
+# ===== AI Close-up Generation =====
+
+@api_router.post("/clips/{clip_id}/generate-close-up")
+async def generate_close_up(clip_id: str, current_user: dict = Depends(get_current_user)):
+    """Queue background generation of an AI close-up for this clip.
+
+    Returns immediately; status flips to `pending` then `processing`, and
+    finally `ready` (or `failed`) on the clip doc. Polling client should
+    re-fetch the clip every few seconds while status is not ready/failed.
+    """
+    from services.close_up_processor import enqueue_close_up
+
+    clip = await db.clips.find_one(
+        {"id": clip_id, "user_id": current_user["id"]},
+        {"_id": 0, "id": 1, "close_up_status": 1},
+    )
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    current_status = clip.get("close_up_status")
+    if current_status == "ready":
+        return {"status": "ready", "already_done": True}
+    if current_status in ("pending", "processing"):
+        return {"status": current_status, "already_queued": True}
+
+    await enqueue_close_up(clip_id)
+    return {"status": "pending"}
+
+
+@api_router.post("/clips/{clip_id}/close-up/retry")
+async def retry_close_up(clip_id: str, current_user: dict = Depends(get_current_user)):
+    """Force a re-queue (used after a failed close-up generation)."""
+    from services.close_up_processor import enqueue_close_up
+
+    clip = await db.clips.find_one(
+        {"id": clip_id, "user_id": current_user["id"]}, {"_id": 0, "id": 1},
+    )
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    await db.clips.update_one(
+        {"id": clip_id},
+        {"$unset": {
+            "close_up_status": "", "close_up_error": "",
+            "close_up_path": "", "close_up_bbox": "",
+        }},
+    )
+    await enqueue_close_up(clip_id)
+    return {"status": "pending"}
+
 
 # ===== Batch Clip Download (ZIP) =====
 
@@ -1736,6 +1809,7 @@ async def auto_create_clips_from_markers(video_id: str, user_id: str, match_id: 
         return
     await db.clips.delete_many({"video_id": video_id, "user_id": user_id, "auto_generated": True})
     created = 0
+    goal_clip_ids: list[str] = []
     for m in markers:
         if m.get("type") in ("card", "foul"):
             pad_before, pad_after = 20, 5
@@ -1754,7 +1828,20 @@ async def auto_create_clips_from_markers(video_id: str, user_id: str, match_id: 
         }
         await db.clips.insert_one(clip)
         created += 1
+        if clip_type == "goal":
+            goal_clip_ids.append(clip["id"])
     logger.info(f"Auto-created {created} clips from AI markers for video {video_id}")
+
+    # Auto-queue AI close-ups for every goal — coaches asked for goals to
+    # always get a wide+zoom stitched version.
+    if goal_clip_ids:
+        try:
+            from services.close_up_processor import enqueue_close_up
+            for clip_id in goal_clip_ids:
+                await enqueue_close_up(clip_id)
+            logger.info(f"Auto-queued {len(goal_clip_ids)} goal close-ups for video {video_id}")
+        except Exception as exc:
+            logger.warning(f"close-up auto-queue skipped: {exc}")
 
 # ===== Register all api_router routes =====
 app.include_router(api_router)

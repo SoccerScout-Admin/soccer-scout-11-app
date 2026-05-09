@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useCallback } from 'react';
+import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
@@ -233,6 +233,42 @@ const VideoAnalysis = () => {
     }
   };
 
+  const handleGenerateCloseUp = async (clip) => {
+    const isFailed = clip.close_up_status === 'failed';
+    const url = isFailed
+      ? `${API}/clips/${clip.id}/close-up/retry`
+      : `${API}/clips/${clip.id}/generate-close-up`;
+    try {
+      const res = await axios.post(url, {}, { headers: getAuthHeader() });
+      // Optimistically reflect the new status in the sidebar so the user sees
+      // the "Generating close-up" badge immediately.
+      const newStatus = res.data?.status || 'pending';
+      setClips((prev) => prev.map((c) =>
+        c.id === clip.id ? { ...c, close_up_status: newStatus } : c
+      ));
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      alert('Could not start close-up: ' + (typeof detail === 'string' ? detail : err.message));
+    }
+  };
+
+  // Poll backend every 8s while any clip is in-flight so the UI flips to the
+  // "🎬 Wide + Close-up" badge as soon as ffmpeg finishes. Stops automatically
+  // when no clip is processing/pending.
+  useEffect(() => {
+    const inflight = (clips || []).some((c) =>
+      c.close_up_status === 'pending' || c.close_up_status === 'processing'
+    );
+    if (!inflight) return;
+    const tick = setInterval(async () => {
+      try {
+        const res = await axios.get(`${API}/clips/video/${videoId}`, { headers: getAuthHeader() });
+        setClips(res.data || []);
+      } catch (err) { /* poll silently */ }
+    }, 8000);
+    return () => clearInterval(tick);
+  }, [clips, videoId]);
+
   const seekTo = (time) => {
     if (videoRef.current) videoRef.current.currentTime = time;
   };
@@ -418,6 +454,7 @@ const VideoAnalysis = () => {
               onDownloadClip={handleDownloadClip}
               onTagClip={openTagModal}
               onShareClip={handleShareClip}
+              onGenerateCloseUp={handleGenerateCloseUp}
             />
             <AnnotationsSidebar
               annotations={annotations}
