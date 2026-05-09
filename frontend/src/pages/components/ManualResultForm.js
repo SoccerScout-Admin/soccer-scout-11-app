@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import { API, getAuthHeader } from '../../App';
 import { Trophy, Plus, Trash, Check, ClipboardText, PencilSimple, X, ShareNetwork } from '@phosphor-icons/react';
@@ -32,6 +32,19 @@ const ManualResultForm = ({ match, players, onSaved }) => {
   const [aiSummary, setAiSummary] = useState(null);
   const [shareRecapOpen, setShareRecapOpen] = useState(false);
   const [recapShareToken, setRecapShareToken] = useState(null);
+
+  // Pre-bucket players by their `team` field so the per-event Player dropdown
+  // doesn't re-filter the full roster on every keystroke / render.
+  const playersByTeam = useMemo(() => {
+    const buckets = { all: players || [] };
+    for (const p of (players || [])) {
+      const key = p.team || '__none__';
+      buckets[key] = buckets[key] || [];
+      buckets[key].push(p);
+    }
+    return buckets;
+  }, [players]);
+  const playersForEvent = (eventTeam) => (eventTeam ? (playersByTeam[eventTeam] || []) : playersByTeam.all);
 
   /**
    * Live-match logging helper: a single tap on the Home/Away Goal buttons bumps
@@ -73,7 +86,13 @@ const ManualResultForm = ({ match, players, onSaved }) => {
       } else {
         setExisting(null);
       }
-    } catch { /* 404 = none yet */ }
+    } catch (err) {
+      // Expected: 404 when there's no manual_result yet — quietly ignore.
+      // Surface anything else for debuggability.
+      if (err.response?.status !== 404) {
+        console.warn('[manual-result] could not preload existing result:', err);
+      }
+    }
     // Load any existing AI summary so we don't re-generate on every page load
     if (match.insights?.summary) setAiSummary(match.insights.summary);
     // Track pre-existing share token so the Share button reflects current state
@@ -424,7 +443,7 @@ const ManualResultForm = ({ match, players, onSaved }) => {
                   <select value={ev.player_id || ''} onChange={(e) => updateEvent(i, { player_id: e.target.value })} aria-label="Player"
                     className="col-span-2 sm:col-span-2 min-w-0 bg-[#141414] border border-white/10 text-white px-2 py-2 text-xs focus:border-[#60A5FA] focus:outline-none">
                     <option value="">Player (opt)</option>
-                    {(players || []).filter((p) => !ev.team || p.team === ev.team).map((p) => (
+                    {playersForEvent(ev.team).map((p) => (
                       <option key={p.id} value={p.id}>#{p.number || '?'} {p.name}</option>
                     ))}
                   </select>

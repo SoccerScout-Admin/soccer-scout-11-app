@@ -56,7 +56,7 @@ const SpokenSummaryPanel = ({ matchId, hasVoiceKeyMoments, onSummaryUpdated }) =
   const stopRecording = () => {
     if (!recording || !recRef.current) return;
     setRecording(false);
-    try { recRef.current.stop(); } catch { /* noop */ }
+    try { recRef.current.stop(); } catch (err) { console.warn('[spoken-summary] recorder.stop() failed:', err); }
   };
 
   const uploadRecap = async (blob, mimeType) => {
@@ -126,7 +126,7 @@ const SpokenSummaryPanel = ({ matchId, hasVoiceKeyMoments, onSummaryUpdated }) =
       await navigator.clipboard.writeText(reelShareUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
-    } catch { /* noop */ }
+    } catch (err) { console.warn('[spoken-summary] clipboard.writeText failed:', err); }
   };
 
   return (

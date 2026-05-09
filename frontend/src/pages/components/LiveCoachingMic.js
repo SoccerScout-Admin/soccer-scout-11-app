@@ -37,7 +37,7 @@ const LiveCoachingMic = ({
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
-    } catch { /* noop */ }
+    } catch (err) { console.warn('[live-coaching] cleanup recorder.stop() failed:', err); }
   }, []);
 
   const computeTimestamp = useCallback(() => {
@@ -99,7 +99,7 @@ const LiveCoachingMic = ({
   const stopRecording = () => {
     if (!recording || !mediaRecorderRef.current) return;
     setRecording(false);
-    try { mediaRecorderRef.current.stop(); } catch { /* noop */ }
+    try { mediaRecorderRef.current.stop(); } catch (err) { console.warn('[live-coaching] recorder.stop() failed:', err); }
   };
 
   const uploadAndProcess = async (blob, mimeType) => {

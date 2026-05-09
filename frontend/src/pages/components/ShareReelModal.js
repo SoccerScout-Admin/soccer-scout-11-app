@@ -41,7 +41,8 @@ const ShareReelModal = ({
           params: q ? { q } : {},
         });
         setSuggestions(res.data);
-      } catch {
+      } catch (err) {
+        console.warn('[share-reel] fetch mentionable coaches failed:', err);
         setSuggestions([]);
       } finally {
         setLoadingSuggestions(false);

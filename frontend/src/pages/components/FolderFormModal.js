@@ -1,6 +1,13 @@
+import { useMemo } from 'react';
 import { Lock, LockOpen } from '@phosphor-icons/react';
 
 const FolderFormModal = ({ open, onClose, onSubmit, folderFormData, setFolderFormData, editingFolder, folders }) => {
+  // Filter out the folder being edited so it can't be its own parent.
+  // Memoised so the dropdown doesn't recompute on every keystroke in name field.
+  const parentOptions = useMemo(
+    () => (folders || []).filter(f => f.id !== editingFolder?.id),
+    [folders, editingFolder?.id],
+  );
   if (!open) return null;
   return (
     <div className="fixed inset-0 bg-black/80 overflow-y-auto z-50 p-4 sm:p-6" data-testid="folder-modal">
@@ -23,7 +30,7 @@ const FolderFormModal = ({ open, onClose, onSubmit, folderFormData, setFolderFor
               onChange={(e) => setFolderFormData({ ...folderFormData, parent_id: e.target.value || null })}
               className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none">
               <option value="">None (Root level)</option>
-              {folders.filter(f => f.id !== editingFolder?.id).map(f => (
+              {parentOptions.map(f => (
                 <option key={f.id} value={f.id}>{f.name}</option>
               ))}
             </select>

@@ -87,14 +87,14 @@ export const unsubscribeFromPush = async () => {
   const endpoint = sub.endpoint;
   try {
     await sub.unsubscribe();
-  } catch { /* noop */ }
+  } catch (err) { console.warn('[push] sub.unsubscribe() failed:', err); }
   try {
     await axios.post(
       `${API}/push/unsubscribe`,
       { endpoint },
       { headers: getAuthHeader() }
     );
-  } catch { /* noop */ }
+  } catch (err) { console.warn('[push] /push/unsubscribe API call failed:', err); }
 };
 
 export const sendTestPush = async () => {

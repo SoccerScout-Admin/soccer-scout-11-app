@@ -109,8 +109,11 @@ async def compute_benchmarks(user_id: str | None = None) -> dict:
     clips_by_coach.sort()
     markers_by_coach.sort()
 
-    avg = lambda xs: round(sum(xs) / len(xs), 1) if xs else 0
-    median = lambda xs: xs[len(xs) // 2] if xs else 0
+    def _avg(xs):
+        return round(sum(xs) / len(xs), 1) if xs else 0
+
+    def _median(xs):
+        return xs[len(xs) // 2] if xs else 0
 
     # Position distribution platform-wide
     position_counts: Counter = Counter()
@@ -190,9 +193,9 @@ async def compute_benchmarks(user_id: str | None = None) -> dict:
             "markers": total_markers,
         },
         "distributions": {
-            "matches_per_coach": {"avg": avg(matches_by_coach), "median": median(matches_by_coach)},
-            "clips_per_coach": {"avg": avg(clips_by_coach), "median": median(clips_by_coach)},
-            "markers_per_coach": {"avg": avg(markers_by_coach), "median": median(markers_by_coach)},
+            "matches_per_coach": {"avg": _avg(matches_by_coach), "median": _median(matches_by_coach)},
+            "clips_per_coach": {"avg": _avg(clips_by_coach), "median": _median(clips_by_coach)},
+            "markers_per_coach": {"avg": _avg(markers_by_coach), "median": _median(markers_by_coach)},
         },
         "you": {
             "teams": my_teams,

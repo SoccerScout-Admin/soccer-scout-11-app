@@ -71,15 +71,10 @@ class TestClipTaggingAndProfile:
         # Get current player_ids to restore later
         prof = requests.get(f"{BASE_URL}/api/players/{PLAYER_ID}/profile", headers=auth_headers)
         assert prof.status_code == 200, prof.text
-        profile_before = prof.json()
-        clips_before_ids = {c["id"] for c in profile_before["clips"]}
+        # We just need to ensure the profile was reachable; specific clip IDs
+        # are checked further below after the PATCH.
+        prof.json()
 
-        # Get current clip's player_ids
-        # (Use the list-all-clips endpoint via auth)
-        # We'll just patch and check appearance.
-        original_player_ids = None
-        # Pull current clip via the teams/clips (we can do via /api/clips?? - fall back: read from clips collection through match)
-        # Simpler: PATCH to the known state then revert.
         # First: make sure PLAYER_ID is tagged -> should appear in profile
         patch = requests.patch(
             f"{BASE_URL}/api/clips/{CLIP_ID}",

@@ -47,7 +47,9 @@ const ScoutingPacketModal = ({ open, onClose, playerId, playerName }) => {
           const text = await err.response.data.text();
           const parsed = JSON.parse(text);
           msg = parsed.detail || msg;
-        } catch { /* swallow, fall back to generic message */ }
+        } catch (parseErr) {
+          console.warn('[scouting-packet] could not parse blob error response:', parseErr);
+        }
       }
       setError(msg);
     } finally {

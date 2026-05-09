@@ -241,72 +241,48 @@ async def mark_thread_read(thread_id: str, current_user: dict = Depends(get_curr
 
 # ---------- express interest ----------
 
-@router.post("/scout-listings/{listing_id}/express-interest")
-async def express_interest(
-    listing_id: str,
-    body: ExpressInterestRequest,
-    current_user: dict = Depends(get_current_user),
-):
-    """Coach reaches out to a scout's listing.
+async def _resolve_dossier_url(
+    share_token: Optional[str], owner_user_id: str
+) -> Optional[str]:
+    """Verify the dossier belongs to the caller, then build the public URL.
 
-    Side-effects:
-    1. Opens (or reuses) an in-app message thread between coach and scout.
-    2. Appends the coach's message to the thread.
-    3. Emails the scout a pre-formatted notification with the thread link
-       and (optionally) the player dossier share URL.
-
-    The combo gives scouts immediate signal in their inbox AND a permanent
-    in-app thread to continue the conversation.
+    Returns None if no token was supplied. Raises 404 for bogus / cross-user
+    tokens — kept identical to the previous error message so callers don't
+    break.
     """
-    listing = await db.scout_listings.find_one(
-        {"id": listing_id}, {"_id": 0, "id": 1, "user_id": 1, "school_name": 1}
+    if not share_token:
+        return None
+    player = await db.players.find_one(
+        {"share_token": share_token, "user_id": owner_user_id},
+        {"_id": 0, "id": 1, "name": 1},
     )
-    if not listing:
-        raise HTTPException(status_code=404, detail="Listing not found")
-    if listing["user_id"] == current_user["id"]:
-        raise HTTPException(status_code=400, detail="You can't send interest to your own listing.")
-
-    scout = await db.users.find_one(
-        {"id": listing["user_id"]}, {"_id": 0, "id": 1, "name": 1, "email": 1}
-    )
-    if not scout:
-        raise HTTPException(status_code=404, detail="Listing owner not found")
-
-    full_message = body.message.strip()
-    dossier_url: Optional[str] = None
-    if body.player_dossier_share_token:
-        # Verify the dossier exists and is shared by the caller.
-        player = await db.players.find_one(
-            {
-                "share_token": body.player_dossier_share_token,
-                "user_id": current_user["id"],
-            },
-            {"_id": 0, "id": 1, "name": 1},
+    if not player:
+        raise HTTPException(
+            status_code=404,
+            detail="Player dossier not found or not yours to share.",
         )
-        if not player:
-            raise HTTPException(
-                status_code=404,
-                detail="Player dossier not found or not yours to share.",
-            )
-        base = _public_app_url()
-        dossier_url = f"{base}/player/{body.player_dossier_share_token}" if base else f"/player/{body.player_dossier_share_token}"
-        full_message += f"\n\n— View player dossier: {dossier_url}"
-
-    # Open / reuse thread + append message
-    topic = f"Interest: {listing['school_name']}"
-    thread = await _find_or_create_thread(current_user["id"], listing["user_id"], topic)
-    await _append_message(
-        thread["id"], current_user["id"], listing["user_id"], full_message,
-    )
-
-    # Email the scout
     base = _public_app_url()
-    inbox_url = f"{base}/messages/{thread['id']}" if base else f"/messages/{thread['id']}"
-    safe_name = html.escape(current_user.get("name", "A coach"))
-    safe_school = html.escape(listing["school_name"])
-    safe_message = html.escape(body.message.strip()).replace("\n", "<br/>")
+    return f"{base}/player/{share_token}" if base else f"/player/{share_token}"
+
+
+def _build_interest_email_html(
+    school_name: str,
+    coach_name: str,
+    raw_message: str,
+    inbox_url: str,
+    dossier_url: Optional[str],
+) -> str:
+    """Render the scout-notification email body."""
+    safe_name = html.escape(coach_name or "A coach")
+    safe_school = html.escape(school_name)
+    safe_message = html.escape(raw_message).replace("\n", "<br/>")
     safe_dossier = html.escape(dossier_url, quote=True) if dossier_url else None
-    email_html = f"""<!DOCTYPE html>
+    safe_inbox = html.escape(inbox_url, quote=True)
+    dossier_block = (
+        f'<p style="margin:18px 0 0 0;font-size:13px;color:#10B981;">'
+        f'<a href="{safe_dossier}" style="color:#10B981;text-decoration:none;">📎 View player dossier →</a></p>'
+    ) if safe_dossier else ""
+    return f"""<!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#0A0A0A;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#EAEAEA;">
 <table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:40px 16px;">
@@ -318,10 +294,10 @@ async def express_interest(
     <tr><td style="padding:8px 32px 8px 32px;">
       <p style="margin:0 0 12px 0;font-size:15px;line-height:1.6;color:#CFCFCF;"><strong style="color:#fff;">{safe_name}</strong> sent you a message about your listing.</p>
       <div style="margin:18px 0;padding:18px;background:#0A0A0A;border-left:3px solid #10B981;font-size:14px;line-height:1.7;color:#EAEAEA;">{safe_message}</div>
-      {('<p style="margin:18px 0 0 0;font-size:13px;color:#10B981;"><a href="' + safe_dossier + '" style="color:#10B981;text-decoration:none;">📎 View player dossier →</a></p>') if safe_dossier else ''}
+      {dossier_block}
     </td></tr>
     <tr><td style="padding:24px 32px;">
-      <a href="{html.escape(inbox_url, quote=True)}" style="display:inline-block;background:#10B981;color:#ffffff;padding:14px 28px;text-decoration:none;font-weight:700;font-size:13px;letter-spacing:1.5px;text-transform:uppercase;">Reply in App →</a>
+      <a href="{safe_inbox}" style="display:inline-block;background:#10B981;color:#ffffff;padding:14px 28px;text-decoration:none;font-weight:700;font-size:13px;letter-spacing:1.5px;text-transform:uppercase;">Reply in App →</a>
     </td></tr>
     <tr><td style="padding:18px 32px;border-top:1px solid rgba(255,255,255,0.06);font-size:11px;color:#666;line-height:1.5;">
       Soccer Scout 11 · You receive this because you posted a recruiting listing.
@@ -329,6 +305,64 @@ async def express_interest(
   </table>
 </td></tr></table>
 </body></html>"""
+
+
+async def _record_contact_click_view(listing_id: str, user_id: str) -> None:
+    """Counts toward the listing's contact_clicks_7d metric and weekly digest."""
+    await db.scout_listing_views.insert_one({
+        "listing_id": listing_id,
+        "viewer_key": f"u:{user_id}",
+        "viewer_user_id": user_id,
+        "event": "contact_click",
+        "viewed_at": _now_iso(),
+    })
+
+
+@router.post("/scout-listings/{listing_id}/express-interest")
+async def express_interest(
+    listing_id: str,
+    body: ExpressInterestRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Coach reaches out to a scout's listing.
+
+    Side-effects:
+      1. Open (or reuse) an in-app message thread between coach and scout.
+      2. Append the coach's message (with optional dossier link) to the thread.
+      3. Email the scout a pre-formatted notification with the thread link
+         and (optionally) the player dossier share URL.
+      4. Record a `contact_click` view for the digest metric.
+    """
+    listing = await db.scout_listings.find_one(
+        {"id": listing_id}, {"_id": 0, "id": 1, "user_id": 1, "school_name": 1},
+    )
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    if listing["user_id"] == current_user["id"]:
+        raise HTTPException(status_code=400, detail="You can't send interest to your own listing.")
+
+    scout = await db.users.find_one(
+        {"id": listing["user_id"]}, {"_id": 0, "id": 1, "name": 1, "email": 1},
+    )
+    if not scout:
+        raise HTTPException(status_code=404, detail="Listing owner not found")
+
+    dossier_url = await _resolve_dossier_url(body.player_dossier_share_token, current_user["id"])
+    full_message = body.message.strip()
+    if dossier_url:
+        full_message += f"\n\n— View player dossier: {dossier_url}"
+
+    thread = await _find_or_create_thread(
+        current_user["id"], listing["user_id"], f"Interest: {listing['school_name']}",
+    )
+    await _append_message(thread["id"], current_user["id"], listing["user_id"], full_message)
+
+    base = _public_app_url()
+    inbox_url = f"{base}/messages/{thread['id']}" if base else f"/messages/{thread['id']}"
+    email_html = _build_interest_email_html(
+        listing["school_name"], current_user.get("name", "A coach"),
+        body.message.strip(), inbox_url, dossier_url,
+    )
     try:
         await send_or_queue(
             to_email=scout["email"],
@@ -344,14 +378,7 @@ async def express_interest(
     except Exception as e:
         logger.warning("[express_interest] email send failed: %s", e)
 
-    # Track the contact-click event (counts toward weekly digest)
-    await db.scout_listing_views.insert_one({
-        "listing_id": listing_id,
-        "viewer_key": f"u:{current_user['id']}",
-        "viewer_user_id": current_user["id"],
-        "event": "contact_click",
-        "viewed_at": _now_iso(),
-    })
+    await _record_contact_click_view(listing_id, current_user["id"])
 
     return {
         "status": "sent",

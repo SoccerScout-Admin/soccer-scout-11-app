@@ -157,11 +157,11 @@ def test_public_feed_hides_unverified_by_default(scout_user):
     try:
         r = requests.get(f"{BASE_URL}/api/scout-listings")
         assert r.status_code == 200
-        ids = [l["id"] for l in r.json()]
+        ids = [listing["id"] for listing in r.json()]
         assert listing["id"] not in ids
 
         r = requests.get(f"{BASE_URL}/api/scout-listings?verified_only=false")
-        ids = [l["id"] for l in r.json()]
+        ids = [listing_row["id"] for listing_row in r.json()]
         assert listing["id"] in ids
     finally:
         _delete_listing(scout_user["headers"], listing["id"])
@@ -176,7 +176,7 @@ def test_public_feed_redacts_contact_fields(scout_user, admin_user):
         )
         r = requests.get(f"{BASE_URL}/api/scout-listings")
         assert r.status_code == 200
-        mine = [l for l in r.json() if l["id"] == listing["id"]]
+        mine = [row for row in r.json() if row["id"] == listing["id"]]
         assert len(mine) == 1
         card = mine[0]
         assert "contact_email" not in card
@@ -236,7 +236,7 @@ def test_filters_apply_correctly(scout_user, admin_user):
         ):
             r = requests.get(f"{BASE_URL}/api/scout-listings?{params}")
             assert r.status_code == 200
-            ids = [l["id"] for l in r.json()]
+            ids = [row["id"] for row in r.json()]
             assert listing["id"] in ids, f"expected match for {params}"
         # Negative matches
         for params in (
@@ -246,7 +246,7 @@ def test_filters_apply_correctly(scout_user, admin_user):
             "region=Pacific Northwest Nowhere",
         ):
             r = requests.get(f"{BASE_URL}/api/scout-listings?{params}")
-            ids = [l["id"] for l in r.json()]
+            ids = [row["id"] for row in r.json()]
             assert listing["id"] not in ids, f"should not match {params}"
     finally:
         _delete_listing(scout_user["headers"], listing["id"])
@@ -314,7 +314,7 @@ def test_admin_list_pending_queue(scout_user, admin_user):
             headers=admin_user["headers"],
         )
         assert r.status_code == 200
-        ids = [l["id"] for l in r.json()]
+        ids = [row["id"] for row in r.json()]
         assert listing["id"] in ids
     finally:
         _delete_listing(scout_user["headers"], listing["id"])
