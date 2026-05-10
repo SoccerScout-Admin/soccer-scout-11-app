@@ -35,7 +35,7 @@ const AnnotationsSidebar = ({ annotations, players, onDelete, onSeek }) => (
               <p className="text-xs text-[#CCC] mt-1.5">{ann.content}</p>
               {player && (
                 <span className="inline-flex items-center gap-1 mt-1 text-[10px] text-[#007AFF] bg-[#007AFF]/10 px-1.5 py-0.5 rounded">
-                  #{player.number || '?'} {player.name}
+                  #{player.number ?? '?'} {player.name}
                 </span>
               )}
               <button data-testid={`seek-annotation-${ann.id}-btn`} onClick={() => onSeek(ann.timestamp)}

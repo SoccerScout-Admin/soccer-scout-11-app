@@ -69,6 +69,7 @@ from routes.scouting_packets import router as scouting_packets_router
 from routes.password_reset import router as password_reset_router
 from routes.scout_listings import router as scout_listings_router
 from routes.messaging import router as messaging_router
+from routes.highlight_reels import router as highlight_reels_router
 
 # ===== Storage: Delegated to services/storage.py =====
 # All storage primitives (create_storage_session, init_storage, put_object_sync,
@@ -1741,7 +1742,7 @@ _pp_api.include_router(player_profile_router)
 app.include_router(_pp_api)
 
 # Mount Folders, Matches, Annotations, Analysis, Insights (CRUD-style routers)
-for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router, videos_router, annotation_templates_router, coach_pulse_router, push_notifications_router, voice_annotations_router, spoken_summary_router, admin_router, scouting_packets_router, password_reset_router, scout_listings_router, messaging_router):
+for r in (folders_router, matches_router, annotations_router, analysis_router, insights_router, season_trends_router, player_trends_router, coach_network_router, videos_router, annotation_templates_router, coach_pulse_router, push_notifications_router, voice_annotations_router, spoken_summary_router, admin_router, scouting_packets_router, password_reset_router, scout_listings_router, messaging_router, highlight_reels_router):
     _api = APIRouter(prefix="/api")
     _api.include_router(r)
     app.include_router(_api)

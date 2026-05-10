@@ -1,12 +1,14 @@
 import { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import { API } from '../App';
 import { User, Lock, Envelope } from '@phosphor-icons/react';
 import '../styles/logo-intro.css';
 
 const AuthPage = ({ setIsAuthenticated }) => {
-  const [isLogin, setIsLogin] = useState(true);
+  const location = useLocation();
+  const initialMode = new URLSearchParams(location.search).get('mode');
+  const [isLogin, setIsLogin] = useState(initialMode !== 'register');
   const [showForgot, setShowForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotSent, setForgotSent] = useState(false);
@@ -49,7 +51,7 @@ const AuthPage = ({ setIsAuthenticated }) => {
         id: u.id, name: u.name, role: u.role,
       }));
       setIsAuthenticated(true);
-      navigate('/');
+      navigate('/dashboard');
     } catch (err) {
       setError(err.response?.data?.detail || 'Authentication failed');
     } finally {

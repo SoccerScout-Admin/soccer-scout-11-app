@@ -4,6 +4,7 @@
  * `videoMeta` / `processing_status` shape that `/api/videos/{id}/processing-status`
  * returns.
  */
+import { useEffect, useRef, useState } from 'react';
 import { useProcessingEta } from './hooks/useProcessingEta';
 
 const STEPS = [
@@ -12,6 +13,42 @@ const STEPS = [
   { key: 'highlights', label: 'Highlights' },
   { key: 'timeline_markers', label: 'Timeline Markers' },
 ];
+
+// Rotating flavor messages keyed to the active analysis. Pure presentation —
+// makes the wait feel less static. Mirrors the wireframe's "real-time status
+// updates" feed without needing a backend log table.
+const STATUS_FLAVOR = {
+  tactical: [
+    'Tracking ball trajectory…',
+    'Identifying formations…',
+    'Detecting pressing triggers…',
+    'Mapping defensive line…',
+    'Analyzing transition moments…',
+  ],
+  player_performance: [
+    'Detecting player movements…',
+    'Calculating heat maps…',
+    'Tracking individual touches…',
+    'Scoring decision-making…',
+    'Rating off-ball runs…',
+  ],
+  highlights: [
+    'Scanning for goal attempts…',
+    'Detecting key passes…',
+    'Picking standout moments…',
+    'Clipping highlight sequences…',
+  ],
+  timeline_markers: [
+    'Placing event markers…',
+    'Auto-tagging goals & saves…',
+    'Indexing timeline by player…',
+    'Finalising markers…',
+  ],
+  queued: [
+    'Queued — waiting for an AI slot…',
+    'Preparing video chunks…',
+  ],
+};
 
 const StepIcon = ({ done, current, failed }) => {
   if (done) {
@@ -37,15 +74,44 @@ const StepIcon = ({ done, current, failed }) => {
 
 const ProcessingProgressBar = ({ videoMeta, onRetry }) => {
   const eta = useProcessingEta(videoMeta);
+  const [statusFeed, setStatusFeed] = useState([]);
+  const feedRef = useRef(null);
+
+  const status = videoMeta?.processing_status;
+  const current = videoMeta?.processing_current;
+  const isActive = status === 'processing' || status === 'queued';
+
+  // Rotate flavor messages while processing — pushes a new one every 3s.
+  useEffect(() => {
+    if (!isActive) { setStatusFeed([]); return undefined; }
+    const key = current && STATUS_FLAVOR[current] ? current : (status === 'queued' ? 'queued' : 'tactical');
+    const pool = STATUS_FLAVOR[key] || STATUS_FLAVOR.tactical;
+    let idx = 0;
+    const pushOne = () => {
+      const msg = pool[idx % pool.length];
+      idx += 1;
+      setStatusFeed((prev) => {
+        const next = [...prev, { id: Date.now() + Math.random(), msg }];
+        return next.slice(-8);
+      });
+    };
+    pushOne();
+    const id = setInterval(pushOne, 3000);
+    return () => clearInterval(id);
+  }, [isActive, current, status]);
+
+  // Keep feed scrolled to bottom
+  useEffect(() => {
+    if (feedRef.current) {
+      feedRef.current.scrollTop = feedRef.current.scrollHeight;
+    }
+  }, [statusFeed]);
 
   if (!videoMeta || !videoMeta.processing_status) return null;
 
-  const status = videoMeta.processing_status;
   const pct = Math.max(0, Math.min(100, videoMeta.processing_progress || 0));
-  const current = videoMeta.processing_current;
   const completed = videoMeta.completed_types || [];
   const failed = videoMeta.failed_types || [];
-  const isActive = status === 'processing' || status === 'queued';
   const isFailed = status === 'failed';
 
   if (!isActive && !isFailed) return null;  // completed → don't render
@@ -128,6 +194,25 @@ const ProcessingProgressBar = ({ videoMeta, onRetry }) => {
           );
         })}
       </div>
+
+      {isActive && statusFeed.length > 0 && (
+        <div data-testid="processing-status-feed" className="mt-5 bg-[#050505] border border-white/5 p-3 sm:p-4">
+          <p className="text-[10px] tracking-[0.3em] uppercase font-bold text-[#A3A3A3] mb-2">
+            Real-time status updates
+          </p>
+          <div ref={feedRef} className="space-y-1.5 max-h-32 overflow-y-auto pr-1 font-mono text-[11px] leading-snug">
+            {statusFeed.map((entry, idx) => {
+              const isLatest = idx === statusFeed.length - 1;
+              return (
+                <div key={entry.id} className={`flex items-center gap-2 ${isLatest ? 'text-[#7AA2D4]' : 'text-[#555]'}`}>
+                  <span className="text-[#10B981]">›</span>
+                  <span className="truncate">{entry.msg}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

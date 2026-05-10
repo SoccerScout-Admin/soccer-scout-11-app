@@ -104,7 +104,7 @@ const AddPlayerForm = ({ match, teams, playerForm, setPlayerForm, onSubmit, onCa
 
 const PlayerGroup = ({ group, onDelete }) => {
   // Non-mutating sort — avoids reordering the caller's players array on every render.
-  const sortedPlayers = [...group.players].sort((a, b) => (a.number || 99) - (b.number || 99));
+  const sortedPlayers = [...group.players].sort((a, b) => (a.number ?? 999) - (b.number ?? 999));
   return (
   <div>
     <div className="flex items-center gap-2 mb-3">
@@ -119,7 +119,7 @@ const PlayerGroup = ({ group, onDelete }) => {
           className="flex items-center gap-3 bg-[#0A0A0A] border border-white/5 px-4 py-3 group hover:border-white/10 transition-colors">
           <div className="w-8 h-8 flex items-center justify-center text-sm font-bold"
             style={{ backgroundColor: group.color + '20', color: group.color }}>
-            {player.number || '—'}
+            {player.number ?? '—'}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm text-white font-medium truncate">{player.name}</p>

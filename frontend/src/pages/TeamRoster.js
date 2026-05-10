@@ -56,7 +56,7 @@ const TeamRoster = () => {
       await axios.post(`${API}/players`, {
         team_id: teamId,
         name: playerForm.name,
-        number: playerForm.number ? parseInt(playerForm.number) : null,
+        number: playerForm.number !== '' ? parseInt(playerForm.number) : null,
         position: playerForm.position,
         team: team?.name || ''
       }, { headers: getAuthHeader() });
@@ -159,7 +159,7 @@ const TeamRoster = () => {
   };
 
   const sortedPlayers = useMemo(() =>
-    [...players].sort((a, b) => (a.number || 99) - (b.number || 99)),
+    [...players].sort((a, b) => (a.number ?? 999) - (b.number ?? 999)),
     [players]
   );
 
@@ -325,7 +325,7 @@ const TeamRoster = () => {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-2xl font-bold text-[#007AFF]" style={{ fontFamily: 'Bebas Neue' }}>
-                            {player.number || '—'}
+                            {player.number ?? '—'}
                           </span>
                           <h3 className="text-base font-semibold text-white truncate">{player.name}</h3>
                         </div>

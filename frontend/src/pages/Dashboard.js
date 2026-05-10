@@ -12,6 +12,7 @@ import CreateMatchModal from './components/CreateMatchModal';
 import FolderFormModal from './components/FolderFormModal';
 import ShareFolderModal from './components/ShareFolderModal';
 import BulkActionBar from './components/BulkActionBar';
+import QuickActionsRow from './components/QuickActionsRow';
 
 const Dashboard = () => {
   const [matches, setMatches] = useState([]);
@@ -335,6 +336,7 @@ const Dashboard = () => {
 
           {!selectionMode && (
             <>
+              <QuickActionsRow onCreate={() => setShowCreateModal(true)} />
               <GameOfTheWeekBanner />
               <CoachPulseCard />
               <button data-testid="coach-network-cta-card" onClick={() => navigate('/coach-network')}

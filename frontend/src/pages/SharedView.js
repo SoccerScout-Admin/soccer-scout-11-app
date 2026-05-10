@@ -175,9 +175,9 @@ const SharedView = () => {
                             <Users size={14} /> Roster ({players.length})
                           </h4>
                           <div className="flex flex-wrap gap-2">
-                            {[...players].sort((a, b) => (a.number || 99) - (b.number || 99)).map(p => (
+                            {[...players].sort((a, b) => (a.number ?? 999) - (b.number ?? 999)).map(p => (
                               <span key={p.id} className="inline-flex items-center gap-1.5 bg-white/5 px-3 py-1.5 text-xs text-[#CCC]">
-                                <span className="text-[#007AFF] font-bold">#{p.number || '?'}</span>
+                                <span className="text-[#007AFF] font-bold">#{p.number ?? '?'}</span>
                                 {p.name}
                                 {p.position && <span className="text-[#666]">({p.position})</span>}
                               </span>
@@ -231,7 +231,7 @@ const SharedView = () => {
                               const player = players?.find(p => p.id === pid);
                               return player ? (
                                 <span key={pid} className="text-[9px] text-[#007AFF] bg-[#007AFF]/10 px-1 py-0.5 rounded">
-                                  #{player.number || '?'} {player.name}
+                                  #{player.number ?? '?'} {player.name}
                                 </span>
                               ) : null;
                             })}

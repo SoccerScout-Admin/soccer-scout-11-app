@@ -115,7 +115,7 @@ const MatchDetail = () => {
       const payload = {
         match_id: matchId,
         name: playerForm.name,
-        number: playerForm.number ? parseInt(playerForm.number) : null,
+        number: playerForm.number !== '' ? parseInt(playerForm.number) : null,
         position: playerForm.position,
         team: playerForm.team || match?.team_home || ''
       };
@@ -344,6 +344,8 @@ const MatchDetail = () => {
         </div>
 
         <ProcessingProgressBar videoMeta={videoMeta} onRetry={handleReprocessVideo} />
+
+        {match.video_id && <HighlightReelsPanel matchId={matchId} />}
 
         <DeletedVideosDrawer open={showDeletedDrawer} deletedVideos={deletedVideos}
           onClose={() => setShowDeletedDrawer(false)} onRestore={handleRestoreVideo} />

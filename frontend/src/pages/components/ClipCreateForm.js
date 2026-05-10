@@ -67,7 +67,7 @@ const ClipCreateForm = ({
                   className={`px-2 py-1 text-[10px] font-medium transition-colors ${
                     isSelected ? 'bg-[#007AFF] text-white' : 'bg-white/5 text-[#888] hover:text-white hover:bg-white/10'
                   }`}>
-                  #{p.number || '?'} {p.name}
+                  #{p.number ?? '?'} {p.name}
                 </button>
               );
             })}

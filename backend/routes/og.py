@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 from db import db
-from services.og_card import render_folder_card, render_clip_card, render_player_card, render_match_recap_card, render_scout_listing_card
+from services.og_card import render_folder_card, render_clip_card, render_player_card, render_match_recap_card, render_scout_listing_card, render_highlight_reel_card
 from services.storage import get_object_sync
 
 router = APIRouter()
@@ -270,6 +270,82 @@ async def get_public_match_recap(share_token: str):
         "key_events": mr.get("key_events", []),
         "finished_at": mr.get("finished_at"),
     }
+
+
+
+# ===== Highlight Reel OG =====
+
+@router.get("/og/highlight-reel/{share_token}")
+async def og_highlight_reel(share_token: str, request: Request):
+    """OG HTML for a shared highlight reel — crawler unfurl previews."""
+    reel = await db.highlight_reels.find_one(
+        {"share_token": share_token}, {"_id": 0},
+    )
+    if not reel:
+        return HTMLResponse(
+            "<html><body><h1>Reel Unavailable</h1></body></html>",
+            status_code=404,
+        )
+    match = await db.matches.find_one(
+        {"id": reel["match_id"]},
+        {"_id": 0, "team_home": 1, "team_away": 1, "competition": 1, "manual_result": 1},
+    )
+    owner = await db.users.find_one(
+        {"id": reel["user_id"]}, {"_id": 0, "name": 1},
+    )
+    coach = (owner or {}).get("name", "Coach")
+    team_home = (match or {}).get("team_home", "Home")
+    team_away = (match or {}).get("team_away", "Away")
+    competition = (match or {}).get("competition") or ""
+    title = f"{team_home} vs {team_away} — Match Highlights"
+    duration_min = int(reel.get("duration_seconds", 0)) // 60
+    duration_sec = int(reel.get("duration_seconds", 0)) % 60
+    clip_count = reel.get("total_clips", 0)
+    description = (
+        f"{clip_count}-clip AI-curated highlight reel "
+        f"({duration_min}:{duration_sec:02d}) shared by {coach} on Soccer Scout 11."
+    )
+    if competition:
+        description = f"{competition}. " + description
+    spa_url = f"/reel/{share_token}"
+    image_url = f"{_public_base(request)}/api/og/highlight-reel/{share_token}/image.png"
+    return HTMLResponse(_og_html(title, description, image_url, spa_url))
+
+
+@router.get("/og/highlight-reel/{share_token}/image.png")
+async def og_highlight_reel_image(share_token: str):
+    reel = await db.highlight_reels.find_one(
+        {"share_token": share_token}, {"_id": 0},
+    )
+    if not reel:
+        raise HTTPException(status_code=404, detail="Not found")
+    match = await db.matches.find_one(
+        {"id": reel["match_id"]},
+        {"_id": 0, "team_home": 1, "team_away": 1, "competition": 1, "manual_result": 1},
+    )
+    owner = await db.users.find_one(
+        {"id": reel["user_id"]}, {"_id": 0, "name": 1},
+    )
+    coach = (owner or {}).get("name", "")
+    mr = (match or {}).get("manual_result") or {}
+
+    png = await run_in_threadpool(
+        render_highlight_reel_card,
+        (match or {}).get("team_home", "Home"),
+        (match or {}).get("team_away", "Away"),
+        mr.get("home_score"),
+        mr.get("away_score"),
+        (match or {}).get("competition") or "",
+        reel.get("total_clips", 0),
+        reel.get("duration_seconds", 0.0),
+        coach,
+    )
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
 
 
 

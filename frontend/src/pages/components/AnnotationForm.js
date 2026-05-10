@@ -128,7 +128,7 @@ const AnnotationForm = ({
             className="w-full bg-white/5 rounded-lg text-white px-3 py-2 text-sm border border-white/10 focus:border-[#007AFF] focus:outline-none">
             <option value="">No player</option>
             {players.map((p) => (
-              <option key={p.id} value={p.id}>#{p.number || '?'} {p.name} ({p.team})</option>
+              <option key={p.id} value={p.id}>#{p.number ?? '?'} {p.name} ({p.team})</option>
             ))}
           </select>
         </div>

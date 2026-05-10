@@ -3,6 +3,7 @@ import '@/App.css';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import axios from 'axios';
 import AuthPage from './pages/AuthPage';
+import LandingPage from './pages/LandingPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import Dashboard from './pages/Dashboard';
 import MatchDetail from './pages/MatchDetail';
@@ -17,6 +18,7 @@ import SharedPlayerProfile from './pages/SharedPlayerProfile';
 import SharedClipCollectionView from './pages/SharedClipCollectionView';
 import SharedClubView from './pages/SharedClubView';
 import SharedMatchRecap from './pages/SharedMatchRecap';
+import SharedHighlightReel from './pages/SharedHighlightReel';
 import MatchInsights from './pages/MatchInsights';
 import SeasonTrends from './pages/SeasonTrends';
 import PlayerSeasonTrends from './pages/PlayerSeasonTrends';
@@ -100,6 +102,12 @@ function App() {
           <Route
             path="/"
             element={
+              isAuthenticated ? <Dashboard /> : <LandingPage isAuthenticated={false} />
+            }
+          />
+          <Route
+            path="/dashboard"
+            element={
               <ProtectedRoute>
                 <Dashboard />
               </ProtectedRoute>
@@ -128,6 +136,7 @@ function App() {
           <Route path="/shared-player/:shareToken" element={<SharedPlayerProfile />} />
           <Route path="/shared-club/:shareToken" element={<SharedClubView />} />
           <Route path="/match-recap/:shareToken" element={<SharedMatchRecap />} />
+          <Route path="/reel/:shareToken" element={<SharedHighlightReel />} />
           <Route
             path="/player/:playerId"
             element={

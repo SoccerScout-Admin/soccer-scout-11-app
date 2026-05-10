@@ -274,7 +274,7 @@ const ManualResultForm = ({ match, players, onSaved }) => {
                     {meta.label}
                   </span>
                   {ev.team && <span className="text-xs text-[#A3A3A3] truncate">{ev.team}</span>}
-                  {player && <span className="text-xs text-[#FBBF24]">#{player.number || '?'} {player.name}</span>}
+                  {player && <span className="text-xs text-[#FBBF24]">#{player.number ?? '?'} {player.name}</span>}
                   {ev.description && <span className="text-xs text-[#CCCCCC] truncate">{ev.description}</span>}
                 </div>
               );
@@ -444,7 +444,7 @@ const ManualResultForm = ({ match, players, onSaved }) => {
                     className="col-span-2 sm:col-span-2 min-w-0 bg-[#141414] border border-white/10 text-white px-2 py-2 text-xs focus:border-[#60A5FA] focus:outline-none">
                     <option value="">Player (opt)</option>
                     {playersForEvent(ev.team).map((p) => (
-                      <option key={p.id} value={p.id}>#{p.number || '?'} {p.name}</option>
+                      <option key={p.id} value={p.id}>#{p.number ?? '?'} {p.name}</option>
                     ))}
                   </select>
                   <input type="text" maxLength="120" value={ev.description}

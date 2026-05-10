@@ -56,7 +56,7 @@ const ClipCard = ({
           const player = players.find((p) => p.id === pid);
           return player ? (
             <span key={pid} className="text-[9px] text-[#007AFF] bg-[#007AFF]/10 px-1 py-0.5 rounded">
-              #{player.number || '?'} {player.name}
+              #{player.number ?? '?'} {player.name}
             </span>
           ) : null;
         })}

@@ -719,3 +719,169 @@ def render_match_recap_card(
     out = BytesIO()
     img.save(out, format="PNG", optimize=True)
     return out.getvalue()
+
+
+
+# ===== Highlight Reel — title card (1280x720) =====
+# Used IN-LINE between clips. Bold, high-contrast so it reads at full-frame
+# even on small phone screens.
+
+def render_reel_title_card(
+    title_top: str,
+    title_main: str,
+    title_sub: str,
+    accent_rgb: tuple,
+    width: int = 1280,
+    height: int = 720,
+) -> bytes:
+    """Render an in-reel title card PNG (1280x720 by default).
+
+    Layout:
+      - Solid dark background with a thick left accent bar in `accent_rgb`
+      - Top label in accent color, ALL CAPS (e.g. "GOAL 1 · 23'")
+      - Main line — player name or clip title — huge, auto-shrunk to fit
+      - Sub line — matchup / competition — muted
+      - Soccer Scout 11 brand lockup bottom-right
+    """
+    img = Image.new("RGB", (width, height), (10, 10, 10))
+    # Vertical gradient bg
+    draw = ImageDraw.Draw(img)
+    for y in range(height):
+        t = y / height
+        r = int(15 * (1 - t) + 10 * t)
+        g = int(26 * (1 - t) + 10 * t)
+        b = int(46 * (1 - t) + 10 * t)
+        draw.line([(0, y), (width, y)], fill=(r, g, b))
+
+    # Left accent bar
+    bar_w = max(10, int(width * 0.012))
+    draw.rectangle([(0, 0), (bar_w, height)], fill=accent_rgb)
+
+    pad_x = 80
+    inner_w = width - 2 * pad_x
+
+    # Top tag — small caps in accent color
+    top_font = _load_font(FONT_BOLD, 40)
+    draw.text((pad_x, 90), (title_top or "").upper(), font=top_font, fill=accent_rgb)
+
+    # Main — auto-shrink to fit
+    main_text = (title_main or "").strip() or "—"
+    main_font = _fit_text(draw, main_text, FONT_BOLD, inner_w, start_size=140, min_size=56)
+    draw.text((pad_x, 160), main_text, font=main_font, fill=WHITE)
+    main_bbox = draw.textbbox((pad_x, 160), main_text, font=main_font)
+    main_bottom = main_bbox[3]
+
+    # Sub — matchup / competition
+    if title_sub:
+        sub_font = _fit_text(draw, title_sub, FONT_REG, inner_w, start_size=38, min_size=22)
+        draw.text((pad_x, main_bottom + 24), title_sub, font=sub_font, fill=SUBTLE)
+
+    # Brand lockup bottom-right (scaled down for 720p target)
+    logo = _load_logo_lockup()
+    if logo is not None:
+        target_h = 44
+        ratio = target_h / logo.height
+        scaled = logo.resize((int(logo.width * ratio), target_h), Image.LANCZOS)
+        img.paste(
+            scaled,
+            (width - scaled.width - pad_x, height - scaled.height - 48),
+            scaled,
+        )
+    else:
+        brand_font = _load_font(FONT_BOLD, 20)
+        brand = "SOCCER SCOUT 11"
+        bbox = draw.textbbox((0, 0), brand, font=brand_font)
+        bw = bbox[2] - bbox[0]
+        draw.text((width - bw - pad_x, height - 64), brand, font=brand_font, fill=WHITE)
+
+    out = BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
+# ===== Highlight Reel — OG card for share preview =====
+
+def render_highlight_reel_card(
+    team_home: str,
+    team_away: str,
+    home_score: Optional[int] = None,
+    away_score: Optional[int] = None,
+    competition: str = "",
+    clip_count: int = 0,
+    duration_seconds: float = 0.0,
+    coach_name: str = "",
+) -> bytes:
+    """OG card for a shared highlight reel (1200x630 PNG).
+
+    Layout: dark gradient, blue accent strip, "MATCH HIGHLIGHTS" tag,
+    big team-vs-team title, scoreline (if available), and a footer chip
+    row showing N clips · M min reel.
+    """
+    img = Image.new("RGB", (W, H), BG_BOTTOM)
+    _gradient_bg(img)
+    draw = ImageDraw.Draw(img)
+
+    REEL_ACCENT = (0, 122, 255)  # blue
+    draw.rectangle([(0, 0), (8, H)], fill=REEL_ACCENT)
+
+    # Top label
+    label_font = _load_font(FONT_BOLD, 22)
+    draw.text((64, 56), "MATCH HIGHLIGHTS REEL", font=label_font, fill=REEL_ACCENT)
+
+    # Matchup title
+    matchup = f"{team_home} vs {team_away}".strip()
+    title_font = _fit_text(draw, matchup, FONT_BOLD, W - 200, start_size=78, min_size=38)
+    draw.text((64, 102), matchup, font=title_font, fill=WHITE)
+    title_bbox = draw.textbbox((64, 102), matchup, font=title_font)
+    title_bottom = title_bbox[3]
+
+    # Scoreline if both provided
+    cursor_y = title_bottom + 24
+    if home_score is not None and away_score is not None:
+        score_font = _load_font(FONT_BOLD, 96)
+        score_text = f"{home_score} – {away_score}"
+        draw.text((64, cursor_y), score_text, font=score_font, fill=WHITE)
+        score_bbox = draw.textbbox((64, cursor_y), score_text, font=score_font)
+        cursor_y = score_bbox[3] + 24
+
+    # Meta line — competition · coach
+    meta_parts = []
+    if competition:
+        meta_parts.append(competition)
+    if coach_name:
+        meta_parts.append(f"Coach {coach_name}")
+    if meta_parts:
+        meta_font = _load_font(FONT_REG, 28)
+        draw.text((64, cursor_y), "  •  ".join(meta_parts), font=meta_font, fill=SUBTLE)
+        cursor_y += 44
+
+    # Stats chip row — N clips, M min
+    chip_font = _load_font(FONT_BOLD, 30)
+    chips = []
+    if clip_count > 0:
+        chips.append(f"{clip_count} CLIPS")
+    if duration_seconds > 0:
+        mins = int(duration_seconds) // 60
+        secs = int(duration_seconds) % 60
+        if mins > 0:
+            chips.append(f"{mins}:{secs:02d} REEL")
+        else:
+            chips.append(f"{secs}s REEL")
+    chip_x = 64
+    chip_y = cursor_y + 8
+    for chip in chips:
+        bbox = draw.textbbox((0, 0), chip, font=chip_font)
+        tw = bbox[2] - bbox[0]
+        draw.rectangle(
+            (chip_x, chip_y, chip_x + tw + 32, chip_y + 56),
+            fill=REEL_ACCENT,
+        )
+        draw.text((chip_x + 16, chip_y + 10), chip, font=chip_font, fill=(0, 0, 0))
+        chip_x += tw + 32 + 16
+
+    # Brand lockup
+    _paste_brand_lockup(img)
+
+    out = BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue()

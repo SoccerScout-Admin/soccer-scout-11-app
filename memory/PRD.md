@@ -2,6 +2,41 @@
 
 ## What's Been Implemented
 
+### Auto-Highlight Reel Generator + Landing Page + UX Wireframe Polish (May 10, 2026 — iter30)
+
+**Auto-Highlight Reel Generator (P1 main feature)**:
+- **Backend** (`services/highlight_reel.py`, ~480 lines + `routes/highlight_reels.py`, ~225 lines):
+  - **AI scoring & selection**: goal=100 / save=80 / key_pass=60 / tackle=50 / highlight=50. +10 bonus for tagged players. Greedy fit into MAX 90s budget (4s safety reserve). Overlong clips trimmed to 12s. Min 60s target, MAX_CLIPS=12. Final chronological reorder for narrative flow.
+  - **Title cards**: Pillow renders 1280×720 PNGs per clip — top tag ("GOAL 1 · 23'"), main line (player name or fallback), sub (matchup + competition), color-coded left accent strip. ffmpeg loops PNG to 2.5s static mp4 with silent stereo track for audio-rail uniformity.
+  - **Clip extraction**: reuses chunk reassembly + ffmpeg cut from close_up pipeline. Each clip is scaled+padded to 1280×720 with `force_original_aspect_ratio=decrease + pad` so the concat demuxer never refuses mixed sizes.
+  - **Concat**: intro card → (title card → clip) × N → final mp4 via `ffmpeg -f concat` with libx264/aac re-encode for codec uniformity. Output saved to `/var/video_chunks/reels/{reel_id}.mp4`.
+  - **In-process asyncio worker queue** (one reel at a time, same pattern as close_up_processor).
+  - **Endpoints**: `POST /matches/{id}/highlight-reel` (create + enqueue), `GET /matches/{id}/highlight-reels` (list), `GET /highlight-reels/{id}` (status), `POST /highlight-reels/{id}/share` (toggle public token), `POST /highlight-reels/{id}/retry`, `DELETE`, `GET /highlight-reels/{id}/video` (auth download stream), `GET /highlight-reels/public/{token}` (public JSON), `GET /highlight-reels/public/{token}/video` (public mp4 stream).
+- **OG share card** (`render_highlight_reel_card` in `og_card.py`): 1200×630 PNG with blue accent strip, "MATCH HIGHLIGHTS REEL" label, big team-vs-team title, scoreline chip row showing N clips · M:SS reel duration. `GET /api/og/highlight-reel/{token}` (HTML unfurl) + `.png` variant cached 5min.
+- **Frontend**:
+  - `HighlightReelsPanel.js` (~270 lines) mounted on `MatchDetail` for matches with a video. Generate button (disabled when any reel is in flight) → progress bar with status pill (Queued / Processing N% / Ready / Failed) → per-reel actions: Download mp4, Toggle share, Copy share link, WhatsApp + Twitter share buttons, Delete, Retry. Auto-polls every 5s while any reel is in flight.
+  - `SharedHighlightReel.js` — public SPA route `/reel/:shareToken` with full-width video player, branded hero, score+clip+duration chips. Works unauthenticated.
+- **25 pytest cases** in `test_highlight_reel.py`: pure-logic (score weights, selection budgeting, chronological tie-break, overlong-clip trim, helpers), Pillow renderers (title card + OG card validity), 8 HTTP integration tests (auth required, 404 unknown match, 400 no-clips, share-toggle requires ready, token returns/revokes correctly, OG endpoints render valid PNG + HTML meta tags), 1 end-to-end ffmpeg test that renders an actual mp4 title-card segment and verifies its duration via ffprobe. **All passing. Total suite now 269/269.**
+
+**Landing Page (`/`)**:
+- New public page `LandingPage.js` shown at root when not authenticated (authenticated users get the Dashboard at `/` or `/dashboard`).
+- Hero with "PROFESSIONAL PLAYER ANALYSIS & SCOUTING MADE SIMPLE", twin CTAs (Upload Video / Create Game), top nav with Home / Features / Pricing / About / Contact (smooth-scroll anchors), Log in + Register buttons.
+- Sections: 3 feature cards (Video Analysis / Player Tracking / Performance Reports), beta-free pricing, About (stats grid), Contact (mailto), footer with social icons.
+- AuthPage now reads `?mode=register` query param to open in register mode. Post-login navigation goes to `/dashboard` explicitly.
+
+**UX Wireframe Polish**:
+- **Dashboard `QuickActionsRow`**: two big tap-cards at the top — "New Video Upload" (blue) and "Create Game" (green) — both open the existing create-match modal. Includes "Upload Now" and "Create" CTA chips on desktop.
+- **`UploadPanel` drag & drop**: bigger cloud icon, "DRAG & DROP VIDEO FILES HERE / or click to browse" label, "MP4, MOV, AVI up to 5 GB" format hint, file chip showing name + size during upload, drag-over highlight state.
+- **`ProcessingProgressBar` real-time status feed**: new mono-styled activity log beneath the 4-step grid showing rotating context-aware messages ("Detecting player movements…", "Tracking ball trajectory…", "Placing event markers…") tied to the current AI step. Mirrors the wireframe's "Real-time status updates" panel.
+
+**Bug fix — jersey "0" no longer dashes out**:
+- `playerForm.number ? parseInt(...) : null` was treating `"0"` as falsy → stored as null. Changed to `!== ''` check in `TeamRoster.js` and `MatchDetail.js`.
+- All display paths (`{player.number || '—'}`, `#{p.number || '?'}`) replaced with `??` so 0 renders as `0` not `—` / `?`.
+- All sort comparators (`a.number || 99`) replaced with `a.number ?? 999` so #0 sorts to top of roster, not bottom.
+- 16 frontend files patched. Backend already handles 0 correctly via `int(raw_num)`.
+
+
+
 ### AI Auto-Zoom Highlights — Wide + Close-up Stitched Clips (May 9, 2026 — iter29)
 
 **Goal**: every goal clip (and any user-selected clip) gets a duplicate close-up sibling — same action, AI-cropped tight to the ball/players. The two get stitched into a single mp4 that plays the wide shot then the close-up so coaches can review the play twice.

@@ -161,7 +161,7 @@ const SharedClipView = () => {
                       {p.profile_pic_url && (
                         <img src={`${API.replace('/api', '')}${p.profile_pic_url}`} alt="" className="w-4 h-4 rounded-full object-cover" />
                       )}
-                      #{p.number || '?'} {p.name}
+                      #{p.number ?? '?'} {p.name}
                     </span>
                   ))}
                 </div>
