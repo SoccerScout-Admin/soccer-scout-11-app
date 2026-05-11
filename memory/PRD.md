@@ -2,6 +2,12 @@
 
 ## What's Been Implemented
 
+### Fire-and-Forget View Tracking (iter38 — May 11, 2026)
+
+- **Change** (`routes/highlight_reels.py`): `record_reel_view` is now wrapped in a fire-and-forget `_record_view_safely()` helper invoked via `asyncio.create_task` from the public reel-page handler. Errors are swallowed + logged at WARNING level so view tracking never blocks the share page.
+- **Latency**: bench against the public reel endpoint shows median 3.2ms / p95 5.9ms (was ~50-100ms before — the inline view insert was the slowest path).
+- **Behavioural parity**: 43/43 highlight reel tests pass — view tracking still records exactly when it should, just deferred a few microseconds.
+
 ### Code Review Fixes (iter37 — May 11, 2026)
 
 Did a full audit of iter 30-36 work. Findings & fixes:

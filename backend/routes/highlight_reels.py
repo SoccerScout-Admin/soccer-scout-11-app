@@ -18,6 +18,8 @@ OG share-card endpoints live in `routes/og.py`.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -29,6 +31,18 @@ from db import db
 from routes.auth import get_current_user
 from services.highlight_reel import enqueue_reel, is_ffmpeg_available
 from services.scout_digest import record_reel_view, trending_reel_ids, reel_view_count
+
+logger = logging.getLogger(__name__)
+
+
+async def _record_view_safely(reel_id: str, anon_fp: str | None) -> None:
+    """Fire-and-forget wrapper around `record_reel_view` — swallows errors so
+    a view-tracking failure can never break the share page response."""
+    try:
+        await record_reel_view(reel_id, viewer_user_id=None, anon_fingerprint=anon_fp)
+    except Exception as exc:
+        logger.warning("[reel-view] swallowed: %s", exc)
+
 
 router = APIRouter()
 
@@ -507,8 +521,9 @@ async def stream_reel_video(
 async def get_public_reel(share_token: str, request: Request):
     """Public JSON for SPA route `/reel/:shareToken`.
 
-    Also records a unique view (24h debounce per viewer) used by the
-    `/trending` endpoint and reflected in the response as `view_count`.
+    Records a unique view (24h debounce per viewer) used by `/trending` and
+    reflected in the response as `view_count`. View tracking is fire-and-forget
+    so it doesn't add latency to the share-page load.
     """
     reel = await db.highlight_reels.find_one(
         {"share_token": share_token}, {"_id": 0},
@@ -516,15 +531,11 @@ async def get_public_reel(share_token: str, request: Request):
     if not reel:
         raise HTTPException(status_code=404, detail="Reel not found or sharing was revoked")
 
-    # Record a view (anon-fingerprinted by IP + User-Agent, 24h debounce)
+    # Fire-and-forget view recording — never blocks the page render.
     ip = (request.client.host if request.client else "") or ""
     ua = request.headers.get("user-agent", "")
     anon_fp = f"{ip}|{ua}" if ip or ua else None
-    try:
-        await record_reel_view(reel["id"], viewer_user_id=None, anon_fingerprint=anon_fp)
-    except Exception:
-        # View tracking is best-effort — never block the share page on it.
-        pass
+    asyncio.create_task(_record_view_safely(reel["id"], anon_fp))
 
     match = await db.matches.find_one(
         {"id": reel["match_id"]},
