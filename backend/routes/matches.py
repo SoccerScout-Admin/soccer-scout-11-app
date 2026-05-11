@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta
 import uuid
+import os
 from db import db
 from routes.auth import get_current_user
 
@@ -83,6 +84,32 @@ async def update_match(
     return {"status": "updated"}
 
 
+async def _cascade_delete_reels_for_match(match_id: str, user_id: str) -> None:
+    """Delete all highlight reels (+ disk mp4s + view rows) for a match.
+
+    Reels are owned by the match author, so we cascade them on match delete to
+    avoid orphaned mp4 files in `/var/video_chunks/reels/` and dangling view
+    rows that would otherwise leak into the trending feed.
+    """
+    reels = await db.highlight_reels.find(
+        {"match_id": match_id, "user_id": user_id},
+        {"_id": 0, "id": 1, "output_path": 1},
+    ).to_list(100)
+    if not reels:
+        return
+    reel_ids = [r["id"] for r in reels]
+    for r in reels:
+        out = r.get("output_path")
+        if out and os.path.exists(out):
+            try:
+                os.unlink(out)
+            except OSError:
+                pass
+    await db.highlight_reels.delete_many({"id": {"$in": reel_ids}})
+    await db.highlight_reel_views.delete_many({"reel_id": {"$in": reel_ids}})
+
+
+
 @router.delete("/matches/{match_id}")
 async def delete_match(
     match_id: str, current_user: dict = Depends(get_current_user)
@@ -118,6 +145,11 @@ async def delete_match(
                 "deleted_at": datetime.now(timezone.utc).isoformat(),
             }},
         )
+
+    # Cascade-delete highlight reels (mp4 files + view rows). Done here, not
+    # gated on `video_id`, because a coach could regenerate reels later and we
+    # still want to scrub anything stale.
+    await _cascade_delete_reels_for_match(match_id, current_user["id"])
 
     await db.matches.delete_one({"id": match_id})
     return {"status": "deleted", "id": match_id}
@@ -493,6 +525,8 @@ async def bulk_delete_matches(
             await db.markers.delete_many(
                 {"video_id": m["video_id"], "user_id": current_user["id"]}
             )
+        # Cascade-delete highlight reels for this match (mp4 files + view rows)
+        await _cascade_delete_reels_for_match(m["id"], current_user["id"])
         await db.matches.delete_one({"id": m["id"]})
         deleted_count += 1
 

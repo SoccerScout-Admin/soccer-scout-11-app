@@ -64,6 +64,19 @@ async def create_highlight_reel(
 
     match = await _load_match(match_id, current_user["id"])
 
+    # Per-user concurrent-reel cap — protects the ffmpeg worker queue from
+    # spam (intentional or accidental rapid-fire). 3 in-flight per user is
+    # generous given each reel takes a few minutes to finish.
+    in_flight = await db.highlight_reels.count_documents({
+        "user_id": current_user["id"],
+        "status": {"$in": ["pending", "processing"]},
+    })
+    if in_flight >= 3:
+        raise HTTPException(
+            status_code=429,
+            detail="You already have 3 reels in progress. Wait for at least one to finish before generating another.",
+        )
+
     clip_count = await db.clips.count_documents(
         {"match_id": match_id, "user_id": current_user["id"]},
     )

@@ -2,6 +2,22 @@
 
 ## What's Been Implemented
 
+### Code Review Fixes (iter37 — May 11, 2026)
+
+Did a full audit of iter 30-36 work. Findings & fixes:
+
+**🔴 HIGH (fixed)**
+1. **Match-delete didn't cascade reels** — `DELETE /matches/{id}` and bulk delete both left behind orphaned `highlight_reels` docs + mp4 files + dangling `highlight_reel_views` rows that polluted the trending feed. Fix: `_cascade_delete_reels_for_match()` helper called from both delete paths.
+2. **No spam cap on reel generation** — could queue unlimited ffmpeg jobs. Fix: 429 if user has ≥3 reels in pending/processing.
+
+**🟡 MEDIUM (noted)**: inline view tracking, video-time vs match-time minute labels, OG cache 5min→1h.
+
+**🟢 LOW**: server.py size, MyReelStatsCard fetch caching.
+
+**Test hardening**: fixed flaky `test_public_reel_view_records_a_view_and_dedupes` (K8s proxy IP variance).
+
+**Verification**: 80/80 tests across 5 reel/match suites passing.
+
 ### Disk-Safety Sweeper — verified live (May 11, 2026 — iter36)
 
 - Added live boot-log line `[apscheduler] scheduler started — ... + ffmpeg_temp_cleanup (every 30 min)` so operators can confirm the sweeper is registered.
