@@ -1941,9 +1941,51 @@ async def startup():
     asyncio.create_task(resume_interrupted_processing())
     # Periodic sweeper for permanently purging soft-deleted videos
     asyncio.create_task(deleted_video_sweeper())
+    # One-shot cleanup of stale ffmpeg temp files left over from a crashed/killed previous boot
+    asyncio.create_task(_cleanup_stale_temp_files())
     # APScheduler — weekly Coach Pulse blast every Monday 08:00 UTC +
     # email-queue retry every 30 min for quota-deferred sends.
     start_coach_pulse_scheduler()
+
+
+async def _cleanup_stale_temp_files():
+    """Delete temp ffmpeg artifacts older than 30 min on boot.
+
+    When the pod is OOM-killed mid-ffmpeg, `finally` cleanup never runs and we
+    leak hundreds of MBs of `tmpXXXX.mp4` files into `/var/video_chunks`. This
+    sweeper runs once at boot to reclaim that space before processing resumes.
+    """
+    import time as _time
+    import glob
+    cutoff = _time.time() - 30 * 60  # 30 minutes ago
+    patterns = [
+        "/var/video_chunks/tmp*.mp4",
+        "/var/video_chunks/tmp*",
+        "/var/video_chunks/close_ups/tmp*.mp4",
+        "/var/video_chunks/close_ups/tmp*.png",
+        "/var/video_chunks/close_ups/tmp*.txt",
+        "/var/video_chunks/reels/tmp*.mp4",
+        "/var/video_chunks/reels/tmp*.png",
+        "/var/video_chunks/reels/tmp*.txt",
+    ]
+    reclaimed_bytes = 0
+    reclaimed_count = 0
+    for pattern in patterns:
+        for path in glob.glob(pattern):
+            try:
+                st = os.stat(path)
+                if st.st_mtime < cutoff:
+                    size = st.st_size
+                    os.unlink(path)
+                    reclaimed_bytes += size
+                    reclaimed_count += 1
+            except OSError:
+                continue
+    if reclaimed_count > 0:
+        logger.info(
+            "[startup-cleanup] reclaimed %.1f MB across %d stale temp files",
+            reclaimed_bytes / (1024 * 1024), reclaimed_count,
+        )
 
 
 # ===== APScheduler: Weekly Coach Pulse Blast =====
@@ -2008,6 +2050,13 @@ def start_coach_pulse_scheduler():
             _queue_retry_job,
             IntervalTrigger(minutes=30),
             id="email_queue_retry",
+            replace_existing=True,
+            misfire_grace_time=600,
+        )
+        _scheduler.add_job(
+            _cleanup_stale_temp_files,
+            IntervalTrigger(minutes=30),
+            id="ffmpeg_temp_cleanup",
             replace_existing=True,
             misfire_grace_time=600,
         )

@@ -2,6 +2,13 @@
 
 ## What's Been Implemented
 
+### Disk-Safety: Stale ffmpeg temp file sweeper (May 11, 2026 — iter35)
+
+- **Root cause of recurring storage exhaustion**: when the pod is OOM-killed mid-ffmpeg run, the `finally` cleanup block never executes, leaking 100s of MBs of `tmp*.mp4` files into `/var/video_chunks/`, `/var/video_chunks/close_ups/`, and `/var/video_chunks/reels/`. Repeated boots compound the leak until storage is exhausted again.
+- **Fix** (`server.py`): `_cleanup_stale_temp_files()` glob-scans the three known temp dirs for `tmp*` prefixed files older than 30 minutes and unlinks them. Runs **once at startup** AND **every 30 min via APScheduler** (`ffmpeg_temp_cleanup` job). Non-tmp prefixed files (real reel/close-up outputs) are never touched.
+- **Verification**: 2 pytest cases — one asserts a backdated stale file gets reclaimed while a fresh file and a real-output file are both preserved; the other asserts missing/empty directories don't raise.
+- **Immediate impact**: reclaimed 381MB orphaned file from the previous boot during this iter.
+
 ### Weekly "Reel Recap" Email (May 11, 2026 — iter34)
 
 - **Service** (`services/reel_recap.py`): Re-engagement loop — sends every Monday 10:00 UTC (1h after scout digest to avoid Resend rate-limit lockstep).
