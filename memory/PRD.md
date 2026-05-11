@@ -2,6 +2,15 @@
 
 ## What's Been Implemented
 
+### Send Install Link to Teammate (iter42 — Feb 2026)
+
+- **`InstallGuideModal.js`** now exposes a primary "Send install link to teammate" CTA directly under the QR code.
+  - **Mobile/tablet (Web Share API available)**: tapping fires `navigator.share({title, text, url})` — opens the device's native share sheet so a coach can blast the install link via Messages, WhatsApp, email, Slack, Telegram, etc. in two taps.
+  - **Desktop fallback**: when `navigator.share` is unavailable, the same click writes a ready-to-send message (brand sentence + URL) to the clipboard via `navigator.clipboard.writeText` with `execCommand('copy')` as a secondary fallback. Button morphs into a green "Link copied — paste it to your teammate" state for 2.5s.
+  - User-cancelled shares (`AbortError`) silently return to idle — no false error states.
+- **Why**: closes the loop on org-wide PWA adoption. Coaches no longer have to manually type/copy the URL or rely on the QR — they can fire off the install link in one tap, complete with branding copy. Verified end-to-end with Playwright clipboard inspection.
+- **Testid**: `install-share-to-teammate` (button) + `install-share-hint` (helper copy under it).
+
 ### Install Guide Modal + QR Code (iter41 — May 11, 2026)
 
 - **`InstallGuideModal.js`**: tabbed modal (iPhone / Android / Desktop) with a 144px QR code of the current origin so coaches can scan from their phone or an assistant coach's device. Each tab has accurate, browser-specific install steps:

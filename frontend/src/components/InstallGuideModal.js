@@ -12,6 +12,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import {
   X, AppleLogo, AndroidLogo, Desktop, Share, Plus,
   DotsThree, DotsThreeVertical, GoogleChromeLogo,
+  PaperPlaneTilt, Check, Copy,
 } from '@phosphor-icons/react';
 
 const PLATFORMS = [
@@ -20,13 +21,79 @@ const PLATFORMS = [
   { key: 'desktop', label: 'Desktop', Icon: Desktop, color: '#007AFF' },
 ];
 
+const SHARE_TITLE = 'Soccer Scout 11';
+const SHARE_TEXT = (url) =>
+  `Install Soccer Scout 11 on your phone — film breakdowns, AI highlight reels, and roster tools for our team.\n\n${url}`;
+
 const InstallGuideModal = ({ onClose }) => {
   const [active, setActive] = useState('ios');
+  const [shareState, setShareState] = useState('idle'); // 'idle' | 'shared' | 'copied' | 'error'
 
   const installUrl = useMemo(() => {
     if (typeof window === 'undefined') return '';
     return `${window.location.origin}/`;
   }, []);
+
+  const canNativeShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+
+  const fallbackCopy = (text) => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch {
+      ok = false;
+    }
+    document.body.removeChild(ta);
+    return ok;
+  };
+
+  const handleSendToTeammate = async () => {
+    const message = SHARE_TEXT(installUrl);
+    // Prefer native share sheet on mobile/tablet
+    if (canNativeShare) {
+      try {
+        await navigator.share({ title: SHARE_TITLE, text: message, url: installUrl });
+        setShareState('shared');
+        setTimeout(() => setShareState('idle'), 2500);
+        return;
+      } catch (err) {
+        // User cancelled — stay idle without showing an error
+        if (err && err.name === 'AbortError') return;
+        // Fall through to clipboard fallback for any other failure
+      }
+    }
+    // Clipboard fallback (desktop or unsupported browsers)
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(message);
+        setShareState('copied');
+      } else {
+        setShareState(fallbackCopy(message) ? 'copied' : 'error');
+      }
+    } catch {
+      setShareState(fallbackCopy(message) ? 'copied' : 'error');
+    }
+    setTimeout(() => setShareState('idle'), 2500);
+  };
+
+  const shareButtonLabel = (() => {
+    if (shareState === 'shared') return 'Sent!';
+    if (shareState === 'copied') return 'Link copied — paste it to your teammate';
+    if (shareState === 'error') return 'Copy failed — long-press the URL above';
+    return canNativeShare ? 'Send install link to teammate' : 'Copy install link for teammate';
+  })();
+
+  const ShareIcon = (() => {
+    if (shareState === 'shared' || shareState === 'copied') return Check;
+    if (!canNativeShare) return Copy;
+    return PaperPlaneTilt;
+  })();
 
   return (
     <div
@@ -65,6 +132,28 @@ const InstallGuideModal = ({ onClose }) => {
               Scan from another device
             </p>
             <p className="text-[10px] text-[#666] mt-1 break-all text-center sm:text-left">{installUrl}</p>
+
+            {/* Send-to-teammate share button — native share sheet on mobile, clipboard fallback elsewhere */}
+            <button
+              data-testid="install-share-to-teammate"
+              onClick={handleSendToTeammate}
+              className={`mt-4 w-full sm:w-auto inline-flex items-center justify-center gap-2 px-3.5 py-2.5 text-[11px] font-bold tracking-wider uppercase border transition-colors ${
+                shareState === 'shared' || shareState === 'copied'
+                  ? 'border-[#10B981] bg-[#10B981]/10 text-[#10B981]'
+                  : shareState === 'error'
+                  ? 'border-[#EF4444] bg-[#EF4444]/10 text-[#EF4444]'
+                  : 'border-[#007AFF] bg-[#007AFF]/10 text-[#7FB8FF] hover:bg-[#007AFF]/20'
+              }`}>
+              <ShareIcon size={14} weight="bold" />
+              <span className="leading-tight text-left">{shareButtonLabel}</span>
+            </button>
+            <p
+              data-testid="install-share-hint"
+              className="mt-2 text-[10px] text-[#666] leading-snug text-center sm:text-left">
+              {canNativeShare
+                ? 'Opens your phone\u2019s share sheet (Messages, WhatsApp, email\u2026).'
+                : 'Copies a ready-to-send message you can paste anywhere.'}
+            </p>
           </div>
 
           {/* Tabbed instructions */}
