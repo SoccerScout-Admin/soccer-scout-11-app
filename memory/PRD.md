@@ -2,6 +2,16 @@
 
 ## What's Been Implemented
 
+### Upload Size Label Bumped 5 GB → 20 GB (iter43 — Feb 2026)
+
+- **User report**: dropzone copy advertised "up to 5 GB" but real 11v11 match film runs 9-15 GB (full match + potential ET/PKs). User had already correctly re-saved `REACT_APP_BACKEND_URL` in deploy secrets after a missed first save.
+- **Root cause**: stale UI copy. The chunked-upload pipeline never had a 5 GB cap — `ChunkedUploadInit` accepts any `file_size`, chunks stay on disk (no reassembly at finalize), and `prepare_video_sample()` adaptively downscales >2 GB sources to 240p/8fps before sending to Gemini.
+- **Fix**:
+  - `UploadPanel.js`: copy updated to "up to 20 GB" (20 GB ceiling chosen to leave headroom over the 9-15 GB target while staying well under the 84 GB `/var/video_chunks` overlay partition).
+  - `MatchDetail.js`: replaced the dismissive `alert(...)` for >1 GB files with a `window.confirm()` that estimates upload time (~4 min/GB), explains the chunks are resumable on connection drop, and asks the user to confirm before kicking off a multi-GB upload. Lets users back out instead of trapping them in a 30-min upload they didn't expect.
+- **Verified**: Playwright screenshot on `/match/{id}` shows "MP4, MOV, AVI up to 20 GB".
+- **No backend change required** — chunked pipeline already supports it. AI processing has automatic downscale tiers (240p/8fps for >2 GB sources) and immediately deletes the temp raw file after ffmpeg compress.
+
 ### Send Install Link to Teammate (iter42 — Feb 2026)
 
 - **`InstallGuideModal.js`** now exposes a primary "Send install link to teammate" CTA directly under the QR code.

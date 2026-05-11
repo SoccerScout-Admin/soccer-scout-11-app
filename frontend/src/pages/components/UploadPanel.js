@@ -84,7 +84,7 @@ const UploadPanel = ({ match, matchId, videoMeta, uploading, uploadProgress, upl
                   onChange={(e) => handleFile(e.target.files?.[0])}
                   className="hidden" />
               </label>
-              {' '}— MP4, MOV, AVI up to 5 GB
+              {' '}— MP4, MOV, AVI up to 20 GB
             </p>
             <label data-testid="upload-video-btn"
               className="inline-flex items-center gap-2 bg-[#007AFF] hover:bg-[#005bb5] text-white px-6 py-3 font-bold tracking-wider uppercase transition-colors cursor-pointer">

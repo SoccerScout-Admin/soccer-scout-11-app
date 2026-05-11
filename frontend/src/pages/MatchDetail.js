@@ -252,7 +252,14 @@ const MatchDetail = () => {
     }
     const fileSizeGB = file.size / (1024 * 1024 * 1024);
     if (file.size > 1024 * 1024 * 1024) {
-      alert(`Uploading large file (${fileSizeGB.toFixed(2)}GB). This may take several minutes.`);
+      const mins = Math.max(5, Math.round(fileSizeGB * 4));
+      const ok = window.confirm(
+        `Large file detected (${fileSizeGB.toFixed(2)} GB).\n\n` +
+        `We'll upload in resumable chunks — keep this tab open. ` +
+        `On a typical home network this takes ~${mins} minutes. ` +
+        `If your connection drops, the upload will resume from where it left off.\n\nContinue?`
+      );
+      if (!ok) return;
       handleChunkedUpload(file);
     } else {
       handleStandardUpload(file);
