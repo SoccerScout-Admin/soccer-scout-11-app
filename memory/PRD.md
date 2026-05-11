@@ -2,6 +2,12 @@
 
 ## What's Been Implemented
 
+### Disk-Safety Sweeper — verified live (May 11, 2026 — iter36)
+
+- Added live boot-log line `[apscheduler] scheduler started — ... + ffmpeg_temp_cleanup (every 30 min)` so operators can confirm the sweeper is registered.
+- Verified end-to-end: backdated a fake stale `tmp_test_old_boot.mp4`, restarted backend, and observed `[startup-cleanup] reclaimed 0.0 MB across 1 stale temp files` in the log + the file was removed.
+- Confirmed `highlight_reel.process_reel()` already cleans up intermediate `tmp*` segments in its `finally` block, so any future orphans from OOM kills will be caught by the 30-min periodic sweep.
+
 ### Disk-Safety: Stale ffmpeg temp file sweeper (May 11, 2026 — iter35)
 
 - **Root cause of recurring storage exhaustion**: when the pod is OOM-killed mid-ffmpeg run, the `finally` cleanup block never executes, leaking 100s of MBs of `tmp*.mp4` files into `/var/video_chunks/`, `/var/video_chunks/close_ups/`, and `/var/video_chunks/reels/`. Repeated boots compound the leak until storage is exhausted again.

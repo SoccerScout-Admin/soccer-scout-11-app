@@ -2076,7 +2076,7 @@ def start_coach_pulse_scheduler():
         )
         _scheduler.start()
         logger.info(
-            "[apscheduler] scheduler started — coach_pulse_weekly (Mon 08:00 UTC) + email_queue_retry (every 30 min) + scout_digest_weekly (Mon 09:00 UTC) + reel_recap_weekly (Mon 10:00 UTC)"
+            "[apscheduler] scheduler started — coach_pulse_weekly (Mon 08:00 UTC) + email_queue_retry (every 30 min) + scout_digest_weekly (Mon 09:00 UTC) + reel_recap_weekly (Mon 10:00 UTC) + ffmpeg_temp_cleanup (every 30 min)"
         )
     except Exception as e:
         logger.error("[apscheduler] failed to start scheduler: %s", e)
