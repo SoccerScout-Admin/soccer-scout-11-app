@@ -251,7 +251,10 @@ const MatchDetail = () => {
       return;
     }
     const fileSizeGB = file.size / (1024 * 1024 * 1024);
-    if (file.size > 1024 * 1024 * 1024) {
+    // >5 GB files are intercepted by the in-page nudge in UploadPanel (which forces a deliberate choice),
+    // so we only show the OS confirm for the 1-5 GB band — large enough to set expectations, small enough
+    // not to demand a separate compression conversation.
+    if (file.size > 1024 * 1024 * 1024 && file.size <= 5 * 1024 * 1024 * 1024) {
       const mins = Math.max(5, Math.round(fileSizeGB * 4));
       const ok = window.confirm(
         `Large file detected (${fileSizeGB.toFixed(2)} GB).\n\n` +
@@ -260,6 +263,9 @@ const MatchDetail = () => {
         `If your connection drops, the upload will resume from where it left off.\n\nContinue?`
       );
       if (!ok) return;
+      handleChunkedUpload(file);
+    } else if (file.size > 1024 * 1024 * 1024) {
+      // >5 GB: user already cleared the in-page nudge; upload directly.
       handleChunkedUpload(file);
     } else {
       handleStandardUpload(file);

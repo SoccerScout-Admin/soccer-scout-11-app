@@ -2,6 +2,28 @@
 
 ## What's Been Implemented
 
+### Smart Large-File Nudge (iter45 — Feb 2026)
+
+- **Why**: the compression tip from iter44 is discoverable but passive. Users who don't read first will still click "Select Video File", queue a 12 GB raw, and lock themselves into a 50-min upload. This change intercepts the moment the user picks a 5 GB+ file and forces a deliberate choice.
+- **Implementation** (`UploadPanel.js`):
+  - New `LARGE_FILE_THRESHOLD = 5 * 1024 ** 3`. When `handleFile()` sees a file above the threshold, it stops propagation, stores it in `pendingLargeFile` state, auto-expands the compression tip, and scroll-into-views the explainer.
+  - Amber alert banner renders above the dropzone with `WarningCircle` icon, filename + GB size, estimated upload time (~4 min/GB), one-liner explaining the compression payoff, and two CTAs:
+    - `large-file-nudge-show-tip` → opens the tip panel + scrolls to it (for users who want to learn first).
+    - `large-file-nudge-proceed` → "Upload as-is" — propagates to parent's `onVideoUpload` and starts the chunked upload immediately.
+  - `large-file-nudge-close` (X) cancels without uploading.
+- **MatchDetail.js**: the OS `window.confirm()` for >1 GB files now only fires for the 1–5 GB band. Files >5 GB are governed entirely by the in-page nudge — no double-prompting (user chose deliberately in the banner, no need for a second OS dialog).
+- **Verified**: Playwright injected fake 6 GB and 12 GB `File` objects via `Object.defineProperty(file, 'size', ...)`. Both correctly trigger the nudge, render correct size + time estimate, expand the tip on click, and dismiss on X.
+
+### Compress-Before-Upload Tip (iter44 — Feb 2026)
+
+- **Why**: with the upload ceiling bumped to 20 GB in iter43, users uploading raw 9-15 GB sideline-cam film will spend 30-60 min on the uplink. The AI pipeline downscales every source to 240p/8fps before Gemini analysis anyway — so a 12 GB raw and a 3 GB compressed file produce *identical* heatmaps, timeline markers, and highlight reels. Compressing first means 3-4× faster uploads with zero quality loss + less pod disk pressure.
+- **Implementation** (`UploadPanel.js`):
+  - Added a collapsible "Got a 5 GB+ file? Compress it first" expander below the dropzone (amber-accented, advisory not blocking).
+  - Expanded panel explains the AI-downscale rationale + a 5-step HandBrake workflow with exact settings (preset `Fast 1080p30`, Constant Quality 22).
+  - Linkout to `handbrake.fr/downloads.php` with `noopener noreferrer`.
+  - Closing note: "Already happy with your file? Skip this — uploads up to 20 GB work fine, just slower." → user retains full agency.
+- **Testids**: `compress-tip-toggle` / `compress-tip-panel` / `handbrake-link`. Toggle + collapse verified via Playwright.
+
 ### Upload Size Label Bumped 5 GB → 20 GB (iter43 — Feb 2026)
 
 - **User report**: dropzone copy advertised "up to 5 GB" but real 11v11 match film runs 9-15 GB (full match + potential ET/PKs). User had already correctly re-saved `REACT_APP_BACKEND_URL` in deploy secrets after a missed first save.
