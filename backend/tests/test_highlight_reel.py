@@ -404,3 +404,208 @@ def test_title_card_segment_renders_via_ffmpeg(tmp_path):
     finally:
         if out_path and os.path.exists(out_path):
             os.unlink(out_path)
+
+
+
+# ---------- Browse (public discovery) ----------
+
+def test_browse_public_reels_empty_when_no_shared_reels():
+    """Browse endpoint is public and returns a stable shape even with 0 reels."""
+    import requests
+    r = requests.get(f"{BASE_URL}/api/highlight-reels/browse")
+    assert r.status_code == 200
+    body = r.json()
+    assert "reels" in body and isinstance(body["reels"], list)
+    assert "total" in body and "has_more" in body
+
+
+def test_browse_competitions_endpoint_shape():
+    import requests
+    r = requests.get(f"{BASE_URL}/api/highlight-reels/browse/competitions")
+    assert r.status_code == 200
+    assert "competitions" in r.json()
+    assert isinstance(r.json()["competitions"], list)
+
+
+def test_browse_only_returns_ready_shared_reels(admin_headers):
+    """Reels without a share_token must NOT appear on /browse."""
+    import requests
+
+    async def setup():
+        from db import db
+        user = await db.users.find_one({"email": "Ben.buursma@gmail.com"}, {"_id": 0, "id": 1})
+        match_id = "br-match-" + uuid.uuid4().hex[:8]
+        await db.matches.insert_one({
+            "id": match_id, "user_id": user["id"],
+            "team_home": "BrowseHome", "team_away": "BrowseAway",
+            "date": "2026-01-01", "competition": "BrowseLeague",
+        })
+        public_id = "br-pub-" + uuid.uuid4().hex[:8]
+        private_id = "br-prv-" + uuid.uuid4().hex[:8]
+        await db.highlight_reels.insert_one({
+            "id": public_id, "user_id": user["id"], "match_id": match_id,
+            "status": "ready", "share_token": "brtok" + uuid.uuid4().hex[:7],
+            "selected_clip_ids": ["c1"], "total_clips": 3, "duration_seconds": 60.0,
+            "created_at": "2026-05-10T00:00:00+00:00",
+        })
+        # Private reel (no share token) — must be excluded
+        await db.highlight_reels.insert_one({
+            "id": private_id, "user_id": user["id"], "match_id": match_id,
+            "status": "ready", "share_token": None,
+            "selected_clip_ids": ["c1"], "total_clips": 2, "duration_seconds": 45.0,
+            "created_at": "2026-05-10T00:00:00+00:00",
+        })
+        # Pending reel with a token — must also be excluded (not ready)
+        pending_id = "br-pen-" + uuid.uuid4().hex[:8]
+        await db.highlight_reels.insert_one({
+            "id": pending_id, "user_id": user["id"], "match_id": match_id,
+            "status": "pending", "share_token": "shouldnotappear",
+            "selected_clip_ids": [], "total_clips": 0, "duration_seconds": 0.0,
+            "created_at": "2026-05-10T00:00:00+00:00",
+        })
+        return match_id, public_id, private_id, pending_id
+
+    match_id, public_id, private_id, pending_id = _run_async(setup())
+    try:
+        r = requests.get(f"{BASE_URL}/api/highlight-reels/browse")
+        assert r.status_code == 200
+        ids = [x["id"] for x in r.json()["reels"]]
+        assert public_id in ids
+        assert private_id not in ids
+        assert pending_id not in ids
+    finally:
+        async def cleanup():
+            from db import db
+            await db.highlight_reels.delete_many({"id": {"$in": [public_id, private_id, pending_id]}})
+            await db.matches.delete_one({"id": match_id})
+        _run_async(cleanup())
+
+
+def test_browse_competition_filter_matches_exactly(admin_headers):
+    import requests
+
+    async def setup():
+        from db import db
+        user = await db.users.find_one({"email": "Ben.buursma@gmail.com"}, {"_id": 0, "id": 1})
+        ml_match = "br-ml-" + uuid.uuid4().hex[:8]
+        ecnl_match = "br-ec-" + uuid.uuid4().hex[:8]
+        await db.matches.insert_one({
+            "id": ml_match, "user_id": user["id"],
+            "team_home": "MLNextA", "team_away": "MLNextB",
+            "date": "2026-01-01", "competition": "MLS Next U17",
+        })
+        await db.matches.insert_one({
+            "id": ecnl_match, "user_id": user["id"],
+            "team_home": "EcnlA", "team_away": "EcnlB",
+            "date": "2026-01-01", "competition": "ECNL Boys",
+        })
+        ml_reel = "br-mlr-" + uuid.uuid4().hex[:8]
+        ec_reel = "br-ecr-" + uuid.uuid4().hex[:8]
+        for rid, mid in [(ml_reel, ml_match), (ec_reel, ecnl_match)]:
+            await db.highlight_reels.insert_one({
+                "id": rid, "user_id": user["id"], "match_id": mid,
+                "status": "ready", "share_token": "tok-" + rid[-8:],
+                "selected_clip_ids": ["c1"], "total_clips": 1, "duration_seconds": 30.0,
+                "created_at": "2026-05-10T00:00:00+00:00",
+            })
+        return ml_match, ecnl_match, ml_reel, ec_reel
+
+    ml_match, ecnl_match, ml_reel, ec_reel = _run_async(setup())
+    try:
+        r = requests.get(f"{BASE_URL}/api/highlight-reels/browse", params={"competition": "MLS Next U17"})
+        ids = [x["id"] for x in r.json()["reels"]]
+        assert ml_reel in ids
+        assert ec_reel not in ids
+
+        # Inverse
+        r2 = requests.get(f"{BASE_URL}/api/highlight-reels/browse", params={"competition": "ECNL Boys"})
+        ids2 = [x["id"] for x in r2.json()["reels"]]
+        assert ec_reel in ids2
+        assert ml_reel not in ids2
+
+        # Competitions endpoint includes both
+        comp_resp = requests.get(f"{BASE_URL}/api/highlight-reels/browse/competitions").json()
+        assert "MLS Next U17" in comp_resp["competitions"]
+        assert "ECNL Boys" in comp_resp["competitions"]
+    finally:
+        async def cleanup():
+            from db import db
+            await db.highlight_reels.delete_many({"id": {"$in": [ml_reel, ec_reel]}})
+            await db.matches.delete_many({"id": {"$in": [ml_match, ecnl_match]}})
+        _run_async(cleanup())
+
+
+def test_browse_search_query_matches_team_name(admin_headers):
+    import requests
+
+    async def setup():
+        from db import db
+        user = await db.users.find_one({"email": "Ben.buursma@gmail.com"}, {"_id": 0, "id": 1})
+        match_id = "br-q-" + uuid.uuid4().hex[:8]
+        await db.matches.insert_one({
+            "id": match_id, "user_id": user["id"],
+            "team_home": "QuixoticUnited", "team_away": "Opponent",
+            "date": "2026-01-01", "competition": "Test",
+        })
+        reel_id = "br-qr-" + uuid.uuid4().hex[:8]
+        await db.highlight_reels.insert_one({
+            "id": reel_id, "user_id": user["id"], "match_id": match_id,
+            "status": "ready", "share_token": "qtok-" + reel_id[-7:],
+            "selected_clip_ids": [], "total_clips": 1, "duration_seconds": 30.0,
+            "created_at": "2026-05-10T00:00:00+00:00",
+        })
+        return match_id, reel_id
+
+    match_id, reel_id = _run_async(setup())
+    try:
+        r = requests.get(f"{BASE_URL}/api/highlight-reels/browse", params={"q": "QUIXOTIC"})
+        ids = [x["id"] for x in r.json()["reels"]]
+        assert reel_id in ids
+
+        r2 = requests.get(f"{BASE_URL}/api/highlight-reels/browse", params={"q": "no-such-team-anywhere-xyz"})
+        ids2 = [x["id"] for x in r2.json()["reels"]]
+        assert reel_id not in ids2
+    finally:
+        async def cleanup():
+            from db import db
+            await db.highlight_reels.delete_one({"id": reel_id})
+            await db.matches.delete_one({"id": match_id})
+        _run_async(cleanup())
+
+
+def test_browse_response_hides_user_id(admin_headers):
+    """Public response must not leak the owner's user_id."""
+    import requests
+
+    async def setup():
+        from db import db
+        user = await db.users.find_one({"email": "Ben.buursma@gmail.com"}, {"_id": 0, "id": 1})
+        match_id = "br-h-" + uuid.uuid4().hex[:8]
+        await db.matches.insert_one({
+            "id": match_id, "user_id": user["id"],
+            "team_home": "HideTeam", "team_away": "HideTeam2",
+            "date": "2026-01-01", "competition": "X",
+        })
+        reel_id = "br-hr-" + uuid.uuid4().hex[:8]
+        await db.highlight_reels.insert_one({
+            "id": reel_id, "user_id": user["id"], "match_id": match_id,
+            "status": "ready", "share_token": "htok-" + reel_id[-7:],
+            "selected_clip_ids": [], "total_clips": 1, "duration_seconds": 30.0,
+            "created_at": "2026-05-10T00:00:00+00:00",
+        })
+        return match_id, reel_id
+
+    match_id, reel_id = _run_async(setup())
+    try:
+        r = requests.get(f"{BASE_URL}/api/highlight-reels/browse")
+        matches = [x for x in r.json()["reels"] if x["id"] == reel_id]
+        assert len(matches) >= 1
+        for m in matches:
+            assert "user_id" not in m
+            assert "output_path" not in m
+    finally:
+        async def cleanup():
+            from db import db
+            await db.highlight_reels.delete_one({"id": reel_id})
+            await db.matches.delete_one({"id": match_id})
+        _run_async(cleanup())

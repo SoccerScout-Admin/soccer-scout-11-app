@@ -274,10 +274,13 @@ const LandingPage = ({ isAuthenticated }) => {
             <a href="#" aria-label="Twitter" className="hover:text-white transition-colors"><TwitterLogo size={18} /></a>
             <a href="#" aria-label="Instagram" className="hover:text-white transition-colors"><InstagramLogo size={18} /></a>
             <a href="#" aria-label="Facebook" className="hover:text-white transition-colors"><FacebookLogo size={18} /></a>
-            <span className="text-[10px] tracking-[0.2em] uppercase ml-2">
-              <FilmReel size={12} className="inline mr-1" />
-              AI-Curated Highlight Reels
-            </span>
+            <Link
+              to="/reels"
+              data-testid="footer-reel-library"
+              className="text-[10px] tracking-[0.2em] uppercase ml-2 hover:text-white transition-colors flex items-center gap-1">
+              <FilmReel size={12} className="inline" />
+              Reel Library
+            </Link>
           </div>
         </div>
       </footer>

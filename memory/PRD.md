@@ -2,7 +2,23 @@
 
 ## What's Been Implemented
 
-### Auto-Highlight Reel Generator + Landing Page + UX Wireframe Polish (May 10, 2026 — iter30)
+### Public Highlight Reel Library — Discovery Surface (May 11, 2026 — iter31)
+
+- **Backend** (`routes/highlight_reels.py` — 2 new endpoints):
+  - `GET /api/highlight-reels/browse` — public list of `ready` reels with `share_token`. Filters: `q` (substring match across home/away teams + coach name), `competition` (exact), pagination (`limit` 1-50, `offset`). Bulk-loads matches + users in 2 queries, projects out `user_id` and filesystem path for privacy.
+  - `GET /api/highlight-reels/browse/competitions` — distinct competition list for filter chips.
+  - **Routing fix**: had to move both browse routes ABOVE `GET /highlight-reels/{reel_id}` to prevent FastAPI from matching `"browse"` as a `reel_id` path parameter (FastAPI matches routes in registration order).
+- **Frontend** `HighlightReelsBrowse.js` at public route `/reels`:
+  - Sticky header with back button + Reel Library title
+  - Search input (debounced 250ms) + competition filter chips
+  - Responsive 1→2→3→4 column grid of reel tiles using the OG card image as a 1200×630 hero thumbnail
+  - Each tile: hero image with play-icon hover overlay, clip-count + duration chips, team-vs-team title, score, competition + coach line, date
+  - Empty state, loading state, "no public reels match your filters" fallback
+  - URL syncs with filters (`?q=...&comp=...`) so feeds are shareable
+- **Discovery**: Added "Reels" nav button to authenticated `DashboardHeader` (blue accent) + footer link on `LandingPage`.
+- **5 new pytest cases** verifying browse filtering, privacy projection (no `user_id` or `output_path` leak), competition exact match, search substring, and that pending/non-shared reels are excluded. **Highlight reel suite now at 31/31 passing.**
+
+
 
 **Auto-Highlight Reel Generator (P1 main feature)**:
 - **Backend** (`services/highlight_reel.py`, ~480 lines + `routes/highlight_reels.py`, ~225 lines):

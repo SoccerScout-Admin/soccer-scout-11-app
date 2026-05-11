@@ -1,4 +1,4 @@
-import { SignOut, Shield, Globe, At, Buildings, ChatCircle } from '@phosphor-icons/react';
+import { SignOut, Shield, Globe, At, Buildings, ChatCircle, FilmReel } from '@phosphor-icons/react';
 
 const NavButton = ({ onClick, testId, mobileTestId, ariaLabel, Icon, colorClass, borderClass, label, badge }) => (
   <>
@@ -37,6 +37,9 @@ const DashboardHeader = ({ user, unreadMentions, unreadMessages = 0, onNavigate,
           <NavButton onClick={() => onNavigate('/scouts')}
             testId="scouts-nav-btn" mobileTestId="scouts-nav-btn-mobile" ariaLabel="Scout Board"
             Icon={Buildings} colorClass="text-[#10B981]" borderClass="border-[#10B981]/30" label="Scouts" />
+          <NavButton onClick={() => onNavigate('/reels')}
+            testId="reels-nav-btn" mobileTestId="reels-nav-btn-mobile" ariaLabel="Reel Library"
+            Icon={FilmReel} colorClass="text-[#007AFF]" borderClass="border-[#007AFF]/30" label="Reels" />
           <NavButton onClick={() => onNavigate('/messages')}
             testId="messages-nav-btn" mobileTestId="messages-nav-btn-mobile" ariaLabel="Messages"
             Icon={ChatCircle} colorClass="text-[#10B981]" borderClass="border-[#10B981]/30" label="Inbox"

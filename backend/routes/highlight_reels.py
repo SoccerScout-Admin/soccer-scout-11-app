@@ -105,6 +105,110 @@ async def list_highlight_reels(
     return [_strip_internal(r) for r in reels]
 
 
+@router.get("/highlight-reels/browse")
+async def browse_public_reels(
+    q: str = "",
+    competition: str = "",
+    limit: int = 24,
+    offset: int = 0,
+):
+    """Public browse feed of shared highlight reels.
+
+    Only `ready` reels with a `share_token` appear. Filters:
+      - `q` — case-insensitive substring match against team names or coach name
+      - `competition` — exact competition name match (use empty for "All")
+    Pagination: `limit` (1-50) + `offset`.
+    Returns lightweight cards (no filesystem path, no user_id).
+    """
+    limit = max(1, min(50, int(limit)))
+    offset = max(0, int(offset))
+
+    base_query = {"status": "ready", "share_token": {"$ne": None}}
+
+    reels = await db.highlight_reels.find(
+        base_query, {"_id": 0},
+    ).sort("created_at", -1).to_list(500)
+
+    match_ids = list({r["match_id"] for r in reels})
+    user_ids = list({r["user_id"] for r in reels})
+    matches = {
+        m["id"]: m
+        for m in await db.matches.find(
+            {"id": {"$in": match_ids}},
+            {"_id": 0, "id": 1, "team_home": 1, "team_away": 1, "competition": 1, "date": 1, "manual_result": 1},
+        ).to_list(len(match_ids) or 1)
+    }
+    users = {
+        u["id"]: u
+        for u in await db.users.find(
+            {"id": {"$in": user_ids}},
+            {"_id": 0, "id": 1, "name": 1},
+        ).to_list(len(user_ids) or 1)
+    }
+
+    needle = (q or "").strip().lower()
+    comp_filter = (competition or "").strip()
+
+    out = []
+    for r in reels:
+        match = matches.get(r["match_id"]) or {}
+        owner = users.get(r["user_id"]) or {}
+        comp = match.get("competition") or ""
+        team_h = match.get("team_home") or ""
+        team_a = match.get("team_away") or ""
+        coach = owner.get("name") or ""
+        if comp_filter and comp != comp_filter:
+            continue
+        if needle:
+            haystack = f"{team_h} {team_a} {coach}".lower()
+            if needle not in haystack:
+                continue
+        mr = match.get("manual_result") or {}
+        out.append({
+            "id": r["id"],
+            "share_token": r["share_token"],
+            "team_home": team_h,
+            "team_away": team_a,
+            "competition": comp,
+            "date": match.get("date"),
+            "coach_name": coach,
+            "total_clips": r.get("total_clips", 0),
+            "duration_seconds": r.get("duration_seconds", 0.0),
+            "created_at": r.get("created_at"),
+            "home_score": mr.get("home_score"),
+            "away_score": mr.get("away_score"),
+        })
+        if len(out) >= offset + limit:
+            break
+
+    return {
+        "reels": out[offset:offset + limit],
+        "total": len(out),
+        "has_more": len(out) > offset + limit,
+    }
+
+
+@router.get("/highlight-reels/browse/competitions")
+async def browse_competitions():
+    """List distinct competitions across all publicly-shared reels.
+
+    Powers the filter chips on the browse page.
+    """
+    reels = await db.highlight_reels.find(
+        {"status": "ready", "share_token": {"$ne": None}},
+        {"_id": 0, "match_id": 1},
+    ).to_list(500)
+    if not reels:
+        return {"competitions": []}
+    match_ids = list({r["match_id"] for r in reels})
+    matches = await db.matches.find(
+        {"id": {"$in": match_ids}},
+        {"_id": 0, "competition": 1},
+    ).to_list(len(match_ids))
+    comps = sorted({(m.get("competition") or "").strip() for m in matches if (m.get("competition") or "").strip()})
+    return {"competitions": comps}
+
+
 @router.get("/highlight-reels/{reel_id}")
 async def get_highlight_reel(
     reel_id: str,
