@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { VideoCamera, UploadSimple, ArrowsClockwise, CloudArrowUp, FileVideo, Package, CaretDown, ArrowSquareOut, X, WarningCircle } from '@phosphor-icons/react';
+import CompressionCalculator from '../../components/CompressionCalculator';
 
 const _formatBytes = (bytes) => {
   if (!bytes) return '';
@@ -222,6 +223,8 @@ const UploadPanel = ({ match, matchId, videoMeta, uploading, uploadProgress, upl
                   <p className="text-[10px] text-[#A3A3A3] mt-3 italic">
                     Already happy with your file? Skip this — uploads up to 20 GB work fine, just slower.
                   </p>
+
+                  <CompressionCalculator initialSizeBytes={pendingLargeFile?.size || selectedFile?.size || 0} />
                 </div>
               )}
             </div>

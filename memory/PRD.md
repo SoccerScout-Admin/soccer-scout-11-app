@@ -2,6 +2,18 @@
 
 ## What's Been Implemented
 
+### Real-Time Compression Calculator (iter46 — Feb 2026)
+
+- **Why**: iter45's nudge tells coaches *to* compress, and the iter44 tip tells them *how*. Neither answers "but is this preset too aggressive for my film?" or "how much faster will the upload actually be?". The calculator closes that loop with concrete numbers.
+- **`/app/frontend/src/components/CompressionCalculator.js`** (new):
+  - Two inputs: `Raw file size` (GB, auto-filled from `pendingLargeFile.size || selectedFile.size`) and `Upload speed` (10/25/50/100 Mbps).
+  - Baseline row shows "Upload as-is" cost in red to anchor the savings.
+  - 4 preset cards (Fast 720p30, Fast 1080p30 ★ recommended, Fast 1080p30 CQ 25, Fast 1080p60) — each displays projected file size, savings %, upload time at chosen network speed, and a 1-liner on quality trade-offs.
+  - Ratios calibrated from typical sideline-cam source (~15-25 Mbps): 0.18 / 0.35 / 0.22 / 0.55. Footnote explicitly notes ±20% variance.
+  - Smart unit switching (GB vs MB) so a 2 GB input cleanly shows "369 MB" for the smallest preset.
+- **Embedded inside the existing compress tip panel** in `UploadPanel.js`, immediately after the step-by-step workflow. Single source of truth for compression UX.
+- **Verified end-to-end**: Playwright walks through default 12 GB → 4.2 GB recommended, changes network 25→100 Mbps and confirms time drops 24→6 min, changes size 12→20 GB and confirms output scales, drops to 2 GB raw and confirms unit switches to MB. Then injects a fake 14.5 GB file selection and confirms the nudge → "Show me how" → calculator auto-syncs to 14.5 GB.
+
 ### Smart Large-File Nudge (iter45 — Feb 2026)
 
 - **Why**: the compression tip from iter44 is discoverable but passive. Users who don't read first will still click "Select Video File", queue a 12 GB raw, and lock themselves into a 50-min upload. This change intercepts the moment the user picks a 5 GB+ file and forces a deliberate choice.
