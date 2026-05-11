@@ -2,6 +2,20 @@
 
 ## What's Been Implemented
 
+### Deployment Blocker Fix: .gitignore Cleanup (iter49 — Feb 2026)
+
+- **User reported**: production deployment failed at the "managing secrets" step with `failed to fetch envs from source pod: ... pods "agent-env-71a126e7-ebd7-4add-81d0-147a3aeb2fff" not found`.
+- **Earlier theory**: orphaned source pod / pod-tier resource issue. Wrong.
+- **Actual root cause** (per deployment agent diagnosis): `.gitignore` was polluted with five repeated blocks of `.env` / `.env.*` / `*.env` patterns (plus stray `-e` lines from `echo -e ... >> .gitignore` shell command artifacts). Because `.env` files were being ignored by git, they weren't included in the deployment build context — so the deployer couldn't find them and reported it as a "source pod env" lookup failure.
+- **Fix**: stripped lines 113-163 of the polluted patterns, kept the legitimate credential ignores (`credentials.json`, `*.pem`, `*.key`, `.credentials`), preserved the existing cache-pack ignores, and added a comment explaining `.env` files must be committed for Kubernetes deployment.
+- **Verified**:
+  - `grep -nE "^\.env|^\*\.env" .gitignore` → no matches
+  - `grep -n "^-e" .gitignore` → no matches
+  - `git check-ignore backend/.env` → empty (not ignored)
+  - `git check-ignore frontend/.env` → empty (not ignored)
+  - `git status` confirms `backend/.env` is now tracked
+- **Next step for user**: Save to GitHub (so the cleaned `.gitignore` + `.env` files land in the repo) → redeploy. Should now clear the "managing secrets" step.
+
 ### Notify-When-Done Upload Toggle (iter48 — Feb 2026)
 
 - **Why**: with the 20 GB ceiling + larger raw files now supported, multi-hour uploads will become common. Coaches shouldn't have to babysit the tab. This toggle lets them switch contexts, lock their phone, etc., and get pinged when finalize completes.

@@ -111,52 +111,12 @@ frontend/node_modules/.cache/default-development/66.pack
 frontend/node_modules/.cache/default-development/77.pack
 frontend/node_modules/.cache/default-development/81.pack
 frontend/node_modules/.cache/default-development/82.pack
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
 frontend/node_modules/.cache/default-development/0.pack
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
 frontend/node_modules/.cache/default-development/2.pack
 frontend/node_modules/.cache/default-development/5.pack
 frontend/node_modules/.cache/default-development/1.pack
-frontend/node_modules/.cache/default-development/1.pack
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
+
+# Credentials (DO NOT ignore .env files — they MUST be committed for Kubernetes deployment)
 credentials.json
 *.pem
 *.key
