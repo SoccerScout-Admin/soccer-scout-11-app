@@ -2,6 +2,17 @@
 
 ## What's Been Implemented
 
+### Send Compression Instructions to Teammate (iter47 — Feb 2026)
+
+- **Why**: the calculator from iter46 lets a coach explore their own scenario, but staff workflows often delegate the actual encoding to an assistant coach with a beefier laptop. This share button closes the loop — one tap → assistant coach gets a paste-ready message with the *exact* numbers + HandBrake link.
+- **Implementation** (`CompressionCalculator.js`):
+  - New `shareMessage` `useMemo` builds a personalized message using the live `sizeGB`, `mbps`, and recommended preset (Fast 1080p30 CQ 22) projections.
+  - Share button uses the same Web Share API → clipboard fallback pattern as the PWA install share (iter42), with idle/shared/copied/error state machine.
+  - Disables when raw size = 0 (prevents copying a placeholder message).
+  - Auto-adapting label: "Send these specs to teammate" (mobile) vs "Copy these specs for teammate" (desktop).
+- **Message template** captures: brand, raw size + upload time, compressed size + upload time, network speed, AND the 5 HandBrake steps from the tip — so the recipient has everything they need without leaving the chat thread.
+- **Verified**: Playwright confirms personalized numbers, brand, HandBrake link, CQ setting, and network spec all appear in the clipboard payload. State resets after 2.5s. Disabled state works for size=0.
+
 ### Real-Time Compression Calculator (iter46 — Feb 2026)
 
 - **Why**: iter45's nudge tells coaches *to* compress, and the iter44 tip tells them *how*. Neither answers "but is this preset too aggressive for my film?" or "how much faster will the upload actually be?". The calculator closes that loop with concrete numbers.

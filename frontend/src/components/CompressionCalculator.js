@@ -11,7 +11,7 @@
  * bitrate. The component is upfront about this in the footnote.
  */
 import { useState, useMemo } from 'react';
-import { Lightning, Star, Speedometer } from '@phosphor-icons/react';
+import { Lightning, Star, Speedometer, PaperPlaneTilt, Check, Copy } from '@phosphor-icons/react';
 
 const PRESETS = [
   {
@@ -81,6 +81,7 @@ const CompressionCalculator = ({ initialSizeBytes = 0 }) => {
     return '12';
   });
   const [networkId, setNetworkId] = useState('25');
+  const [shareState, setShareState] = useState('idle'); // 'idle' | 'shared' | 'copied' | 'error'
 
   const rawBytes = useMemo(() => {
     const n = parseFloat(sizeGB);
@@ -94,6 +95,79 @@ const CompressionCalculator = ({ initialSizeBytes = 0 }) => {
   );
 
   const rawUploadTime = rawBytes > 0 ? _formatUpload(rawBytes, mbps) : '—';
+
+  const canNativeShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+
+  // Build the pre-formatted teammate message using the user's specific numbers
+  const shareMessage = useMemo(() => {
+    const recommended = PRESETS.find((p) => p.id === 'fast-1080p30');
+    const projected = rawBytes * recommended.ratio;
+    const rawSize = _formatGB(rawBytes);
+    const compressedSize = _formatGB(projected);
+    const compressedTime = projected > 0 ? _formatUpload(projected, mbps) : '—';
+    return (
+      `Quick favor — can you compress the match film for Soccer Scout 11 before uploading?\n\n` +
+      `Raw file: ${rawSize} → ~${rawUploadTime} upload at ${mbps} Mbps.\n` +
+      `Compressed with HandBrake: ~${compressedSize} → ~${compressedTime} upload (identical AI-analysis results).\n\n` +
+      `Steps:\n` +
+      `1. Download HandBrake (free): https://handbrake.fr/downloads.php\n` +
+      `2. Open the match video → pick preset "Fast 1080p30"\n` +
+      `3. Video tab → Constant Quality → 22\n` +
+      `4. Start Encode (10-15 min on a modern laptop)\n` +
+      `5. Send the smaller file back, or upload it directly\n\n` +
+      `Thanks!`
+    );
+  }, [rawBytes, mbps, rawUploadTime]);
+
+  const fallbackCopy = (text) => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  };
+
+  const handleShareToTeammate = async () => {
+    if (canNativeShare) {
+      try {
+        await navigator.share({ title: 'Soccer Scout 11 — Compression Instructions', text: shareMessage });
+        setShareState('shared');
+        setTimeout(() => setShareState('idle'), 2500);
+        return;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+      }
+    }
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(shareMessage);
+        setShareState('copied');
+      } else {
+        setShareState(fallbackCopy(shareMessage) ? 'copied' : 'error');
+      }
+    } catch {
+      setShareState(fallbackCopy(shareMessage) ? 'copied' : 'error');
+    }
+    setTimeout(() => setShareState('idle'), 2500);
+  };
+
+  const shareLabel = (() => {
+    if (shareState === 'shared') return 'Sent!';
+    if (shareState === 'copied') return 'Instructions copied — paste to your teammate';
+    if (shareState === 'error') return 'Copy failed — try again';
+    return canNativeShare ? 'Send these specs to teammate' : 'Copy these specs for teammate';
+  })();
+
+  const ShareIcon = (() => {
+    if (shareState === 'shared' || shareState === 'copied') return Check;
+    if (!canNativeShare) return Copy;
+    return PaperPlaneTilt;
+  })();
 
   return (
     <div
@@ -198,6 +272,29 @@ const CompressionCalculator = ({ initialSizeBytes = 0 }) => {
           );
         })}
       </div>
+
+      {/* Send compression instructions to a teammate — uses Web Share API on mobile, clipboard fallback on desktop */}
+      <button
+        data-testid="calc-share-to-teammate"
+        onClick={handleShareToTeammate}
+        disabled={rawBytes === 0}
+        className={`mt-4 w-full inline-flex items-center justify-center gap-2 px-3.5 py-2.5 text-[11px] font-bold tracking-wider uppercase border transition-colors ${
+          shareState === 'shared' || shareState === 'copied'
+            ? 'border-[#10B981] bg-[#10B981]/10 text-[#10B981]'
+            : shareState === 'error'
+            ? 'border-[#EF4444] bg-[#EF4444]/10 text-[#EF4444]'
+            : 'border-[#FBBF24] bg-[#FBBF24]/10 text-[#FBBF24] hover:bg-[#FBBF24]/20 disabled:opacity-40 disabled:cursor-not-allowed'
+        }`}>
+        <ShareIcon size={14} weight="bold" />
+        <span className="leading-tight">{shareLabel}</span>
+      </button>
+      <p
+        data-testid="calc-share-hint"
+        className="mt-1.5 text-[10px] text-[#666] leading-snug">
+        {canNativeShare
+          ? 'Opens your phone\u2019s share sheet so an assistant coach can do the encode on their laptop.'
+          : 'Copies a paste-ready message (HandBrake link + your specific numbers).'}
+      </p>
 
       <p className="text-[10px] text-[#666] mt-3 italic leading-snug">
         Estimates based on typical sideline-cam source (~15-25 Mbps). Actual output can vary ±20% depending on motion & lighting.
