@@ -2,6 +2,19 @@
 
 ## What's Been Implemented
 
+### Notify-When-Done Upload Toggle (iter48 — Feb 2026)
+
+- **Why**: with the 20 GB ceiling + larger raw files now supported, multi-hour uploads will become common. Coaches shouldn't have to babysit the tab. This toggle lets them switch contexts, lock their phone, etc., and get pinged when finalize completes.
+- **Implementation**:
+  - `/app/frontend/src/utils/push.js`: new `showLocalNotification(title, {body, url, tag})` helper. Fires via `ServiceWorkerRegistration.showNotification()` (works on Android Chrome where `new Notification()` doesn't), checks permission + SW availability, swallows errors so callers can fire-and-forget.
+  - `MatchDetail.js`: added `notifyOnComplete` state + `handleToggleNotify` (gates permission request via the existing `requestPushPermission()` from the Coach Pulse flow) + `fireUploadCompleteNotification(videoId)` helper. Called from both `handleStandardUpload` and `handleChunkedUpload` success paths *before* the `navigate(...)` so the notification fires even though the tab is about to navigate.
+  - `UploadPanel.js` / `UploadInProgress`: renders a Bell-icon toggle button below the file chip during upload. Adaptive label: "Notify me when done" → "Notify me when done · ON". Hint text changes to confirm the on-state ("we'll buzz you when finalize completes").
+  - Notification body: `"{team_home} vs {team_away} is ready — AI analysis is queued. Tap to view."` Tapping the notification navigates to `/video/{id}` via the existing `notificationclick` handler in `service-worker.js`.
+- **Verified**:
+  - Toggle UI renders during real chunked upload (Playwright stalled the chunk endpoint, captured the in-progress state with the toggle button + hint text).
+  - Service worker registers and exposes `showNotification` correctly.
+  - Known headless-Chromium quirk: `Notification.permission` stays `denied` even after `grant_permissions(['notifications'])`, so the toggle's ON-state can't be visually verified in tests — works correctly in real browsers (same `requestPushPermission()` flow is already in production via the Coach Pulse subscribe button).
+
 ### Send Compression Instructions to Teammate (iter47 — Feb 2026)
 
 - **Why**: the calculator from iter46 lets a coach explore their own scenario, but staff workflows often delegate the actual encoding to an assistant coach with a beefier laptop. This share button closes the loop — one tap → assistant coach gets a paste-ready message with the *exact* numbers + HandBrake link.

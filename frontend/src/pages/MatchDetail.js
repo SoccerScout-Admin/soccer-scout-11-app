@@ -9,6 +9,7 @@ import DeletedVideosDrawer from './components/DeletedVideosDrawer';
 import ConfirmReuploadModal from './components/ConfirmReuploadModal';
 import RosterSection from './components/RosterSection';
 import ProcessingProgressBar from './components/ProcessingProgressBar';
+import { requestPushPermission, showLocalNotification } from '../utils/push';
 
 const MatchDetail = () => {
   const { matchId } = useParams();
@@ -29,6 +30,30 @@ const MatchDetail = () => {
   const [deleting, setDeleting] = useState(false);
   const [deletedVideos, setDeletedVideos] = useState([]);
   const [showDeletedDrawer, setShowDeletedDrawer] = useState(false);
+  const [notifyOnComplete, setNotifyOnComplete] = useState(false);
+
+  const handleToggleNotify = async () => {
+    if (notifyOnComplete) {
+      setNotifyOnComplete(false);
+      return;
+    }
+    const result = await requestPushPermission();
+    if (result.granted) {
+      setNotifyOnComplete(true);
+    } else {
+      alert(result.reason || 'Notifications were blocked by your browser.');
+    }
+  };
+
+  const fireUploadCompleteNotification = (videoId) => {
+    if (!notifyOnComplete || !match) return;
+    const teams = `${match.team_home} vs ${match.team_away}`;
+    showLocalNotification('Upload complete', {
+      body: `${teams} is ready — AI analysis is queued. Tap to view.`,
+      url: `/video/${videoId}`,
+      tag: `upload-done-${videoId}`,
+    });
+  };
 
   const fetchMatch = useCallback(async () => {
     try {
@@ -175,6 +200,7 @@ const MatchDetail = () => {
         },
         timeout: 600000
       });
+      fireUploadCompleteNotification(response.data.video_id);
       navigate(`/video/${response.data.video_id}`);
     } catch (err) {
       console.error('Upload failed:', err);
@@ -232,6 +258,7 @@ const MatchDetail = () => {
         setUploadStatus(`Uploading: ${uploadedCount}/${totalChunks} chunks`);
         if (resp.data.status === 'completed') break;
       }
+      fireUploadCompleteNotification(video_id);
       navigate(`/video/${video_id}`);
     } catch (err) {
       console.error('Chunked upload failed:', err);
@@ -353,6 +380,7 @@ const MatchDetail = () => {
             onVideoUpload={handleVideoUpload}
             onShowDeleted={() => { fetchDeletedVideos(); setShowDeletedDrawer(true); }}
             onConfirmReupload={() => setConfirmReupload(true)}
+            notifyOnComplete={notifyOnComplete} onToggleNotify={handleToggleNotify}
             navigate={navigate} />
         </div>
 

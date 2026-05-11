@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
-import { VideoCamera, UploadSimple, ArrowsClockwise, CloudArrowUp, FileVideo, Package, CaretDown, ArrowSquareOut, X, WarningCircle } from '@phosphor-icons/react';
+import { VideoCamera, UploadSimple, ArrowsClockwise, CloudArrowUp, FileVideo, Package, CaretDown, ArrowSquareOut, X, WarningCircle, BellRinging, Bell } from '@phosphor-icons/react';
 import CompressionCalculator from '../../components/CompressionCalculator';
 
 const _formatBytes = (bytes) => {
@@ -9,7 +9,7 @@ const _formatBytes = (bytes) => {
   return `${(bytes / 1024).toFixed(0)} KB`;
 };
 
-const UploadInProgress = ({ uploadProgress, uploadStatus, selectedFile }) => (
+const UploadInProgress = ({ uploadProgress, uploadStatus, selectedFile, notifyOnComplete, onToggleNotify }) => (
   <div className="max-w-md mx-auto">
     <div className="bg-[#0A0A0A] h-3 mb-3 rounded-full overflow-hidden">
       <div className="bg-[#007AFF] h-3 rounded-full" style={{ width: `${uploadProgress}%`, transition: 'width 0.3s ease' }} />
@@ -26,13 +26,36 @@ const UploadInProgress = ({ uploadProgress, uploadStatus, selectedFile }) => (
         <span>{_formatBytes(selectedFile.size)}</span>
       </div>
     )}
+    {/* Notify-when-done toggle — fires a Web Notification via the service worker on finalize */}
+    {onToggleNotify && (
+      <button
+        type="button"
+        data-testid="notify-on-complete-toggle"
+        onClick={onToggleNotify}
+        className={`mt-5 w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 text-[11px] font-bold tracking-wider uppercase border transition-colors ${
+          notifyOnComplete
+            ? 'border-[#10B981] bg-[#10B981]/10 text-[#10B981] hover:bg-[#10B981]/20'
+            : 'border-white/15 text-[#A3A3A3] hover:text-white hover:border-white/30'
+        }`}>
+        {notifyOnComplete ? <BellRinging size={14} weight="fill" /> : <Bell size={14} weight="bold" />}
+        {notifyOnComplete ? 'Notify me when done · ON' : 'Notify me when done'}
+      </button>
+    )}
+    {onToggleNotify && (
+      <p data-testid="notify-on-complete-hint" className="mt-1.5 text-[10px] text-[#666] leading-snug text-center">
+        {notifyOnComplete
+          ? 'Stay on this tab or background it — we\u2019ll buzz you when finalize completes.'
+          : 'Get a browser notification so you can switch tabs / lock your screen.'}
+      </p>
+    )}
   </div>
 );
 
 const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024 * 1024; // 5 GB — trigger compress nudge
 
 const UploadPanel = ({ match, matchId, videoMeta, uploading, uploadProgress, uploadStatus,
-  onVideoUpload, onShowDeleted, onViewAnalysis, onMatchInsights, onConfirmReupload, navigate }) => {
+  onVideoUpload, onShowDeleted, onViewAnalysis, onMatchInsights, onConfirmReupload, navigate,
+  notifyOnComplete, onToggleNotify }) => {
   const [dragOver, setDragOver] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [showCompressTip, setShowCompressTip] = useState(false);
@@ -97,7 +120,13 @@ const UploadPanel = ({ match, matchId, videoMeta, uploading, uploadProgress, upl
           <>
             <CloudArrowUp size={64} className="text-[#007AFF] mx-auto mb-4 animate-pulse" />
             <h3 className="text-2xl font-bold mb-4" style={{ fontFamily: 'Bebas Neue' }}>Uploading Video</h3>
-            <UploadInProgress uploadProgress={uploadProgress} uploadStatus={uploadStatus} selectedFile={selectedFile} />
+            <UploadInProgress
+              uploadProgress={uploadProgress}
+              uploadStatus={uploadStatus}
+              selectedFile={selectedFile}
+              notifyOnComplete={notifyOnComplete}
+              onToggleNotify={onToggleNotify}
+            />
           </>
         ) : (
           <>

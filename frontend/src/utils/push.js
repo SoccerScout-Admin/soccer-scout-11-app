@@ -110,3 +110,32 @@ export const getSubscriptionCount = async () => {
     return 0;
   }
 };
+
+/**
+ * Fire a *local* notification from the main thread via the active service worker.
+ * Works in foreground & background tabs (Android Chrome requires SW.showNotification
+ * rather than `new Notification()`). Use this for "this thing finished" toasts
+ * that originate in the client — not server-pushed events.
+ *
+ * Returns true if the notification was fired, false otherwise (permission denied
+ * or no SW available). Errors are swallowed so the caller can fire-and-forget.
+ */
+export const showLocalNotification = async (title, { body, url = '/', tag } = {}) => {
+  try {
+    if (!isPushSupported() || Notification.permission !== 'granted') return false;
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) return false;
+    await reg.showNotification(title, {
+      body,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      data: { url },
+      tag: tag || 'soccer-scout-local',
+      renotify: true,
+    });
+    return true;
+  } catch (err) {
+    console.warn('[push] showLocalNotification failed:', err);
+    return false;
+  }
+};
