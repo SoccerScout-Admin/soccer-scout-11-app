@@ -2,6 +2,18 @@
 
 ## What's Been Implemented
 
+### Install Guide Modal + QR Code (iter41 — May 11, 2026)
+
+- **`InstallGuideModal.js`**: tabbed modal (iPhone / Android / Desktop) with a 144px QR code of the current origin so coaches can scan from their phone or an assistant coach's device. Each tab has accurate, browser-specific install steps:
+  - **iPhone/iPad — Safari**: Share → Add to Home Screen (with note that Chrome/DuckDuckGo on iOS can't install)
+  - **Android — Chrome/Brave/Edge**: auto Install App banner + 3-dot menu fallback
+  - **Android — DuckDuckGo**: bottom 3-dot menu → Add to Home Screen
+  - **Android — Firefox**: top-right vertical menu → Install
+  - **Desktop — Chrome/Edge/Brave**: address-bar install icon + menu fallback
+- **Discreet footer link** on the Dashboard ("INSTALL ON ANOTHER DEVICE") opens the modal. Doesn't compete with the auto-firing `PWAInstallPrompt` — this is on-demand for users who already installed locally and want to onboard staff/players.
+- **New dependency**: `qrcode.react@4.2.0` (~6 KB gzipped — generates SVG, no external API).
+- **Build verification**: `yarn build` runs clean; bundle picks up the new component + QR lib.
+
 ### Mobile UX Pass + PWA Install Hardening (iter40 — May 11, 2026)
 
 **Mobile-responsive fixes**

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader, getCurrentUser } from '../App';
-import { Plus, VideoCamera, CaretRight, Globe, ChartLineUp } from '@phosphor-icons/react';
+import { Plus, VideoCamera, CaretRight, Globe, ChartLineUp, DeviceMobile } from '@phosphor-icons/react';
 import CoachPulseCard from './components/CoachPulseCard';
 import GameOfTheWeekBanner from './components/GameOfTheWeekBanner';
 import DashboardHeader from './components/DashboardHeader';
@@ -14,6 +14,7 @@ import ShareFolderModal from './components/ShareFolderModal';
 import BulkActionBar from './components/BulkActionBar';
 import QuickActionsRow from './components/QuickActionsRow';
 import MyReelStatsCard from './components/MyReelStatsCard';
+import InstallGuideModal from '../components/InstallGuideModal';
 
 const Dashboard = () => {
   const [matches, setMatches] = useState([]);
@@ -33,6 +34,7 @@ const Dashboard = () => {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMatchIds, setSelectedMatchIds] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [unreadMentions, setUnreadMentions] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const navigate = useNavigate();
@@ -395,6 +397,24 @@ const Dashboard = () => {
       <ShareFolderModal open={showShareModal} sharingFolder={sharingFolder}
         onClose={() => setShowShareModal(false)}
         onCopy={copyShareLink} onRevoke={handleRevokeShare} copied={copied} />
+
+      {showInstallGuide && <InstallGuideModal onClose={() => setShowInstallGuide(false)} />}
+
+      {/* Discreet footer link — drives org-wide adoption (assistant coaches, players) */}
+      <footer className="border-t border-white/5 px-4 sm:px-6 py-3 mt-8">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+          <p className="text-[10px] tracking-[0.2em] uppercase text-[#666]">
+            Soccer Scout 11 · v1.0
+          </p>
+          <button
+            data-testid="install-on-another-device-btn"
+            onClick={() => setShowInstallGuide(true)}
+            className="flex items-center gap-1.5 text-[10px] tracking-[0.2em] uppercase text-[#A3A3A3] hover:text-[#007AFF] transition-colors">
+            <DeviceMobile size={12} weight="bold" />
+            Install on Another Device
+          </button>
+        </div>
+      </footer>
     </div>
   );
 };
