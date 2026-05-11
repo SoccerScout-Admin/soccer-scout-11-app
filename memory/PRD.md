@@ -2,6 +2,16 @@
 
 ## What's Been Implemented
 
+### Weekly "Reel Recap" Email (May 11, 2026 — iter34)
+
+- **Service** (`services/reel_recap.py`): Re-engagement loop — sends every Monday 10:00 UTC (1h after scout digest to avoid Resend rate-limit lockstep).
+- **Per-user pipeline**: groups all `ready + shared` reels by owner, counts weekly views, computes `delta` vs the prior 7 days, picks top 3 reels by weekly views, builds a branded HTML email with view count + delta chip ("+10 vs last wk" / "-5 vs last wk"), top-3 list with flame badge on #1, dual CTAs ("See Trending Reels" → `/reels`, "My Dashboard" → `/dashboard`).
+- **Skip rules**: users with 0 shared reels are skipped silently. Users with shared reels but 0 weekly views are skipped only when triggered by APScheduler (so manual admin runs always send for QA).
+- **Send path**: routes through `services.email_queue.send_or_queue` so Resend quota deferrals don't drop emails. `kind="reel_recap"` for log filtering.
+- **Admin endpoint**: `POST /api/admin/highlight-reels/send-weekly-recap` for manual QA triggers (admin/owner role only).
+- **Scheduler**: registered `reel_recap_weekly` cron job with `misfire_grace_time=3600` so a brief server hiccup doesn't drop the week's send.
+- **9 new pytest cases**: duration formatting, HTML rendering (positive/negative delta, XSS escape on coach name + team names), zero-reels base case, skip-on-silence rule, end-to-end send-with-views flow, admin auth, admin trigger response shape. All passing.
+
 ### "My Reel Stats" Dashboard Card (May 11, 2026 — iter33)
 
 - **Backend**: New `GET /api/highlight-reels/my-stats` endpoint (auth-required) returning:

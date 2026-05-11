@@ -260,6 +260,15 @@ async def my_reel_stats(current_user: dict = Depends(get_current_user)):
     }
 
 
+@router.post("/admin/highlight-reels/send-weekly-recap")
+async def admin_send_reel_recap(current_user: dict = Depends(get_current_user)):
+    """Admin-only manual trigger for the weekly Reel Recap email."""
+    if (current_user.get("role") or "").lower() not in ("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin only")
+    from services.reel_recap import send_weekly_reel_recap
+    return await send_weekly_reel_recap(triggered_by="manual")
+
+
 @router.get("/highlight-reels/browse")
 async def browse_public_reels(
     q: str = "",

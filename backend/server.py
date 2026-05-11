@@ -1988,6 +1988,14 @@ def start_coach_pulse_scheduler():
             except Exception as e:
                 logger.error("[apscheduler] scout weekly digest crashed: %s", e)
 
+        async def _reel_recap_job():
+            try:
+                from services.reel_recap import send_weekly_reel_recap
+                result = await send_weekly_reel_recap(triggered_by="apscheduler")
+                logger.info("[apscheduler] reel recap weekly: %s", result)
+            except Exception as e:
+                logger.error("[apscheduler] reel recap weekly crashed: %s", e)
+
         _scheduler = AsyncIOScheduler(timezone="UTC")
         _scheduler.add_job(
             _weekly_job,
@@ -2010,9 +2018,16 @@ def start_coach_pulse_scheduler():
             replace_existing=True,
             misfire_grace_time=3600,
         )
+        _scheduler.add_job(
+            _reel_recap_job,
+            CronTrigger(day_of_week="mon", hour=10, minute=0, timezone="UTC"),
+            id="reel_recap_weekly",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
         _scheduler.start()
         logger.info(
-            "[apscheduler] scheduler started — coach_pulse_weekly (Mon 08:00 UTC) + email_queue_retry (every 30 min) + scout_digest_weekly (Mon 09:00 UTC)"
+            "[apscheduler] scheduler started — coach_pulse_weekly (Mon 08:00 UTC) + email_queue_retry (every 30 min) + scout_digest_weekly (Mon 09:00 UTC) + reel_recap_weekly (Mon 10:00 UTC)"
         )
     except Exception as e:
         logger.error("[apscheduler] failed to start scheduler: %s", e)
