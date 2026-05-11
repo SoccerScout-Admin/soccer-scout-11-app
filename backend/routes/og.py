@@ -111,7 +111,7 @@ async def og_folder_image(share_token: str):
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"},
     )
 
 
@@ -181,7 +181,7 @@ async def og_clip_image(share_token: str):
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"},
     )
 
 
@@ -241,7 +241,7 @@ async def og_match_recap_image(share_token: str):
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"},
     )
 
 
@@ -343,7 +343,7 @@ async def og_highlight_reel_image(share_token: str):
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"},
     )
 
 
@@ -406,7 +406,7 @@ async def og_clip_collection_image(share_token: str):
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"},
     )
 
 
@@ -510,7 +510,7 @@ async def og_player_image(share_token: str):
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"},
     )
 
 
@@ -571,7 +571,7 @@ async def og_club_image(share_token: str):
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"},
     )
 
 
@@ -623,5 +623,5 @@ async def og_scout_listing_image(listing_id: str):
     return Response(
         content=png,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=300"},
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=3600"},
     )

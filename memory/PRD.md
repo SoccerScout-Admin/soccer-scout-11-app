@@ -2,6 +2,13 @@
 
 ## What's Been Implemented
 
+### OG Card Caching Bump 5min→1h (iter39 — May 11, 2026)
+
+- **Change** (`routes/og.py`): all 8 OG image endpoints (folder, clip, match-recap, scout-listing, highlight-reel, player) now serve `Cache-Control: public, max-age=3600, s-maxage=3600`.
+- **Why**: when a reel goes viral on social, every Twitter/WhatsApp/Slack/Discord/Telegram link preview hits the OG image endpoint. Pillow re-renders the PNG on each cache miss. 5min cache meant 12 cache misses per viral hour; 1h means 1 cache miss per hour — ~12× backend load reduction.
+- **Risk**: revoked share-tokens may show a stale OG image preview for up to 1 hour before crawlers re-fetch. Acceptable — the actual SPA page already returns 404 for revoked tokens, so clicks land on an error page rather than ghost content.
+- **Verified**: curl against a live reel OG endpoint confirmed the new header is served.
+
 ### Fire-and-Forget View Tracking (iter38 — May 11, 2026)
 
 - **Change** (`routes/highlight_reels.py`): `record_reel_view` is now wrapped in a fire-and-forget `_record_view_safely()` helper invoked via `asyncio.create_task` from the public reel-page handler. Errors are swallowed + logged at WARNING level so view tracking never blocks the share page.
