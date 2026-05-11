@@ -5,6 +5,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import stat
 import re
 import logging
 from pathlib import Path
@@ -1949,24 +1950,25 @@ async def startup():
 
 
 async def _cleanup_stale_temp_files():
-    """Delete temp ffmpeg artifacts older than 30 min on boot.
+    """Delete temp ffmpeg artifacts older than 10 min on boot AND every 30 min.
 
     When the pod is OOM-killed mid-ffmpeg, `finally` cleanup never runs and we
-    leak hundreds of MBs of `tmpXXXX.mp4` files into `/var/video_chunks`. This
-    sweeper runs once at boot to reclaim that space before processing resumes.
+    leak hundreds of MBs of `tmpXXXX.mp4` files. This sweeper reclaims that
+    space + logs the current disk usage so operators can spot trends.
+
+    Aggressive 10-min staleness threshold: a healthy ffmpeg job either completes
+    or fails well within 10 minutes (longest video sample compression is ~5min).
     """
     import time as _time
     import glob
-    cutoff = _time.time() - 30 * 60  # 30 minutes ago
+    import shutil as _shutil
+    cutoff = _time.time() - 10 * 60  # 10 minutes ago
     patterns = [
-        "/var/video_chunks/tmp*.mp4",
         "/var/video_chunks/tmp*",
-        "/var/video_chunks/close_ups/tmp*.mp4",
-        "/var/video_chunks/close_ups/tmp*.png",
-        "/var/video_chunks/close_ups/tmp*.txt",
-        "/var/video_chunks/reels/tmp*.mp4",
-        "/var/video_chunks/reels/tmp*.png",
-        "/var/video_chunks/reels/tmp*.txt",
+        "/var/video_chunks/close_ups/tmp*",
+        "/var/video_chunks/reels/tmp*",
+        "/tmp/tmp*.mp4",
+        "/tmp/tmp*.png",
     ]
     reclaimed_bytes = 0
     reclaimed_count = 0
@@ -1974,18 +1976,35 @@ async def _cleanup_stale_temp_files():
         for path in glob.glob(pattern):
             try:
                 st = os.stat(path)
+                if not stat.S_ISREG(st.st_mode):
+                    continue
                 if st.st_mtime < cutoff:
                     size = st.st_size
                     os.unlink(path)
                     reclaimed_bytes += size
                     reclaimed_count += 1
-            except OSError:
+            except (OSError, NameError):
                 continue
     if reclaimed_count > 0:
         logger.info(
-            "[startup-cleanup] reclaimed %.1f MB across %d stale temp files",
+            "[disk-sweep] reclaimed %.1f MB across %d stale temp files",
             reclaimed_bytes / (1024 * 1024), reclaimed_count,
         )
+
+    # Always log current disk usage so we have a trail when the pod gets killed
+    try:
+        total, used, free = _shutil.disk_usage("/var/video_chunks")
+        pct = (used / total) * 100 if total > 0 else 0
+        msg = (
+            f"[disk-sweep] disk usage: {used/(1024**3):.1f}G / {total/(1024**3):.1f}G "
+            f"({pct:.0f}%) — free {free/(1024**3):.1f}G"
+        )
+        if pct >= 80:
+            logger.warning("%s — DISK PRESSURE", msg)
+        else:
+            logger.info(msg)
+    except OSError:
+        pass
 
 
 # ===== APScheduler: Weekly Coach Pulse Blast =====

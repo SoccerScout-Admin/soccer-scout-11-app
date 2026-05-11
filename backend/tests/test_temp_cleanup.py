@@ -29,14 +29,14 @@ def test_sweeper_reclaims_old_tmp_files(tmp_path, monkeypatch):
         with open(p, "wb") as fh:
             fh.write(b"x" * 1024)
 
-    # Backdate the stale file by 60 minutes
-    cutoff = time.time() - 60 * 60
+    # Backdate the stale file by 20 minutes (>10 min threshold)
+    cutoff = time.time() - 20 * 60
     os.utime(stale, (cutoff, cutoff))
 
     try:
         _run_async(_cleanup_stale_temp_files())
         assert not os.path.exists(stale), "stale temp file should have been removed"
-        assert os.path.exists(fresh), "fresh temp file (<30min) must remain"
+        assert os.path.exists(fresh), "fresh temp file (<10min) must remain"
         assert os.path.exists(keep), "non-tmp prefixed files must NEVER be touched"
     finally:
         for p in (stale, fresh, keep):
