@@ -2,6 +2,20 @@
 
 ## What's Been Implemented
 
+### "My Reel Stats" Dashboard Card (May 11, 2026 — iter33)
+
+- **Backend**: New `GET /api/highlight-reels/my-stats` endpoint (auth-required) returning:
+  - `total_reels`, `ready_reels`, `shared_reels` counts
+  - `views_7d` + `views_all_time` aggregated across all my reels via single `$group` pipeline
+  - `top_reel` — my most-viewed reel in the last 7 days that's still **shared + ready** (unshared reels skip the surface even if they have higher view counts, since the user can't link to them anyway)
+- **Frontend** `MyReelStatsCard.js`:
+  - Auto-hides when the user has no reels (returns `null`) so it never shows a confusing zero-state on a brand-new dashboard
+  - 3-column stat tiles: Reels (white/blue) · Views 7d (green) · All-Time (amber)
+  - Hero "Most-Viewed This Week" callout with red flame icon, click-through to the public reel page
+  - When user has reels but no views yet, shows a "Share a reel to start tracking views" nudge
+- **Mounted** on Dashboard just below `QuickActionsRow`, above `GameOfTheWeekBanner`.
+- **4 new pytest cases**: auth required, zero-state shape, multi-reel aggregation + top-reel picking, top-reel skips unshared reels even if they have more views. **40/40 highlight reel tests passing.**
+
 ### Trending Reels Strip + View Tracking (May 11, 2026 — iter32)
 
 - **View tracking** (`services/scout_digest.py`): mirror of the listings view-tracking pattern — `record_reel_view()` with 24h debounce per (reel_id, viewer_key), `trending_reel_ids()` Mongo aggregation grouping by `reel_id` over a sliding window, `reel_view_count()` for the public detail page.

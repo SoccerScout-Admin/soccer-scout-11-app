@@ -825,3 +825,156 @@ def test_revoking_share_removes_reel_from_trending(admin_headers):
             await db.highlight_reel_views.delete_many({"reel_id": reel_id})
             await db.matches.delete_one({"id": match_id})
         _run_async(cleanup())
+
+
+
+# ---------- My Reel Stats (dashboard card) ----------
+
+def test_my_reel_stats_requires_auth():
+    import requests
+    r = requests.get(f"{BASE_URL}/api/highlight-reels/my-stats")
+    assert r.status_code in (401, 403)
+
+
+def test_my_reel_stats_zero_when_no_reels(admin_headers):
+    """When the user has no reels, all counters are 0 and top_reel is None."""
+    import requests
+
+    # Clear any leftover reels owned by this user just to be safe
+    async def precount():
+        from db import db
+        user = await db.users.find_one({"email": "Ben.buursma@gmail.com"}, {"_id": 0, "id": 1})
+        return await db.highlight_reels.count_documents({"user_id": user["id"]})
+
+    pre = _run_async(precount())
+    r = requests.get(f"{BASE_URL}/api/highlight-reels/my-stats", headers=admin_headers)
+    assert r.status_code == 200
+    body = r.json()
+    # Body always has these keys with the right shape
+    for k in ("total_reels", "ready_reels", "shared_reels", "views_7d", "views_all_time", "top_reel"):
+        assert k in body
+    assert body["total_reels"] == pre
+    if pre == 0:
+        assert body["top_reel"] is None
+
+
+def test_my_reel_stats_aggregates_counts_and_views(admin_headers):
+    """Two reels with seeded views → totals + top_reel must surface correctly."""
+    import requests
+
+    async def setup():
+        from db import db
+        user = await db.users.find_one({"email": "Ben.buursma@gmail.com"}, {"_id": 0, "id": 1})
+        match_id = "mrs-match-" + uuid.uuid4().hex[:8]
+        await db.matches.insert_one({
+            "id": match_id, "user_id": user["id"],
+            "team_home": "MyStatsHome", "team_away": "MyStatsAway",
+            "date": "2026-01-01", "competition": "MS League",
+        })
+        # Big reel (10 views) + small reel (3 views) — both shared & ready
+        big = "mrs-big-" + uuid.uuid4().hex[:8]
+        small = "mrs-sm-" + uuid.uuid4().hex[:8]
+        for rid in (big, small):
+            await db.highlight_reels.insert_one({
+                "id": rid, "user_id": user["id"], "match_id": match_id,
+                "status": "ready", "share_token": "tk-" + rid[-6:],
+                "selected_clip_ids": [], "total_clips": 4, "duration_seconds": 65.0,
+                "created_at": "2026-05-10T00:00:00+00:00",
+            })
+        # Seed views
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        for i in range(10):
+            await db.highlight_reel_views.insert_one({
+                "reel_id": big, "viewer_key": f"a:mrs-b-{i}",
+                "viewer_user_id": None, "viewed_at": now,
+            })
+        for i in range(3):
+            await db.highlight_reel_views.insert_one({
+                "reel_id": small, "viewer_key": f"a:mrs-s-{i}",
+                "viewer_user_id": None, "viewed_at": now,
+            })
+        return match_id, big, small
+
+    match_id, big, small = _run_async(setup())
+    try:
+        r = requests.get(f"{BASE_URL}/api/highlight-reels/my-stats", headers=admin_headers)
+        assert r.status_code == 200
+        body = r.json()
+        # At minimum should include our two new reels
+        assert body["total_reels"] >= 2
+        assert body["shared_reels"] >= 2
+        assert body["views_7d"] >= 13
+        assert body["views_all_time"] >= 13
+
+        # Top reel = the 10-view one
+        assert body["top_reel"] is not None
+        assert body["top_reel"]["id"] == big
+        assert body["top_reel"]["view_count"] >= 10
+        assert body["top_reel"]["team_home"] == "MyStatsHome"
+    finally:
+        async def cleanup():
+            from db import db
+            await db.highlight_reels.delete_many({"id": {"$in": [big, small]}})
+            await db.highlight_reel_views.delete_many({"reel_id": {"$in": [big, small]}})
+            await db.matches.delete_one({"id": match_id})
+        _run_async(cleanup())
+
+
+def test_my_reel_stats_top_reel_skips_unshared(admin_headers):
+    """A reel without a share token must NOT be the surfaced top_reel."""
+    import requests
+
+    async def setup():
+        from db import db
+        user = await db.users.find_one({"email": "Ben.buursma@gmail.com"}, {"_id": 0, "id": 1})
+        match_id = "mrs-skip-match-" + uuid.uuid4().hex[:8]
+        await db.matches.insert_one({
+            "id": match_id, "user_id": user["id"],
+            "team_home": "SkipHome", "team_away": "SkipAway",
+            "date": "2026-01-01", "competition": "Skip",
+        })
+        unshared = "mrs-uns-" + uuid.uuid4().hex[:8]  # 50 views but no token
+        shared = "mrs-shr-" + uuid.uuid4().hex[:8]     # 5 views but shared
+        await db.highlight_reels.insert_one({
+            "id": unshared, "user_id": user["id"], "match_id": match_id,
+            "status": "ready", "share_token": None,
+            "selected_clip_ids": [], "total_clips": 2, "duration_seconds": 30.0,
+            "created_at": "2026-05-10T00:00:00+00:00",
+        })
+        await db.highlight_reels.insert_one({
+            "id": shared, "user_id": user["id"], "match_id": match_id,
+            "status": "ready", "share_token": "skiptk-" + shared[-6:],
+            "selected_clip_ids": [], "total_clips": 2, "duration_seconds": 30.0,
+            "created_at": "2026-05-10T00:00:00+00:00",
+        })
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        for i in range(50):
+            await db.highlight_reel_views.insert_one({
+                "reel_id": unshared, "viewer_key": f"a:uns-{i}",
+                "viewer_user_id": None, "viewed_at": now,
+            })
+        for i in range(5):
+            await db.highlight_reel_views.insert_one({
+                "reel_id": shared, "viewer_key": f"a:shr-{i}",
+                "viewer_user_id": None, "viewed_at": now,
+            })
+        return match_id, unshared, shared
+
+    match_id, unshared, shared = _run_async(setup())
+    try:
+        r = requests.get(f"{BASE_URL}/api/highlight-reels/my-stats", headers=admin_headers)
+        body = r.json()
+        # Top reel must skip the higher-view unshared and pick the shared one
+        assert body["top_reel"] is not None
+        assert body["top_reel"]["id"] == shared
+        # But all-time views still tally both
+        assert body["views_all_time"] >= 55
+    finally:
+        async def cleanup():
+            from db import db
+            await db.highlight_reels.delete_many({"id": {"$in": [unshared, shared]}})
+            await db.highlight_reel_views.delete_many({"reel_id": {"$in": [unshared, shared]}})
+            await db.matches.delete_one({"id": match_id})
+        _run_async(cleanup())

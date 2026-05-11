@@ -179,6 +179,86 @@ async def trending_reels(limit: int = 12, days: int = 7):
     return {"reels": out[:limit], "window_days": days}
 
 
+@router.get("/highlight-reels/my-stats")
+async def my_reel_stats(current_user: dict = Depends(get_current_user)):
+    """Dashboard card data — the owner's own reel stats.
+
+    Returns:
+      - total_reels, ready_reels, shared_reels (active share tokens)
+      - views_7d, views_all_time (across all my reels)
+      - top_reel — { id, share_token, team_home, team_away, view_count }
+        for the owner's most-viewed reel in the last 7 days, OR None
+    """
+    from datetime import timedelta
+    user_id = current_user["id"]
+
+    # All reels owned by me
+    my_reels = await db.highlight_reels.find(
+        {"user_id": user_id},
+        {"_id": 0, "id": 1, "status": 1, "share_token": 1, "match_id": 1, "total_clips": 1, "duration_seconds": 1},
+    ).to_list(500)
+
+    total_reels = len(my_reels)
+    ready_reels = sum(1 for r in my_reels if r.get("status") == "ready")
+    shared_reels = sum(1 for r in my_reels if r.get("share_token"))
+
+    if not my_reels:
+        return {
+            "total_reels": 0, "ready_reels": 0, "shared_reels": 0,
+            "views_7d": 0, "views_all_time": 0, "top_reel": None,
+        }
+
+    reel_ids = [r["id"] for r in my_reels]
+
+    # All-time views across my reels
+    views_all_time = await db.highlight_reel_views.count_documents(
+        {"reel_id": {"$in": reel_ids}},
+    )
+
+    # 7-day windowed views + group to find the top reel
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    pipeline = [
+        {"$match": {"reel_id": {"$in": reel_ids}, "viewed_at": {"$gt": cutoff}}},
+        {"$group": {"_id": "$reel_id", "view_count": {"$sum": 1}}},
+        {"$sort": {"view_count": -1}},
+    ]
+    rows = await db.highlight_reel_views.aggregate(pipeline).to_list(len(reel_ids))
+    views_7d = sum(r["view_count"] for r in rows)
+
+    top_reel = None
+    if rows:
+        # Pick the top reel that's still active (ready + shared)
+        my_lookup = {r["id"]: r for r in my_reels}
+        for row in rows:
+            r = my_lookup.get(row["_id"])
+            if not r:
+                continue
+            if r.get("status") != "ready" or not r.get("share_token"):
+                continue
+            match = await db.matches.find_one(
+                {"id": r["match_id"]},
+                {"_id": 0, "team_home": 1, "team_away": 1},
+            )
+            top_reel = {
+                "id": r["id"],
+                "share_token": r["share_token"],
+                "team_home": (match or {}).get("team_home", ""),
+                "team_away": (match or {}).get("team_away", ""),
+                "view_count": row["view_count"],
+                "total_clips": r.get("total_clips", 0),
+                "duration_seconds": r.get("duration_seconds", 0.0),
+            }
+            break
+
+    return {
+        "total_reels": total_reels,
+        "ready_reels": ready_reels,
+        "shared_reels": shared_reels,
+        "views_7d": views_7d,
+        "views_all_time": views_all_time,
+        "top_reel": top_reel,
+    }
+
 
 @router.get("/highlight-reels/browse")
 async def browse_public_reels(
