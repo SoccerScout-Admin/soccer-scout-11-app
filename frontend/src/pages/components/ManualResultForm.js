@@ -192,7 +192,7 @@ const ManualResultForm = ({ match, players, onSaved }) => {
     const outcomeColor = outcome === 'W' ? '#10B981' : outcome === 'L' ? '#EF4444' : '#FBBF24';
     const isLocked = !!existing.is_final;
     return (
-      <div data-testid="manual-result-summary" className="bg-gradient-to-br from-[#0F1A2E] to-[#141414] border border-[#60A5FA]/30 p-6 mb-6">
+      <div data-testid="manual-result-summary" className="bg-gradient-to-br from-[#0F1A2E] to-[#141414] border border-[#60A5FA]/30 p-4 sm:p-6 mb-6">
         <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
           <div className="flex items-center gap-3">
             <Trophy size={22} weight="fill" className="text-[#60A5FA]" />
@@ -329,7 +329,7 @@ const ManualResultForm = ({ match, players, onSaved }) => {
 
   // Editor (or first-time entry)
   return (
-    <div data-testid="manual-result-form" className="bg-[#141414] border border-[#60A5FA]/30 p-6 mb-6">
+    <div data-testid="manual-result-form" className="bg-[#141414] border border-[#60A5FA]/30 p-4 sm:p-6 mb-6">
       <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <ClipboardText size={22} weight="bold" className="text-[#60A5FA]" />
@@ -424,24 +424,24 @@ const ManualResultForm = ({ match, players, onSaved }) => {
             {events.map((ev, i) => (
               <div key={`evform-${i}`} data-testid={`event-row-${i}`}
                 className="bg-[#0A0A0A] border border-white/5 p-2.5 overflow-hidden">
-                {/* Mobile: stacked 2x2 grid. Desktop: 12-col compact row. */}
+                {/* Mobile: full-width stacked, larger tap targets. Desktop: 12-col compact row. */}
                 <div className="grid grid-cols-2 sm:grid-cols-12 gap-2">
                   <input type="number" inputMode="numeric" min="0" max="200" value={ev.minute}
                     onChange={(e) => updateEvent(i, { minute: e.target.value })}
                     placeholder="Min" aria-label="Minute"
-                    className="col-span-1 sm:col-span-1 min-w-0 bg-[#141414] border border-white/10 text-white px-2 py-2 text-xs focus:border-[#60A5FA] focus:outline-none" />
+                    className="col-span-1 sm:col-span-1 min-w-0 bg-[#141414] border border-white/10 text-white px-2 py-3 sm:py-2 text-sm sm:text-xs focus:border-[#60A5FA] focus:outline-none" />
                   <select value={ev.type} onChange={(e) => updateEvent(i, { type: e.target.value })} aria-label="Event type"
-                    className="col-span-1 sm:col-span-2 min-w-0 bg-[#141414] border border-white/10 text-white px-2 py-2 text-xs focus:border-[#60A5FA] focus:outline-none">
+                    className="col-span-1 sm:col-span-2 min-w-0 bg-[#141414] border border-white/10 text-white px-2 py-3 sm:py-2 text-sm sm:text-xs focus:border-[#60A5FA] focus:outline-none">
                     {EVENT_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
                   </select>
                   <select value={ev.team} onChange={(e) => updateEvent(i, { team: e.target.value })} aria-label="Team"
-                    className="col-span-2 sm:col-span-3 min-w-0 bg-[#141414] border border-white/10 text-white px-2 py-2 text-xs focus:border-[#60A5FA] focus:outline-none">
+                    className="col-span-2 sm:col-span-3 min-w-0 bg-[#141414] border border-white/10 text-white px-2 py-3 sm:py-2 text-sm sm:text-xs focus:border-[#60A5FA] focus:outline-none">
                     <option value="">Team...</option>
                     <option value={match.team_home}>{match.team_home}</option>
                     <option value={match.team_away}>{match.team_away}</option>
                   </select>
                   <select value={ev.player_id || ''} onChange={(e) => updateEvent(i, { player_id: e.target.value })} aria-label="Player"
-                    className="col-span-2 sm:col-span-2 min-w-0 bg-[#141414] border border-white/10 text-white px-2 py-2 text-xs focus:border-[#60A5FA] focus:outline-none">
+                    className="col-span-2 sm:col-span-2 min-w-0 bg-[#141414] border border-white/10 text-white px-2 py-3 sm:py-2 text-sm sm:text-xs focus:border-[#60A5FA] focus:outline-none">
                     <option value="">Player (opt)</option>
                     {playersForEvent(ev.team).map((p) => (
                       <option key={p.id} value={p.id}>#{p.number ?? '?'} {p.name}</option>
@@ -449,11 +449,11 @@ const ManualResultForm = ({ match, players, onSaved }) => {
                   </select>
                   <input type="text" maxLength="120" value={ev.description}
                     onChange={(e) => updateEvent(i, { description: e.target.value })}
-                    placeholder="Description" aria-label="Description"
-                    className="col-span-2 sm:col-span-3 min-w-0 bg-[#141414] border border-white/10 text-white px-2 py-2 text-xs focus:border-[#60A5FA] focus:outline-none" />
+                    placeholder="Description (optional)" aria-label="Description"
+                    className="col-span-2 sm:col-span-3 min-w-0 bg-[#141414] border border-white/10 text-white px-2 py-3 sm:py-2 text-sm sm:text-xs focus:border-[#60A5FA] focus:outline-none" />
                   <button data-testid={`remove-event-${i}-btn`} type="button" onClick={() => removeEvent(i)}
                     aria-label="Remove event"
-                    className="col-span-2 sm:col-span-1 flex items-center justify-center gap-1.5 py-2 text-[10px] uppercase tracking-wider text-[#A3A3A3] hover:text-[#EF4444] hover:bg-[#EF4444]/10 border border-white/5 sm:border-0">
+                    className="col-span-2 sm:col-span-1 flex items-center justify-center gap-1.5 py-2.5 sm:py-2 text-[11px] sm:text-[10px] uppercase tracking-wider text-[#A3A3A3] hover:text-[#EF4444] hover:bg-[#EF4444]/10 border border-white/10 sm:border-0">
                     <Trash size={14} />
                     <span className="sm:hidden">Remove</span>
                   </button>
@@ -477,9 +477,9 @@ const ManualResultForm = ({ match, players, onSaved }) => {
 
       {error && <p data-testid="manual-error" className="text-xs text-[#EF4444] mb-3">{error}</p>}
 
-      <div className="flex gap-2 justify-end">
+      <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
         <button data-testid="save-manual-result-btn" onClick={handleSave} disabled={saving}
-          className="flex items-center gap-2 px-5 py-2.5 bg-[#60A5FA] hover:bg-[#3B82F6] disabled:opacity-50 text-white text-xs font-bold tracking-wider uppercase transition-colors">
+          className="flex items-center justify-center gap-2 px-5 py-3 sm:py-2.5 bg-[#60A5FA] hover:bg-[#3B82F6] disabled:opacity-50 text-white text-xs font-bold tracking-wider uppercase transition-colors">
           {saving ? 'Saving…' : <><Check size={14} weight="bold" /> Save Result</>}
         </button>
       </div>

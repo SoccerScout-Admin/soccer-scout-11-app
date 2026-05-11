@@ -188,60 +188,71 @@ const TeamRoster = () => {
 
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-white">
-      <header className="sticky top-0 z-50 bg-[#0A0A0A] border-b border-white/10 px-6 py-4">
-        <div className="max-w-5xl mx-auto flex items-center gap-4">
+      <header className="sticky top-0 z-50 bg-[#0A0A0A] border-b border-white/10 px-4 sm:px-6 py-3 sm:py-4">
+        <div className="max-w-5xl mx-auto flex items-center gap-3 sm:gap-4 flex-wrap">
           <button data-testid="back-btn" onClick={() => navigate('/clubs')}
-            className="p-2 hover:bg-[#1F1F1F] transition-colors border border-white/10">
-            <ArrowLeft size={24} />
+            className="p-2 hover:bg-[#1F1F1F] transition-colors border border-white/10 flex-shrink-0">
+            <ArrowLeft size={20} />
           </button>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
             {clubInfo?.logo_url ? (
-              <img src={`${API.replace('/api', '')}${clubInfo.logo_url}`} alt="" className="w-8 h-8 object-contain" />
+              <img src={`${API.replace('/api', '')}${clubInfo.logo_url}`} alt="" className="w-7 h-7 sm:w-8 sm:h-8 object-contain flex-shrink-0" />
             ) : (
-              <Shield size={24} className="text-[#333]" />
+              <Shield size={22} className="text-[#333] flex-shrink-0" />
             )}
-            <div>
-              <h1 className="text-2xl font-bold" style={{ fontFamily: 'Bebas Neue' }}>{team.name}</h1>
-              <div className="flex items-center gap-2 text-xs text-[#A3A3A3]">
-                <CalendarBlank size={12} /> {team.season}
-                {clubInfo && <span className="text-[#007AFF]">— {clubInfo.name}</span>}
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-2xl font-bold truncate" style={{ fontFamily: 'Bebas Neue' }}>{team.name}</h1>
+              <div className="flex items-center gap-2 text-xs text-[#A3A3A3] flex-wrap">
+                <span className="flex items-center gap-1"><CalendarBlank size={12} /> {team.season}</span>
+                {clubInfo && <span className="text-[#007AFF] truncate">— {clubInfo.name}</span>}
               </div>
             </div>
           </div>
-          <div className="ml-auto flex items-center gap-3">
-            <span className="text-xs text-[#666] bg-white/5 px-3 py-1.5">{players.length} Players</span>
+          {/* Player count chip — always visible */}
+          <span className="text-[10px] sm:text-xs text-[#666] bg-white/5 px-2 sm:px-3 py-1 sm:py-1.5 flex-shrink-0 ml-auto">
+            {players.length} <span className="hidden sm:inline">Players</span>
+          </span>
+          {/* Action row — full width on mobile, inline on desktop. Add Player is
+              always the primary CTA, the rest collapse to icon-only on mobile. */}
+          <div className="flex items-center gap-2 w-full sm:w-auto sm:ml-0">
             <button data-testid="share-team-btn" onClick={() => setShareModalOpen(true)}
-              className={`flex items-center gap-2 px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors border ${
+              aria-label={team.share_token ? 'Sharing on' : 'Share team'}
+              className={`flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors border ${
                 team.share_token
                   ? 'border-[#10B981]/40 text-[#10B981] hover:bg-[#10B981]/10'
                   : 'border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F]'
               }`}>
-              <ShareNetwork size={14} weight="bold" /> {team.share_token ? 'Shared' : 'Share'}
+              <ShareNetwork size={14} weight="bold" />
+              <span className="hidden sm:inline">{team.share_token ? 'Shared' : 'Share'}</span>
             </button>
             <button data-testid="add-existing-player-btn" onClick={openAddExisting}
-              className="flex items-center gap-2 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors">
-              <UserPlus size={14} weight="bold" /> Add Existing
+              aria-label="Add existing player"
+              className="flex items-center justify-center gap-1.5 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] px-3 sm:px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors">
+              <UserPlus size={14} weight="bold" />
+              <span className="hidden sm:inline">Add Existing</span>
             </button>
             <button data-testid="import-roster-btn" onClick={() => setShowImport(true)}
-              className="flex items-center gap-2 border border-[#10B981]/40 text-[#10B981] hover:bg-[#10B981]/10 px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors">
-              <FileCsv size={14} weight="bold" /> Import CSV
+              aria-label="Import CSV roster"
+              className="flex items-center justify-center gap-1.5 border border-[#10B981]/40 text-[#10B981] hover:bg-[#10B981]/10 px-3 sm:px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors">
+              <FileCsv size={14} weight="bold" />
+              <span className="hidden sm:inline">Import CSV</span>
             </button>
             <button data-testid="add-player-btn" onClick={() => setShowAddPlayer(true)}
-              className="flex items-center gap-2 bg-[#007AFF] hover:bg-[#005bb5] text-white px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors">
+              className="flex flex-1 sm:flex-none items-center justify-center gap-1.5 bg-[#007AFF] hover:bg-[#005bb5] text-white px-3 sm:px-4 py-2 font-bold tracking-wider uppercase text-xs transition-colors">
               <Plus size={14} weight="bold" /> Add Player
             </button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-6 py-8">
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {/* Add Player Form */}
         {showAddPlayer && (
           <form onSubmit={handleAddPlayer} data-testid="add-player-form"
-            className="bg-[#141414] border border-white/10 p-6 mb-8">
+            className="bg-[#141414] border border-white/10 p-4 sm:p-6 mb-8">
             <h3 className="text-sm font-bold uppercase tracking-wider text-white mb-4">Register New Player</h3>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
-              <div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+              <div className="sm:col-span-2 md:col-span-1">
                 <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Name *</label>
                 <input data-testid="player-name-input" type="text" value={playerForm.name}
                   onChange={(e) => setPlayerForm({ ...playerForm, name: e.target.value })}
@@ -249,7 +260,7 @@ const TeamRoster = () => {
               </div>
               <div>
                 <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Jersey Number</label>
-                <input data-testid="player-number-input" type="number" value={playerForm.number}
+                <input data-testid="player-number-input" type="number" inputMode="numeric" min="0" max="99" value={playerForm.number}
                   onChange={(e) => setPlayerForm({ ...playerForm, number: e.target.value })}
                   className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none" />
               </div>
@@ -265,16 +276,16 @@ const TeamRoster = () => {
                   <option value="Forward">Forward</option>
                 </select>
               </div>
-              <div className="flex gap-2">
-                <button data-testid="submit-player-btn" type="submit"
-                  className="flex-1 bg-[#007AFF] hover:bg-[#005bb5] text-white py-3 font-bold tracking-wider uppercase text-xs transition-colors">
-                  Add
-                </button>
-                <button type="button" onClick={() => setShowAddPlayer(false)}
-                  className="px-4 py-3 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors text-xs">
-                  Cancel
-                </button>
-              </div>
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+              <button type="button" onClick={() => setShowAddPlayer(false)}
+                className="px-4 py-3 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors text-xs font-bold tracking-wider uppercase">
+                Cancel
+              </button>
+              <button data-testid="submit-player-btn" type="submit"
+                className="bg-[#007AFF] hover:bg-[#005bb5] text-white px-6 py-3 font-bold tracking-wider uppercase text-xs transition-colors">
+                Add Player
+              </button>
             </div>
           </form>
         )}

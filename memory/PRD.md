@@ -2,6 +2,25 @@
 
 ## What's Been Implemented
 
+### Mobile UX Pass + PWA Install Hardening (iter40 — May 11, 2026)
+
+**Mobile-responsive fixes**
+- **TeamRoster header**: 4 buttons (Share / Add Existing / Import CSV / Add Player) used to spill off-screen on phones. Now collapses to icon-only on mobile (labels appear at `sm:`+ breakpoint), action row wraps to a new line so it's always reachable. Player-count chip stays visible.
+- **Add Player form**: was a 4-col grid forcing tiny inputs on mobile. Now stacks to 1 col on small screens, 2 col on tablets, 3 col on desktop. Cancel button moved below Submit on mobile (thumb-reach), `inputMode="numeric"` added so phones pop the number keypad for jersey #. Min/max 0-99 enforced.
+- **ManualResultForm event rows**: padding tightened to `p-4 sm:p-6`, inputs grow `py-3` on mobile (better tap target), Save Result row uses `flex-col-reverse` on mobile so the primary CTA sits below other buttons.
+
+**PWA install support — Chrome / DuckDuckGo / Firefox / Brave / Edge / Samsung / Safari / in-app webviews**
+- Rewrote `PWAInstallPrompt.js` with proper UA detection + browser/OS-specific instructions.
+  - Native one-click install when `beforeinstallprompt` fires (Chrome/Edge/Brave/Samsung Android + Chrome/Edge/Brave desktop).
+  - Manual numbered steps for: iOS Safari, iOS non-Safari, Android DuckDuckGo, Android Firefox, in-app webviews (Instagram/Facebook). Desktop Firefox is hidden (no PWA support).
+- Manifest upgraded: added `id`, `display_override`, `categories`, maskable icon variant, home-screen shortcuts ("New Match" → `/dashboard`, "Reel Library" → `/reels`).
+- Prompt now dismisses for 14 days (vs forever previously).
+
+**Deployment failure (May 11)**
+- Error: `failed to fetch envs from source pod ... pods not found` — confirmed platform-side (orphaned source pod), not code.
+- Resolution: user emails support@emergent.sh with job ID. Don't Redeploy until support clears the orphan.
+- Production `yarn build` verified clean locally — manifest deploys with 3 icons + 2 shortcuts.
+
 ### OG Card Caching Bump 5min→1h (iter39 — May 11, 2026)
 
 - **Change** (`routes/og.py`): all 8 OG image endpoints (folder, clip, match-recap, scout-listing, highlight-reel, player) now serve `Cache-Control: public, max-age=3600, s-maxage=3600`.

@@ -1,40 +1,55 @@
 {
   "name": "Soccer Scout 11",
   "short_name": "Scout 11",
-  "description": "AI-powered soccer match video analysis, player tracking, and highlights — built for coaches.",
-  "start_url": "/",
+  "description": "AI-powered soccer video analysis & scouting for coaches",
+  "id": "/?source=pwa",
+  "start_url": "/?source=pwa",
+  "scope": "/",
   "display": "standalone",
-  "orientation": "portrait-primary",
-  "theme_color": "#0A0A0A",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
   "background_color": "#0A0A0A",
-  "categories": ["sports", "productivity"],
+  "theme_color": "#0A0A0A",
+  "categories": ["sports", "productivity", "utilities"],
   "icons": [
     {
       "src": "/icon-192.png",
-      "type": "image/png",
       "sizes": "192x192",
-      "purpose": "any maskable"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
       "src": "/icon-512.png",
-      "type": "image/png",
       "sizes": "512x512",
-      "purpose": "any maskable"
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "wide"
     }
   ],
   "shortcuts": [
     {
       "name": "New Match",
-      "short_name": "Upload",
-      "description": "Upload a new match video for AI analysis",
-      "url": "/?action=new-match",
+      "short_name": "New Match",
+      "url": "/dashboard",
       "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     },
     {
-      "name": "Coach Network",
-      "short_name": "Network",
-      "description": "View anonymized platform benchmarks",
-      "url": "/coach-network",
+      "name": "Reel Library",
+      "short_name": "Reels",
+      "url": "/reels",
       "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     }
   ]
