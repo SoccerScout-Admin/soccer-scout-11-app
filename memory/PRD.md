@@ -2,6 +2,19 @@
 
 ## What's Been Implemented
 
+### Trending Reels Strip + View Tracking (May 11, 2026 — iter32)
+
+- **View tracking** (`services/scout_digest.py`): mirror of the listings view-tracking pattern — `record_reel_view()` with 24h debounce per (reel_id, viewer_key), `trending_reel_ids()` Mongo aggregation grouping by `reel_id` over a sliding window, `reel_view_count()` for the public detail page.
+- **Endpoints**:
+  - `GET /api/highlight-reels/trending?limit=12&days=7` — top reels by unique-view count over the window. Clamps `limit` to ≤24 and `days` to 1-60. Hides reels that have been revoked or are no longer `ready` — these drop out automatically.
+  - `GET /api/highlight-reels/public/{token}` — now records an anonymous view (IP+UA fingerprinted, 24h debounce) and returns `view_count` in the response.
+- **Frontend** `HighlightReelsBrowse.js`:
+  - New `TrendingStrip` component — horizontal snap-scroll of compact 288px tiles with a red "TRENDING" pill badge, ordered by view count desc.
+  - View count rendered with an eye icon under each tile when > 0.
+  - Strip auto-hides when the user is actively filtering (search or competition) so it doesn't compete with their query.
+  - Trending is fetched once on mount independent of filters.
+- **5 new pytest cases** covering: empty trending shape, `days` clamp, exclusion of pending/share-revoked reels, view recording + 24h same-viewer dedupe, view-rank reflecting in trending, eviction on share revoke. **36/36 highlight reel tests passing.**
+
 ### Public Highlight Reel Library — Discovery Surface (May 11, 2026 — iter31)
 
 - **Backend** (`routes/highlight_reels.py` — 2 new endpoints):

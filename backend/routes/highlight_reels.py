@@ -3,12 +3,15 @@
 Endpoints (all under /api):
   POST   /matches/{match_id}/highlight-reel           Create + enqueue a reel
   GET    /matches/{match_id}/highlight-reels          List reels for a match
+  GET    /highlight-reels/browse                      Public browse feed
+  GET    /highlight-reels/browse/competitions         Distinct competitions
+  GET    /highlight-reels/trending                    Top reels by views (7d)
   GET    /highlight-reels/{reel_id}                   Reel status + meta
   DELETE /highlight-reels/{reel_id}                   Delete a reel
   POST   /highlight-reels/{reel_id}/share             Toggle share token
   POST   /highlight-reels/{reel_id}/retry             Retry failed reel
   GET    /highlight-reels/{reel_id}/video             Stream the mp4 (auth)
-  GET    /highlight-reels/public/{share_token}        Public JSON for SPA
+  GET    /highlight-reels/public/{share_token}        Public JSON (records view)
   GET    /highlight-reels/public/{share_token}/video  Public video stream
 
 OG share-card endpoints live in `routes/og.py`.
@@ -19,12 +22,13 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from db import db
 from routes.auth import get_current_user
 from services.highlight_reel import enqueue_reel, is_ffmpeg_available
+from services.scout_digest import record_reel_view, trending_reel_ids, reel_view_count
 
 router = APIRouter()
 
@@ -103,6 +107,77 @@ async def list_highlight_reels(
         {"_id": 0},
     ).sort("created_at", -1).to_list(50)
     return [_strip_internal(r) for r in reels]
+
+
+
+@router.get("/highlight-reels/trending")
+async def trending_reels(limit: int = 12, days: int = 7):
+    """Top reels by unique-view count over the last `days` window.
+
+    Public endpoint — same shape as `/browse` so the frontend can reuse the
+    same tile component. Only `ready` reels with a `share_token` are
+    returned (so revoked-sharing reels disappear automatically).
+    """
+    limit = max(1, min(24, int(limit)))
+    days = max(1, min(60, int(days)))
+
+    top = await trending_reel_ids(window_days=days, limit=limit * 2)  # over-fetch in case some are now revoked
+    if not top:
+        return {"reels": [], "window_days": days}
+
+    by_id = {t["reel_id"]: t["view_count"] for t in top}
+    reels = await db.highlight_reels.find(
+        {
+            "id": {"$in": list(by_id.keys())},
+            "status": "ready",
+            "share_token": {"$ne": None},
+        },
+        {"_id": 0},
+    ).to_list(len(by_id))
+    if not reels:
+        return {"reels": [], "window_days": days}
+
+    match_ids = list({r["match_id"] for r in reels})
+    user_ids = list({r["user_id"] for r in reels})
+    matches = {
+        m["id"]: m
+        for m in await db.matches.find(
+            {"id": {"$in": match_ids}},
+            {"_id": 0, "id": 1, "team_home": 1, "team_away": 1, "competition": 1, "date": 1, "manual_result": 1},
+        ).to_list(len(match_ids) or 1)
+    }
+    users = {
+        u["id"]: u
+        for u in await db.users.find(
+            {"id": {"$in": user_ids}},
+            {"_id": 0, "id": 1, "name": 1},
+        ).to_list(len(user_ids) or 1)
+    }
+
+    out = []
+    for r in reels:
+        m = matches.get(r["match_id"]) or {}
+        u = users.get(r["user_id"]) or {}
+        mr = m.get("manual_result") or {}
+        out.append({
+            "id": r["id"],
+            "share_token": r["share_token"],
+            "team_home": m.get("team_home", ""),
+            "team_away": m.get("team_away", ""),
+            "competition": m.get("competition", "") or "",
+            "date": m.get("date"),
+            "coach_name": u.get("name", ""),
+            "total_clips": r.get("total_clips", 0),
+            "duration_seconds": r.get("duration_seconds", 0.0),
+            "created_at": r.get("created_at"),
+            "view_count": by_id.get(r["id"], 0),
+            "home_score": mr.get("home_score"),
+            "away_score": mr.get("away_score"),
+        })
+
+    out.sort(key=lambda x: x["view_count"], reverse=True)
+    return {"reels": out[:limit], "window_days": days}
+
 
 
 @router.get("/highlight-reels/browse")
@@ -327,13 +402,27 @@ async def stream_reel_video(
 # ----- Public (share-token) endpoints -----
 
 @router.get("/highlight-reels/public/{share_token}")
-async def get_public_reel(share_token: str):
-    """Public JSON for SPA route `/reel/:shareToken`."""
+async def get_public_reel(share_token: str, request: Request):
+    """Public JSON for SPA route `/reel/:shareToken`.
+
+    Also records a unique view (24h debounce per viewer) used by the
+    `/trending` endpoint and reflected in the response as `view_count`.
+    """
     reel = await db.highlight_reels.find_one(
         {"share_token": share_token}, {"_id": 0},
     )
     if not reel:
         raise HTTPException(status_code=404, detail="Reel not found or sharing was revoked")
+
+    # Record a view (anon-fingerprinted by IP + User-Agent, 24h debounce)
+    ip = (request.client.host if request.client else "") or ""
+    ua = request.headers.get("user-agent", "")
+    anon_fp = f"{ip}|{ua}" if ip or ua else None
+    try:
+        await record_reel_view(reel["id"], viewer_user_id=None, anon_fingerprint=anon_fp)
+    except Exception:
+        # View tracking is best-effort — never block the share page on it.
+        pass
 
     match = await db.matches.find_one(
         {"id": reel["match_id"]},
@@ -347,6 +436,7 @@ async def get_public_reel(share_token: str):
     safe = _strip_internal(reel)
     safe.pop("user_id", None)
     safe["coach_name"] = (owner or {}).get("name", "")
+    safe["view_count"] = await reel_view_count(reel["id"])
     if match:
         safe["team_home"] = match.get("team_home")
         safe["team_away"] = match.get("team_away")

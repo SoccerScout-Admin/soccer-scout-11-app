@@ -609,3 +609,219 @@ def test_browse_response_hides_user_id(admin_headers):
             await db.highlight_reels.delete_one({"id": reel_id})
             await db.matches.delete_one({"id": match_id})
         _run_async(cleanup())
+
+
+
+# ---------- Trending / view tracking ----------
+
+def test_trending_empty_when_no_views():
+    """Trending endpoint returns the canonical shape even with zero views."""
+    import requests
+    r = requests.get(f"{BASE_URL}/api/highlight-reels/trending")
+    assert r.status_code == 200
+    body = r.json()
+    assert "reels" in body and isinstance(body["reels"], list)
+    assert body["window_days"] == 7
+
+
+def test_trending_window_days_clamped():
+    import requests
+    # Far-out-of-range — should clamp to <= 60
+    r = requests.get(f"{BASE_URL}/api/highlight-reels/trending", params={"days": 999})
+    assert r.status_code == 200
+    assert r.json()["window_days"] == 60
+    # 0/negative — clamps to >= 1
+    r2 = requests.get(f"{BASE_URL}/api/highlight-reels/trending", params={"days": 0})
+    assert r2.status_code == 200
+    assert r2.json()["window_days"] == 1
+
+
+def test_trending_only_includes_ready_shared_reels(admin_headers):
+    """Reels without a share_token or in pending state must not surface in trending."""
+    import requests
+
+    async def setup():
+        from db import db
+        user = await db.users.find_one({"email": "Ben.buursma@gmail.com"}, {"_id": 0, "id": 1})
+        match_id = "tr-match-" + uuid.uuid4().hex[:8]
+        await db.matches.insert_one({
+            "id": match_id, "user_id": user["id"],
+            "team_home": "Trending", "team_away": "Opponent",
+            "date": "2026-01-01", "competition": "Test League",
+        })
+        public_reel = "tr-pub-" + uuid.uuid4().hex[:8]
+        private_reel = "tr-prv-" + uuid.uuid4().hex[:8]
+        revoked_reel = "tr-rev-" + uuid.uuid4().hex[:8]
+        # Public + ready
+        await db.highlight_reels.insert_one({
+            "id": public_reel, "user_id": user["id"], "match_id": match_id,
+            "status": "ready", "share_token": "trtok" + uuid.uuid4().hex[:7],
+            "selected_clip_ids": [], "total_clips": 3, "duration_seconds": 60.0,
+            "created_at": "2026-05-10T00:00:00+00:00",
+        })
+        # Pending (must not appear)
+        await db.highlight_reels.insert_one({
+            "id": private_reel, "user_id": user["id"], "match_id": match_id,
+            "status": "pending", "share_token": "tokpriv" + uuid.uuid4().hex[:5],
+            "selected_clip_ids": [], "total_clips": 0, "duration_seconds": 0.0,
+            "created_at": "2026-05-10T00:00:00+00:00",
+        })
+        # Ready but share-revoked
+        await db.highlight_reels.insert_one({
+            "id": revoked_reel, "user_id": user["id"], "match_id": match_id,
+            "status": "ready", "share_token": None,
+            "selected_clip_ids": [], "total_clips": 5, "duration_seconds": 75.0,
+            "created_at": "2026-05-10T00:00:00+00:00",
+        })
+        # Seed 5 views on each — only the public+ready one should appear in trending
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        for reel_id in (public_reel, private_reel, revoked_reel):
+            for i in range(5):
+                await db.highlight_reel_views.insert_one({
+                    "reel_id": reel_id,
+                    "viewer_key": f"a:fake-{i}-{uuid.uuid4().hex[:6]}",
+                    "viewer_user_id": None,
+                    "viewed_at": now,
+                })
+        return match_id, public_reel, private_reel, revoked_reel
+
+    match_id, public_reel, private_reel, revoked_reel = _run_async(setup())
+    try:
+        r = requests.get(f"{BASE_URL}/api/highlight-reels/trending")
+        ids = [x["id"] for x in r.json()["reels"]]
+        assert public_reel in ids
+        assert private_reel not in ids
+        assert revoked_reel not in ids
+    finally:
+        async def cleanup():
+            from db import db
+            await db.highlight_reels.delete_many({"id": {"$in": [public_reel, private_reel, revoked_reel]}})
+            await db.highlight_reel_views.delete_many({"reel_id": {"$in": [public_reel, private_reel, revoked_reel]}})
+            await db.matches.delete_one({"id": match_id})
+        _run_async(cleanup())
+
+
+def test_public_reel_view_records_a_view_and_dedupes(admin_headers):
+    """Hitting /public/{token} records a view; same UA+IP within 24h dedupes."""
+    import requests
+
+    async def setup():
+        from db import db
+        user = await db.users.find_one({"email": "Ben.buursma@gmail.com"}, {"_id": 0, "id": 1})
+        match_id = "vw-match-" + uuid.uuid4().hex[:8]
+        await db.matches.insert_one({
+            "id": match_id, "user_id": user["id"],
+            "team_home": "ViewHome", "team_away": "ViewAway",
+            "date": "2026-01-01", "competition": "Test",
+        })
+        reel_id = "vw-reel-" + uuid.uuid4().hex[:8]
+        token = "vwtk-" + uuid.uuid4().hex[:8]
+        await db.highlight_reels.insert_one({
+            "id": reel_id, "user_id": user["id"], "match_id": match_id,
+            "status": "ready", "share_token": token,
+            "selected_clip_ids": [], "total_clips": 1, "duration_seconds": 30.0,
+            "created_at": "2026-05-10T00:00:00+00:00",
+        })
+        return match_id, reel_id, token
+
+    match_id, reel_id, token = _run_async(setup())
+    try:
+        async def count():
+            from db import db
+            return await db.highlight_reel_views.count_documents({"reel_id": reel_id})
+
+        # First hit records a view
+        r1 = requests.get(f"{BASE_URL}/api/highlight-reels/public/{token}")
+        assert r1.status_code == 200
+        assert r1.json().get("view_count", 0) == 1
+        c1 = _run_async(count())
+        assert c1 == 1
+
+        # Second hit (same client) within 24h is deduped
+        r2 = requests.get(f"{BASE_URL}/api/highlight-reels/public/{token}")
+        assert r2.status_code == 200
+        c2 = _run_async(count())
+        assert c2 == 1
+
+        # Different user-agent — counts as a new viewer
+        r3 = requests.get(
+            f"{BASE_URL}/api/highlight-reels/public/{token}",
+            headers={"User-Agent": "PytestSimulatedBrowser/1.0"},
+        )
+        assert r3.status_code == 200
+        c3 = _run_async(count())
+        assert c3 == 2
+
+        # And trending now ranks it
+        tr = requests.get(f"{BASE_URL}/api/highlight-reels/trending").json()
+        ids = [x["id"] for x in tr["reels"]]
+        assert reel_id in ids
+        ranked = next(x for x in tr["reels"] if x["id"] == reel_id)
+        assert ranked["view_count"] >= 2
+    finally:
+        async def cleanup():
+            from db import db
+            await db.highlight_reels.delete_one({"id": reel_id})
+            await db.highlight_reel_views.delete_many({"reel_id": reel_id})
+            await db.matches.delete_one({"id": match_id})
+        _run_async(cleanup())
+
+
+def test_revoking_share_removes_reel_from_trending(admin_headers):
+    """If owner revokes the share token, the reel must drop out of trending."""
+    import requests
+
+    async def setup():
+        from db import db
+        user = await db.users.find_one({"email": "Ben.buursma@gmail.com"}, {"_id": 0, "id": 1})
+        match_id = "rv-match-" + uuid.uuid4().hex[:8]
+        await db.matches.insert_one({
+            "id": match_id, "user_id": user["id"],
+            "team_home": "Revoke", "team_away": "Other",
+            "date": "2026-01-01", "competition": "Test",
+        })
+        reel_id = "rv-reel-" + uuid.uuid4().hex[:8]
+        token = "rvtk-" + uuid.uuid4().hex[:8]
+        await db.highlight_reels.insert_one({
+            "id": reel_id, "user_id": user["id"], "match_id": match_id,
+            "status": "ready", "share_token": token,
+            "selected_clip_ids": [], "total_clips": 1, "duration_seconds": 30.0,
+            "created_at": "2026-05-10T00:00:00+00:00",
+        })
+        # Seed a couple of views
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        for i in range(3):
+            await db.highlight_reel_views.insert_one({
+                "reel_id": reel_id,
+                "viewer_key": f"a:fake-rv-{i}",
+                "viewer_user_id": None,
+                "viewed_at": now,
+            })
+        return match_id, reel_id, token
+
+    match_id, reel_id, token = _run_async(setup())
+    try:
+        # Initially appears
+        before = requests.get(f"{BASE_URL}/api/highlight-reels/trending").json()
+        assert reel_id in [x["id"] for x in before["reels"]]
+
+        # Owner revokes share via the toggle endpoint
+        resp = requests.post(
+            f"{BASE_URL}/api/highlight-reels/{reel_id}/share",
+            headers=admin_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "unshared"
+
+        # Now drops out
+        after = requests.get(f"{BASE_URL}/api/highlight-reels/trending").json()
+        assert reel_id not in [x["id"] for x in after["reels"]]
+    finally:
+        async def cleanup():
+            from db import db
+            await db.highlight_reels.delete_one({"id": reel_id})
+            await db.highlight_reel_views.delete_many({"reel_id": reel_id})
+            await db.matches.delete_one({"id": match_id})
+        _run_async(cleanup())

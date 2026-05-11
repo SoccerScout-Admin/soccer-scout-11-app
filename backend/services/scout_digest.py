@@ -72,6 +72,55 @@ async def record_view(
     return True
 
 
+# ===== Highlight Reel view tracking (mirrors record_view above) =====
+
+async def record_reel_view(
+    reel_id: str,
+    viewer_user_id: Optional[str] = None,
+    anon_fingerprint: Optional[str] = None,
+) -> bool:
+    """Record a unique view for a highlight reel, with 24h debounce per viewer."""
+    key = _viewer_key(viewer_user_id, anon_fingerprint)
+    cutoff = (datetime.now(timezone.utc) - VIEW_DEDUPE_WINDOW).isoformat()
+    recent = await db.highlight_reel_views.find_one({
+        "reel_id": reel_id,
+        "viewer_key": key,
+        "viewed_at": {"$gt": cutoff},
+    })
+    if recent:
+        return False
+    await db.highlight_reel_views.insert_one({
+        "reel_id": reel_id,
+        "viewer_key": key,
+        "viewer_user_id": viewer_user_id,
+        "viewed_at": _now_iso(),
+    })
+    return True
+
+
+async def trending_reel_ids(window_days: int = 7, limit: int = 12) -> list:
+    """Return reel ids sorted by unique-view count over the last `window_days`."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+    pipeline = [
+        {"$match": {"viewed_at": {"$gt": cutoff}}},
+        {"$group": {"_id": "$reel_id", "view_count": {"$sum": 1}}},
+        {"$sort": {"view_count": -1}},
+        {"$limit": int(limit)},
+    ]
+    rows = await db.highlight_reel_views.aggregate(pipeline).to_list(int(limit))
+    return [{"reel_id": r["_id"], "view_count": r["view_count"]} for r in rows]
+
+
+async def reel_view_count(reel_id: str, window_days: Optional[int] = None) -> int:
+    """Distinct view count for a single reel, optionally bounded by a window."""
+    query = {"reel_id": reel_id}
+    if window_days is not None:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+        query["viewed_at"] = {"$gt": cutoff}
+    return await db.highlight_reel_views.count_documents(query)
+
+
+
 async def listing_insights(listing_id: str) -> dict:
     """Return view + click counts for a listing across rolling windows."""
     now = datetime.now(timezone.utc)

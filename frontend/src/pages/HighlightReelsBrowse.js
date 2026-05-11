@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { API } from '../App';
 import {
-  FilmReel, MagnifyingGlass, CalendarBlank, PlayCircle, ArrowLeft,
+  FilmReel, MagnifyingGlass, CalendarBlank, PlayCircle, ArrowLeft, Flame, Eye,
 } from '@phosphor-icons/react';
 
 const formatDuration = (seconds) => {
@@ -13,14 +13,14 @@ const formatDuration = (seconds) => {
   return m > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${s}s`;
 };
 
-const ReelTile = ({ reel }) => {
+const ReelTile = ({ reel, compact = false, showTrendingBadge = false }) => {
   const ogImage = `${API}/og/highlight-reel/${reel.share_token}/image.png`;
   const hasScore = reel.home_score !== undefined && reel.home_score !== null;
   return (
     <Link
       to={`/reel/${reel.share_token}`}
       data-testid={`browse-reel-${reel.share_token}`}
-      className="group block bg-[#141414] border border-white/10 hover:border-[#007AFF]/40 overflow-hidden transition-colors">
+      className={`group block bg-[#141414] border border-white/10 hover:border-[#007AFF]/40 overflow-hidden transition-colors ${compact ? 'w-72 flex-shrink-0' : ''}`}>
       <div className="relative aspect-[1200/630] bg-[#0A0A0A] overflow-hidden">
         <img
           src={ogImage}
@@ -30,6 +30,11 @@ const ReelTile = ({ reel }) => {
           onError={(e) => { e.currentTarget.style.opacity = '0.3'; }}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent pointer-events-none" />
+        {showTrendingBadge && (
+          <span className="absolute top-3 left-3 inline-flex items-center gap-1 text-[10px] tracking-[0.2em] uppercase font-bold bg-[#EF4444] text-white px-2 py-0.5">
+            <Flame size={11} weight="fill" /> Trending
+          </span>
+        )}
         <div className="absolute top-3 right-3 flex flex-col gap-1 items-end">
           <span className="text-[10px] tracking-[0.2em] uppercase font-bold bg-[#007AFF] text-black px-2 py-0.5">
             {reel.total_clips} clips
@@ -57,13 +62,46 @@ const ReelTile = ({ reel }) => {
           {reel.competition && <span className="truncate">{reel.competition}</span>}
           {reel.coach_name && <span className="truncate">· Coach {reel.coach_name}</span>}
         </div>
-        {reel.date && (
-          <div className="flex items-center gap-1 mt-1 text-[10px] text-[#666]">
-            <CalendarBlank size={11} /> {new Date(reel.date + 'T00:00:00').toLocaleDateString()}
-          </div>
-        )}
+        <div className="flex items-center gap-3 mt-1 text-[10px] text-[#666]">
+          {reel.date && (
+            <span className="flex items-center gap-1">
+              <CalendarBlank size={11} /> {new Date(reel.date + 'T00:00:00').toLocaleDateString()}
+            </span>
+          )}
+          {(reel.view_count ?? 0) > 0 && (
+            <span className="flex items-center gap-1">
+              <Eye size={11} /> {reel.view_count}
+            </span>
+          )}
+        </div>
       </div>
     </Link>
+  );
+};
+
+const TrendingStrip = ({ reels }) => {
+  if (!reels.length) return null;
+  return (
+    <section data-testid="trending-strip" className="mb-8">
+      <div className="flex items-center justify-between mb-3 sm:mb-4">
+        <div className="flex items-center gap-2">
+          <Flame size={18} weight="fill" className="text-[#EF4444]" />
+          <h2 className="text-xl sm:text-2xl font-bold uppercase tracking-wider text-white" style={{ fontFamily: 'Bebas Neue' }}>
+            Trending This Week
+          </h2>
+        </div>
+        <span className="text-[10px] tracking-[0.2em] uppercase text-[#A3A3A3]">
+          Last 7 days · By views
+        </span>
+      </div>
+      <div className="flex gap-4 overflow-x-auto pb-3 -mx-4 px-4 sm:mx-0 sm:px-0 snap-x snap-mandatory" data-testid="trending-scroll">
+        {reels.map((r) => (
+          <div key={`trending-${r.id}`} className="snap-start">
+            <ReelTile reel={r} compact showTrendingBadge />
+          </div>
+        ))}
+      </div>
+    </section>
   );
 };
 
@@ -76,6 +114,7 @@ const HighlightReelsBrowse = () => {
   const [q, setQ] = useState(initialQ);
   const [competition, setCompetition] = useState(initialComp);
   const [reels, setReels] = useState([]);
+  const [trending, setTrending] = useState([]);
   const [competitions, setCompetitions] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -94,11 +133,18 @@ const HighlightReelsBrowse = () => {
     }
   }, [q, competition]);
 
+  // Trending is fetched once on mount — independent of filters so users
+  // always see what's hot regardless of what they've searched for.
   useEffect(() => {
     let cancelled = false;
-    axios.get(`${API}/highlight-reels/browse/competitions`)
-      .then((res) => { if (!cancelled) setCompetitions(res.data.competitions || []); })
-      .catch(() => { /* silent */ });
+    Promise.all([
+      axios.get(`${API}/highlight-reels/browse/competitions`).then((r) => r.data.competitions || []).catch(() => []),
+      axios.get(`${API}/highlight-reels/trending`, { params: { limit: 12 } }).then((r) => r.data.reels || []).catch(() => []),
+    ]).then(([comps, trnd]) => {
+      if (cancelled) return;
+      setCompetitions(comps);
+      setTrending(trnd);
+    });
     return () => { cancelled = true; };
   }, []);
 
@@ -116,6 +162,7 @@ const HighlightReelsBrowse = () => {
   }, [q, competition, setParams]);
 
   const competitionChips = useMemo(() => ['', ...competitions], [competitions]);
+  const hasActiveFilters = q || competition;
 
   return (
     <div className="min-h-screen bg-[#0A0A0A]" data-testid="reels-browse-page">
@@ -174,6 +221,15 @@ const HighlightReelsBrowse = () => {
           )}
         </div>
 
+        {/* Trending strip — hidden while filtering so it doesn't compete for attention */}
+        {!hasActiveFilters && <TrendingStrip reels={trending} />}
+
+        {!hasActiveFilters && reels.length > 0 && (
+          <h2 className="text-xl font-bold uppercase tracking-wider text-white mb-3" style={{ fontFamily: 'Bebas Neue' }}>
+            All Reels
+          </h2>
+        )}
+
         {loading ? (
           <div className="text-center py-16" data-testid="reels-loading">
             <div className="w-6 h-6 border-2 border-[#007AFF] border-t-transparent rounded-full animate-spin mx-auto" />
@@ -185,7 +241,7 @@ const HighlightReelsBrowse = () => {
               No public reels match your filters yet
             </p>
             <p className="text-xs text-[#A3A3A3]">
-              {q || competition ? 'Try clearing the search/filter.' : 'Coaches haven\'t shared any reels yet — be the first!'}
+              {hasActiveFilters ? 'Try clearing the search/filter.' : 'Coaches haven\'t shared any reels yet — be the first!'}
             </p>
           </div>
         ) : (
