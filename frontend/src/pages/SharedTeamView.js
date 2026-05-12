@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { API } from '../App';
-import { Users, UserCircle, Shield, CalendarBlank, FilmStrip, ArrowRight, Warning } from '@phosphor-icons/react';
+import { Users, UserCircle, Shield, CalendarBlank, FilmStrip, ArrowRight, Warning, Funnel, X } from '@phosphor-icons/react';
+import { demographicBadges, classOfLabel } from '../utils/playerDemographics';
 
 const SharedTeamView = () => {
   const { shareToken } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
@@ -15,17 +17,41 @@ const SharedTeamView = () => {
       .catch(err => setError(err.response?.status === 404 ? 'notfound' : 'error'));
   }, [shareToken]);
 
-  const positionGroups = useMemo(() => {
+  // iter59: URL-driven recruiter filters. Filters are pure derivation off the
+  // already-loaded player list (no backend filtering — we keep public payload
+  // honest and let the URL describe the scoped view).
+  const filterPosition = searchParams.get('position') || '';
+  const filterBirthYear = searchParams.get('birth_year') || '';
+  const filterClassOf = searchParams.get('class_of') || '';
+  const hasFilters = !!(filterPosition || filterBirthYear || filterClassOf);
+
+  const filteredPlayers = useMemo(() => {
     if (!data?.players) return [];
+    if (!hasFilters) return data.players;
+    return data.players.filter((p) => {
+      if (filterPosition && (p.position || '') !== filterPosition) return false;
+      if (filterBirthYear && String(p.birth_year ?? '') !== filterBirthYear) return false;
+      if (filterClassOf) {
+        const co = classOfLabel(p.current_grade);
+        if (!co || !co.endsWith(filterClassOf)) return false;
+      }
+      return true;
+    });
+  }, [data, hasFilters, filterPosition, filterBirthYear, filterClassOf]);
+
+  const positionGroups = useMemo(() => {
+    if (!filteredPlayers.length) return [];
     const groups = { Goalkeeper: [], Defender: [], Midfielder: [], Forward: [], Other: [] };
-    const sorted = [...data.players].sort((a, b) => (a.number ?? 99) - (b.number ?? 99));
+    const sorted = [...filteredPlayers].sort((a, b) => (a.number ?? 99) - (b.number ?? 99));
     for (const p of sorted) {
       const pos = p.position || 'Other';
       if (groups[pos]) groups[pos].push(p);
       else groups.Other.push(p);
     }
     return Object.entries(groups).filter(([, list]) => list.length > 0);
-  }, [data]);
+  }, [filteredPlayers]);
+
+  const clearFilters = () => setSearchParams({});
 
   if (error === 'notfound') {
     return (
@@ -80,16 +106,62 @@ const SharedTeamView = () => {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-10 space-y-12">
+        {/* iter59: Recruiter Lens — active filter strip when URL has filter params */}
+        {hasFilters && (
+          <section data-testid="recruiter-filter-bar"
+            className="bg-[#007AFF]/10 border border-[#007AFF]/30 px-5 py-4 flex flex-wrap items-center gap-3">
+            <Funnel size={16} weight="fill" className="text-[#007AFF] flex-shrink-0" />
+            <span className="text-[10px] font-bold tracking-[0.2em] uppercase text-[#007AFF]">
+              Recruiter Lens
+            </span>
+            {filterClassOf && (
+              <span data-testid="active-filter-class-of"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#007AFF]/15 border border-[#007AFF]/30 text-[#007AFF] text-xs font-bold tracking-wider uppercase">
+                Class of {filterClassOf}
+              </span>
+            )}
+            {filterBirthYear && (
+              <span data-testid="active-filter-birth-year"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#007AFF]/15 border border-[#007AFF]/30 text-[#007AFF] text-xs font-bold tracking-wider uppercase">
+                Born {filterBirthYear}
+              </span>
+            )}
+            {filterPosition && (
+              <span data-testid="active-filter-position"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#007AFF]/15 border border-[#007AFF]/30 text-[#007AFF] text-xs font-bold tracking-wider uppercase">
+                {filterPosition}
+              </span>
+            )}
+            <span data-testid="filter-result-count" className="text-xs text-white ml-auto">
+              <span className="font-bold">{filteredPlayers.length}</span>
+              <span className="text-[#A3A3A3]"> of {data.players.length}</span> match
+            </span>
+            <button data-testid="clear-recruiter-filters" onClick={clearFilters}
+              className="inline-flex items-center gap-1 text-[10px] font-bold tracking-wider uppercase text-[#007AFF] hover:text-white border border-[#007AFF]/30 hover:border-white/30 px-2.5 py-1 transition-colors">
+              <X size={11} /> Clear
+            </button>
+          </section>
+        )}
+
         {/* Roster */}
         <section data-testid="public-roster">
           <div className="flex items-center gap-2 mb-6">
             <div className="w-1 h-6 bg-[#007AFF]" />
             <h2 className="text-sm font-bold tracking-[0.2em] uppercase">Squad</h2>
           </div>
-          {players.length === 0 ? (
+          {data.players.length === 0 ? (
             <div className="text-center py-16 border border-dashed border-white/10">
               <Users size={48} className="text-[#A3A3A3] mx-auto mb-3" />
               <p className="text-[#A3A3A3]">No players announced yet</p>
+            </div>
+          ) : filteredPlayers.length === 0 ? (
+            <div data-testid="no-filter-matches" className="text-center py-16 border border-dashed border-white/10">
+              <Users size={48} className="text-[#A3A3A3] mx-auto mb-3" />
+              <p className="text-[#A3A3A3] mb-3">No players match this filtered view.</p>
+              <button data-testid="clear-recruiter-filters-empty" onClick={clearFilters}
+                className="text-xs font-bold tracking-wider uppercase text-[#007AFF] hover:text-white">
+                See full roster →
+              </button>
             </div>
           ) : (
             <div className="space-y-8">
@@ -99,28 +171,41 @@ const SharedTeamView = () => {
                     {position}s ({groupPlayers.length})
                   </h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {groupPlayers.map(player => (
-                      <div key={player.id} data-testid={`public-player-${player.id}`}
-                        className="bg-[#141414] border border-white/10 p-4 flex items-center gap-4 hover:border-[#007AFF]/30 transition-colors">
-                        <div className="w-14 h-14 flex-shrink-0 rounded-full bg-[#0A0A0A] border border-white/10 overflow-hidden flex items-center justify-center">
-                          {player.profile_pic_url ? (
-                            <img src={`${API.replace('/api', '')}${player.profile_pic_url}`} alt={player.name}
-                              className="w-full h-full object-cover" />
-                          ) : (
-                            <UserCircle size={32} className="text-[#333]" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-2xl font-bold text-[#007AFF]" style={{ fontFamily: 'Bebas Neue' }}>
-                              {player.number ?? '—'}
-                            </span>
-                            <h4 className="text-base font-semibold text-white truncate">{player.name}</h4>
+                    {groupPlayers.map(player => {
+                      const badges = demographicBadges(player);
+                      return (
+                        <div key={player.id} data-testid={`public-player-${player.id}`}
+                          className="bg-[#141414] border border-white/10 p-4 flex items-center gap-4 hover:border-[#007AFF]/30 transition-colors">
+                          <div className="w-14 h-14 flex-shrink-0 rounded-full bg-[#0A0A0A] border border-white/10 overflow-hidden flex items-center justify-center">
+                            {player.profile_pic_url ? (
+                              <img src={`${API.replace('/api', '')}${player.profile_pic_url}`} alt={player.name}
+                                className="w-full h-full object-cover" />
+                            ) : (
+                              <UserCircle size={32} className="text-[#333]" />
+                            )}
                           </div>
-                          <p className="text-xs text-[#666] mt-0.5">{player.position || 'No position'}</p>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-2xl font-bold text-[#007AFF]" style={{ fontFamily: 'Bebas Neue' }}>
+                                {player.number ?? '—'}
+                              </span>
+                              <h4 className="text-base font-semibold text-white truncate">{player.name}</h4>
+                            </div>
+                            <p className="text-xs text-[#666] mt-0.5">{player.position || 'No position'}</p>
+                            {badges.length > 0 && (
+                              <div data-testid={`badges-${player.id}`} className="flex flex-wrap gap-1.5 mt-1.5">
+                                {badges.map(({ key, label }) => (
+                                  <span key={key}
+                                    className="px-1.5 py-0.5 text-[9px] font-bold tracking-wider uppercase bg-[#007AFF]/10 text-[#007AFF] border border-[#007AFF]/30">
+                                    {label}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               ))}

@@ -109,7 +109,12 @@ async def get_shared_team(share_token: str):
     players_raw = await db.players.find(
         {"team_ids": team["id"], "user_id": team["user_id"]}, {"_id": 0}
     ).to_list(200)
-    public_fields = {"id", "name", "number", "position", "profile_pic_url"}
+    # iter59: include birth_year + current_grade so recruiter-facing filtered
+    # views (Class of 2027, U17, etc.) can render badges and apply filters.
+    public_fields = {
+        "id", "name", "number", "position", "profile_pic_url",
+        "birth_year", "current_grade",
+    }
     players = [{k: p.get(k) for k in public_fields} for p in players_raw]
 
     # Club info (for crest)

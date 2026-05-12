@@ -2,10 +2,11 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, Users, Plus, Trash, Upload, UserCircle, CalendarBlank, Shield, ShareNetwork, Copy, Check, X, UserPlus, FileCsv, PencilSimple } from '@phosphor-icons/react';
+import { ArrowLeft, Users, Plus, Trash, Upload, UserCircle, CalendarBlank, Shield, ShareNetwork, Copy, Check, X, UserPlus, FileCsv, PencilSimple, Funnel } from '@phosphor-icons/react';
 import RosterImportModal from './components/RosterImportModal';
 import PlayerFormModal, { ageFromBirthYear } from '../components/PlayerFormModal';
 import { useScrollIntoViewOnOpen } from '../hooks/useScrollIntoViewOnOpen';
+import { classOfLabel } from '../utils/playerDemographics';
 
 const TeamRoster = () => {
   const { teamId } = useParams();
@@ -28,6 +29,8 @@ const TeamRoster = () => {
   // iter59: roster filters — birth year + grade. Empty string = "All".
   const [filterBirthYear, setFilterBirthYear] = useState('');
   const [filterGrade, setFilterGrade] = useState('');
+  // iter59: Recruiter Lens — copy feedback for "Share this view" button
+  const [lensCopied, setLensCopied] = useState(false);
 
   // iter57: auto-scroll the inline Add Player form into view when the user
   // clicks the "Add Player" button — fixes the "where did it go?" UX bug
@@ -218,6 +221,31 @@ const TeamRoster = () => {
 
   const clearFilters = () => { setFilterBirthYear(''); setFilterGrade(''); };
 
+  // iter59: Recruiter Lens — build a shareable URL that bakes in the current
+  // filter state. Returns null if the team isn't publicly shared yet.
+  const recruiterLensUrl = useMemo(() => {
+    if (!team?.share_token) return null;
+    if (!filterBirthYear && !filterGrade) return null;
+    const params = new URLSearchParams();
+    if (filterBirthYear) params.set('birth_year', filterBirthYear);
+    if (filterGrade) {
+      const co = classOfLabel(filterGrade);
+      if (co) params.set('class_of', co.replace('Class of ', ''));
+    }
+    return `${window.location.origin}/shared-team/${team.share_token}?${params.toString()}`;
+  }, [team?.share_token, filterBirthYear, filterGrade]);
+
+  const handleCopyLens = async () => {
+    if (!recruiterLensUrl) return;
+    try { await navigator.clipboard.writeText(recruiterLensUrl); }
+    catch {
+      const ta = document.createElement('textarea');
+      ta.value = recruiterLensUrl; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+    }
+    setLensCopied(true);
+    setTimeout(() => setLensCopied(false), 2000);
+  };
+
   const clubInfo = useMemo(() =>
     clubs.find(c => c.id === team?.club),
     [clubs, team?.club]
@@ -355,6 +383,20 @@ const TeamRoster = () => {
             <span data-testid="filter-result-count" className="text-xs text-[#A3A3A3] ml-auto">
               Showing <span className="text-white font-bold">{filteredPlayers.length}</span> of {players.length}
             </span>
+            {(filterBirthYear || filterGrade) && team?.share_token && (
+              <button data-testid="share-recruiter-lens-btn" onClick={handleCopyLens}
+                title="Copy a recruiter-ready link that shows only these filtered players"
+                className="inline-flex items-center gap-1.5 text-[10px] font-bold tracking-wider uppercase text-[#10B981] hover:text-white border border-[#10B981]/40 hover:border-white/40 px-2.5 py-1 transition-colors">
+                {lensCopied ? <><Check size={11} weight="bold" /> Copied</> : <><Funnel size={11} weight="fill" /> Share this view</>}
+              </button>
+            )}
+            {(filterBirthYear || filterGrade) && !team?.share_token && (
+              <span data-testid="lens-needs-share-hint"
+                title="Enable Public Team Page (top-right Share button) to share a filtered view"
+                className="text-[10px] tracking-wider uppercase text-[#666] px-2 py-1 italic">
+                Enable Share to send filtered link
+              </span>
+            )}
             {(filterBirthYear || filterGrade) && (
               <button data-testid="clear-filters-btn" onClick={clearFilters}
                 className="text-[10px] font-bold tracking-wider uppercase text-[#007AFF] hover:text-white px-2 py-1">

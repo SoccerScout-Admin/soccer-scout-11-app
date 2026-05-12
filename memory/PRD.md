@@ -2,6 +2,36 @@
 
 ## What's Been Implemented
 
+### Recruiter Lens — Shareable Filtered Team URLs (iter59b — Feb 2026)
+
+User asked: build the "Recruiter Lens" — auto-applied scout filters with shareable filtered URLs (e.g. "Class of 2027 forwards"), so college recruiters can land directly on the players that match their needs.
+
+**Backend fix** (`routes/teams.py::get_shared_team`):
+- Public team payload was stripping `birth_year` and `current_grade` (same regression class as the iter58 player dossier fix). Added them to `public_fields`. Internal fields (`user_id`, `team_ids`, `profile_pic_path`) stay private.
+
+**URL-driven filtering on `SharedTeamView.js`**:
+- Reads `?birth_year=2008&class_of=2027&position=Forward` from the URL using `useSearchParams`.
+- Filters in-browser off the already-loaded roster (no backend filtering — keeps the public payload honest, lets the URL describe the scoped view).
+- Renders a blue "Recruiter Lens" filter bar above the roster showing active filter chips + "X of Y match" counter + "Clear" CTA.
+- Empty-result state has its own messaging + "See full roster →" link.
+- Every player card on the public view now shows demographic badge chips (U-age + Class of YYYY) via the shared `demographicBadges` util.
+
+**TeamRoster "Share this view" button**:
+- When filters are active AND the team has a `share_token`, a green "Share this view" button appears in the filter strip.
+- Builds the URL: `{origin}/shared-team/{share_token}?birth_year=YYYY&class_of=YYYY`.
+- Translates the grade dropdown selection (e.g. "11th (Junior)") → URL param `class_of=2027` via `classOfLabel`.
+- Copy-to-clipboard with Check-icon success feedback (2s).
+- When team isn't shared yet, a helpful italic hint replaces the button.
+
+**Tests** (`test_recruiter_lens.py`, NEW — 3 tests):
+- Public team payload includes `birth_year` for each player.
+- Public team payload includes `current_grade` for each player.
+- Public team payload omits internal fields (`user_id`, `team_ids`, `profile_pic_path`).
+
+**URL round-trip verified**: `11th (Junior)` → coach copies link `?class_of=2027` → recruiter visits `/shared-team/{token}?class_of=2027` → public view shows only juniors → `classOfLabel(player.current_grade).endsWith('2027')` matches correctly.
+
+**Total passing tests for this work**: 30 (24 roster import + 3 public dossier demographics + 3 recruiter lens).
+
 ### Player Demographics — Derived Analytics + Hudl/TeamSnap Imports (iter59 — Feb 2026)
 
 User asked: continue from iter58 — verify CSV demographics end-to-end, then ship Player Age/Grade derived analytics, then Hudl/TeamSnap roster import.
