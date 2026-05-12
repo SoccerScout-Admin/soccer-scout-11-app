@@ -410,18 +410,30 @@ async def register(input: RegisterRequest, response: Response):
     return AuthResponse(token=token, user={"id": user_id, "email": input.email, "name": input.name, "role": input.role})
 
 @api_router.post("/auth/login", response_model=AuthResponse)
-async def login(input: LoginRequest, response: Response):
+async def login(input: LoginRequest, request: Request, response: Response):
+    # Brute-force guard — check BEFORE bcrypt to deny attackers both the slow
+    # comparison (CPU DoS surface) and any timing oracle. Raises 429 with
+    # Retry-After on lockout.
+    from services.login_rate_limiter import (
+        check_login_attempt, record_failed_login, record_successful_login,
+    )
+    await check_login_attempt(request, input.email, db)
+
     user = await db.users.find_one({"email": input.email}, {"_id": 0})
     if not user:
+        await record_failed_login(request, input.email, db)
         raise HTTPException(status_code=401, detail="Invalid email or password")
     try:
         if not bcrypt.checkpw(input.password.encode('utf-8'), user["password"].encode('utf-8')):
+            await record_failed_login(request, input.email, db)
             raise HTTPException(status_code=401, detail="Invalid email or password")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Bcrypt error during login for {input.email}: {str(e)}")
+        await record_failed_login(request, input.email, db)
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    await record_successful_login(request, input.email, db)
     token = create_token(user["id"], user["email"])
     _set_auth_cookie(response, token)
     _set_csrf_cookie(response, _generate_csrf_token())  # csrf double-submit token
@@ -444,7 +456,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter54"
+BUILD_VERSION = "iter55"
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",
@@ -471,6 +483,7 @@ SHIPPED_FEATURES = [
     "manual-result-summary-split",
     "csrf-double-submit-protection",
     "routes-auth-cookie-sync-fix",
+    "login-brute-force-rate-limit",
 ]
 
 def _get_build_sha() -> str:
@@ -2261,6 +2274,15 @@ async def startup():
         logger.error(f"Storage init failed: {e}")
     # Ensure chunk storage directory exists
     os.makedirs(CHUNK_STORAGE_DIR, exist_ok=True)
+
+    # iter55 — login rate-limiter MongoDB indexes (unique key + 30min TTL on
+    # last_attempt_at so stale lockouts auto-clear without a sweeper job).
+    try:
+        from services.login_rate_limiter import ensure_login_attempts_indexes
+        await ensure_login_attempts_indexes(db)
+        logger.info("login_attempts indexes ensured")
+    except Exception as e:
+        logger.error(f"login_attempts index setup failed: {e}")
     logger.info(f"Chunk storage dir: {CHUNK_STORAGE_DIR}")
     logger.info(f"Server boot ID: {SERVER_BOOT_ID}")
     

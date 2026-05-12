@@ -2,6 +2,22 @@
 
 ## What's Been Implemented
 
+### Login Brute-Force Rate Limiter (iter55 — Feb 2026)
+
+User asked: "rate-limiter on /auth/login". Followed the integration_playbook_expert_v2 recommendation for a MongoDB-backed sliding-window limiter that survives pod restarts (critical given our recurring pod evictions).
+
+**Design** (`/app/backend/services/login_rate_limiter.py`, new):
+- Sliding window: 15 min / 10 max failed attempts. Coaches mistyping their password 3-4 times still get through; bots blowing through 10 get locked.
+- **Two parallel counters per request**: per-IP (`ip:1.2.3.4`) AND per-email (`email:foo@example.com`). Both must be under threshold to pass. Defends against both rotating-proxy attackers (per-email catches them) and credential-stuffers fanning across many accounts (per-IP catches them).
+- Real client IP resolved via `CF-Connecting-IP` (Cloudflare-authoritative) → leftmost `X-Forwarded-For` → `request.client.host`. Cloudflare ingress strips spoofed XFFs from inbound, so leftmost is trusted.
+- Check fires BEFORE bcrypt → attackers can't even exercise the slow compare once locked out (denies both timing-oracle and CPU-DoS vectors).
+- Successful login wipes BOTH counters → legit user mistyping 3 times then succeeding gets a clean slate.
+- MongoDB-backed: persists across pod restarts (the previous concern about losing limiter state on eviction). Unique index on `key`, 30-min TTL on `last_attempt_at` for auto-cleanup.
+
+**Frontend**: zero changes needed — existing error handler already surfaces `err.response?.data?.detail`, which contains the friendly "Try again in N minutes" copy.
+
+**Verified**: 5 new pytest tests in `test_login_rate_limiter.py` covering: 9 failures don't lock out, 10th triggers lockout, lockout blocks even the correct password, successful login resets counters, 429 has Retry-After + friendly message. **All passing. 63 total auth/cookie/csrf/rate_limit/disk tests pass, 0 regressions.**
+
 ### CSRF Protection — Double-Submit Token (iter54 — Feb 2026)
 
 User asked: "wire CSRF protection on top of cookie auth". Implemented the OWASP-recommended double-submit-token pattern, closing the last remaining attack vector on the cookie auth from iter52.
