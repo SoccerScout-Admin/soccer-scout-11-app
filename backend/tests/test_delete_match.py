@@ -12,7 +12,6 @@ Verifies that DELETE /api/matches/{id}:
 """
 from __future__ import annotations
 
-import os
 import uuid
 import pytest
 

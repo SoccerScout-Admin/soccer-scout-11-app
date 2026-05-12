@@ -11,11 +11,10 @@ Validates the MongoDB-backed sliding-window brute force defender:
   - 429 response includes Retry-After header + friendly message
 """
 import os
-import uuid
 import requests
 import pytest
 import asyncio
-from datetime import datetime, timezone
+from conftest import THROWAWAY_PASSWORD, make_throwaway_email
 
 BASE_URL = os.environ.get(
     'REACT_APP_BACKEND_URL',
@@ -39,8 +38,8 @@ def _cleanup_attempts(email: str):
 @pytest.fixture
 def fresh_user():
     """Register a throwaway user. Cleanup attempts after test."""
-    email = f"ratelimit-{uuid.uuid4().hex[:8]}@example.com"
-    password = "RateLimitTest2026!"
+    email = make_throwaway_email("ratelimit")
+    password = THROWAWAY_PASSWORD
     resp = requests.post(
         f"{BASE_URL}/api/auth/register",
         json={"email": email, "password": password, "name": "RL Tester", "role": "coach"},

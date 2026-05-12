@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 import uuid
 import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 sys.path.insert(0, "/app/backend")
 

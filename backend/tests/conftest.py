@@ -48,3 +48,19 @@ def auth_token(api_client):
 @pytest.fixture(scope="session")
 def auth_headers(auth_token):
     return {"Authorization": f"Bearer {auth_token}", "Content-Type": "application/json"}
+
+
+# ===== Throwaway test-credential factory =====
+# Auth/CSRF/rate-limit tests create unique users with random emails per run,
+# then clean up. The PASSWORD is a non-secret default safe to commit (the
+# test users it creates only exist for the duration of the test). Override
+# via TEST_THROWAWAY_PASSWORD env var if you have a stricter password policy
+# in your test backend.
+THROWAWAY_PASSWORD = os.environ.get('TEST_THROWAWAY_PASSWORD', 'Throwaway-Test-2026!Aa')
+
+
+def make_throwaway_email(prefix: str = "throwaway") -> str:
+    """Generate a unique email for a throwaway test user. Hex suffix makes
+    parallel test runs collision-free."""
+    import uuid
+    return f"{prefix}-{uuid.uuid4().hex[:10]}@example.com"

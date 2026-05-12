@@ -12,7 +12,6 @@ Covers:
 import os
 import io
 import uuid
-import time
 import wave
 import struct
 import pytest

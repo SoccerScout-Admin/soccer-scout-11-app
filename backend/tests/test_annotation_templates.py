@@ -3,6 +3,7 @@ import os
 import uuid
 import pytest
 import requests
+from conftest import THROWAWAY_PASSWORD, make_throwaway_email
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://video-scout-11.preview.emergentagent.com').rstrip('/')
 
@@ -52,8 +53,8 @@ def primary_headers(auth_headers, auth_token):
 @pytest.fixture(scope="module")
 def secondary_headers():
     """Second user for cross-user isolation tests."""
-    email = f"aux_{uuid.uuid4().hex[:8]}@demo.com"
-    password = "AuxPass123!"
+    email = make_throwaway_email("aux")
+    password = THROWAWAY_PASSWORD
     token = _register(email, password)
     if not token:
         # Try login if register failed

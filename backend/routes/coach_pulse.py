@@ -16,7 +16,7 @@ import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse
 import resend
 from db import db
 from routes.auth import get_current_user

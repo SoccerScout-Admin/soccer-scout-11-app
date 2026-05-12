@@ -9,9 +9,7 @@ Covers:
 - send-weekly returns {sent, skipped}
 - render_coach_pulse_email unit tests (network_ready true/false)
 """
-import os
 import requests
-import pytest
 from conftest import BASE_URL
 
 # --- Auth helpers --------------------------------------------------------

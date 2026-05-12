@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import sys
 import time
-import tempfile
 
 sys.path.insert(0, "/app/backend")
 

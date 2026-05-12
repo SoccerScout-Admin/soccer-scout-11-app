@@ -11,7 +11,7 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 
-from tests.conftest import BASE_URL, run_async as _run
+from tests.conftest import BASE_URL
 
 
 def _create_match_no_video(auth_headers):

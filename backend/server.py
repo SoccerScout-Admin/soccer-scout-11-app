@@ -15,15 +15,10 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import jwt
 import bcrypt
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
 import tempfile
 import asyncio
-import time
 import subprocess
-from bson import Binary
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -456,7 +451,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter55"
+BUILD_VERSION = "iter56"
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",
@@ -484,6 +479,10 @@ SHIPPED_FEATURES = [
     "csrf-double-submit-protection",
     "routes-auth-cookie-sync-fix",
     "login-brute-force-rate-limit",
+    "compute-benchmarks-refactor",
+    "download-clips-zip-refactor",
+    "test-credential-fixture",
+    "unused-imports-cleanup",
 ]
 
 def _get_build_sha() -> str:

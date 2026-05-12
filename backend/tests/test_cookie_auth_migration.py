@@ -12,17 +12,17 @@ Verifies:
   - Unauthenticated calls return 401
 """
 import os
-import uuid
 import requests
 import pytest
+from conftest import THROWAWAY_PASSWORD, make_throwaway_email
 
 BASE_URL = os.environ.get(
     'REACT_APP_BACKEND_URL',
     'https://video-scout-11.preview.emergentagent.com',
 ).rstrip('/')
 
-TEST_EMAIL = f"cookie-auth-{uuid.uuid4().hex[:8]}@example.com"
-TEST_PASSWORD = "CookieTest2026!"
+TEST_EMAIL = make_throwaway_email("cookie-auth")
+TEST_PASSWORD = THROWAWAY_PASSWORD
 
 
 @pytest.fixture(scope="module")

@@ -1,6 +1,5 @@
 """Season Trends — aggregate AI insights across every match in a folder."""
 from fastapi import APIRouter, HTTPException, Depends
-from typing import Optional
 from collections import Counter
 from datetime import datetime, timezone
 import json as _json

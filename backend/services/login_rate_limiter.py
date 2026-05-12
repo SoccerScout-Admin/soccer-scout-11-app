@@ -17,7 +17,6 @@ Public surface:
     record_successful_login(request, email)   # clears both counters on a good login
 """
 from datetime import datetime, timezone, timedelta
-from typing import Optional
 import logging
 
 from fastapi import HTTPException, Request

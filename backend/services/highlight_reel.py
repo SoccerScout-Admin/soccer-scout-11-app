@@ -27,11 +27,9 @@ import os
 import shutil
 import subprocess
 import tempfile
-import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from PIL import Image
 from starlette.concurrency import run_in_threadpool
 
 from db import CHUNK_STORAGE_DIR, db

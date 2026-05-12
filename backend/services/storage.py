@@ -7,7 +7,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from starlette.concurrency import run_in_threadpool
-from db import db, STORAGE_URL, EMERGENT_KEY, APP_NAME, CHUNK_STORAGE_DIR, CHUNK_SIZE
+from db import db, STORAGE_URL, EMERGENT_KEY, APP_NAME, CHUNK_STORAGE_DIR
 
 logger = logging.getLogger(__name__)
 storage_key = None

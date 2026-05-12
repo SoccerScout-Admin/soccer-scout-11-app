@@ -9,17 +9,17 @@ The middleware enforces CSRF on cookie-authenticated unsafe-method requests:
     value in the X-CSRF-Token header
 """
 import os
-import uuid
 import requests
 import pytest
+from conftest import THROWAWAY_PASSWORD, make_throwaway_email
 
 BASE_URL = os.environ.get(
     'REACT_APP_BACKEND_URL',
     'https://video-scout-11.preview.emergentagent.com',
 ).rstrip('/')
 
-TEST_EMAIL = f"csrf-test-{uuid.uuid4().hex[:8]}@example.com"
-TEST_PASSWORD = "CsrfTest2026!"
+TEST_EMAIL = make_throwaway_email("csrf-test")
+TEST_PASSWORD = THROWAWAY_PASSWORD
 
 
 @pytest.fixture(scope="module")

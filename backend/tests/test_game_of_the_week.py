@@ -1,7 +1,6 @@
 """Tests for iter21: Game of the Week admin picker + public feed."""
 import requests
 import secrets
-import uuid
 from datetime import datetime, timezone, timedelta
 
 from tests.conftest import BASE_URL, run_async as _run

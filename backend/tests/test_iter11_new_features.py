@@ -15,6 +15,7 @@ import os
 import uuid
 import pytest
 import requests
+from conftest import THROWAWAY_PASSWORD, make_throwaway_email
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://video-scout-11.preview.emergentagent.com').rstrip('/')
 
@@ -25,8 +26,8 @@ def _signup_aux_coach():
 
     Returns dict {email, password, token, user_id, headers}.
     """
-    email = f"TEST_aux_{uuid.uuid4().hex[:8]}@demo.com"
-    password = "coach123"
+    email = make_throwaway_email("TEST_aux")
+    password = THROWAWAY_PASSWORD
     name = "Aux Coach"
     r = requests.post(f"{BASE_URL}/api/auth/register", json={
         "email": email, "password": password, "name": name,

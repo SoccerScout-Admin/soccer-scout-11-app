@@ -11,7 +11,6 @@
 Uses the public REACT_APP_BACKEND_URL and testcoach@demo.com.
 Cleans up anything it creates and reverts share toggles when done.
 """
-import io
 import os
 import struct
 import pytest
