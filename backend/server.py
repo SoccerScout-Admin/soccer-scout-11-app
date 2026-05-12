@@ -349,7 +349,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter50"
+BUILD_VERSION = "iter51"
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",
@@ -367,6 +367,9 @@ SHIPPED_FEATURES = [
     "gitignore-deploy-fix",
     "build-info-chip",
     "build-staleness-warning",
+    "aggressive-disk-sweeper-5min",
+    "disk-pressure-circuit-breaker",
+    "disk-stats-in-health-endpoint",
 ]
 
 def _get_build_sha() -> str:
@@ -394,7 +397,32 @@ async def health_check():
         db_status = "connected"
     except Exception:
         db_status = "disconnected"
-    return {"status": "healthy", "service": "soccer-scout-api", "database": db_status, "timestamp": datetime.now(timezone.utc).isoformat()}
+
+    # Disk usage — surfaces the same data that triggers the upload circuit
+    # breaker so the dashboard chip + admins can see disk pressure at a glance.
+    disk = None
+    try:
+        import shutil as _shutil
+        total, used, free = _shutil.disk_usage(CHUNK_STORAGE_DIR)
+        pct = round((used / total) * 100, 1) if total > 0 else 0
+        disk = {
+            "used_gb": round(used / (1024 ** 3), 2),
+            "total_gb": round(total / (1024 ** 3), 2),
+            "free_gb": round(free / (1024 ** 3), 2),
+            "used_pct": pct,
+            "uploads_blocked": pct >= DISK_FULL_THRESHOLD_PCT or free < DISK_FULL_RESERVE_BYTES,
+            "threshold_pct": DISK_FULL_THRESHOLD_PCT,
+        }
+    except (OSError, NameError):
+        pass
+
+    return {
+        "status": "healthy",
+        "service": "soccer-scout-api",
+        "database": db_status,
+        "disk": disk,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 @api_router.get("/health/deploy")
 async def deploy_health():
@@ -494,10 +522,57 @@ async def stream_shared_video(share_token: str, video_id: str, request: Request)
 
 # ===== Standard Video Upload (for files < 1GB) =====
 
+# Disk-pressure circuit breaker — refuses new uploads when /var/video_chunks is
+# >80% full so we don't trip the ephemeral-storage eviction that's been killing
+# the pod. Returns HTTP 503 with a Retry-After hint so the frontend can surface
+# a clear "system is full, try again in a few minutes" message instead of the
+# upload silently hanging then erroring partway through.
+DISK_FULL_THRESHOLD_PCT = 80
+DISK_FULL_RESERVE_BYTES = 2 * 1024 ** 3  # also block if <2GB free regardless of pct
+
+
+def _check_disk_pressure(incoming_bytes: int = 0):
+    """Raise HTTPException(503) if the chunk storage volume is under pressure.
+
+    Two triggers:
+      1) Used % >= DISK_FULL_THRESHOLD_PCT (default 80%)
+      2) Free bytes after this upload would drop below DISK_FULL_RESERVE_BYTES (2GB)
+
+    The 2GB headroom keeps room for AI processing temp files (raw assembly +
+    compressed proxy) on the chunks we already have on disk. Without it a
+    single user could upload right up to 99% and then crash the pod on the
+    first AI run."""
+    try:
+        import shutil as _shutil
+        total, used, free = _shutil.disk_usage(CHUNK_STORAGE_DIR)
+    except OSError:
+        return  # fail-open if disk_usage itself fails — we don't want to block uploads on a stat error
+
+    pct = (used / total) * 100 if total > 0 else 0
+    projected_free = free - max(0, incoming_bytes)
+
+    if pct >= DISK_FULL_THRESHOLD_PCT or projected_free < DISK_FULL_RESERVE_BYTES:
+        logger.warning(
+            f"[disk-pressure] BLOCKING upload — used={used/(1024**3):.1f}G / "
+            f"{total/(1024**3):.1f}G ({pct:.0f}%), free={free/(1024**3):.1f}G, "
+            f"incoming={incoming_bytes/(1024**3):.2f}G, threshold={DISK_FULL_THRESHOLD_PCT}%"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Our servers are under heavy load processing other matches right now. "
+                "Please try uploading again in a few minutes — your file will resume from "
+                "wherever it stopped if you've already started."
+            ),
+            headers={"Retry-After": "300"},  # 5 minutes
+        )
+
+
 @api_router.post("/videos/upload")
 async def upload_video(file: UploadFile = File(...), match_id: str = "", current_user: dict = Depends(get_current_user)):
     if not match_id:
         raise HTTPException(status_code=400, detail="match_id is required")
+    _check_disk_pressure()
     match = await db.matches.find_one({"id": match_id, "user_id": current_user["id"]}, {"_id": 0})
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
@@ -541,6 +616,10 @@ async def init_chunked_upload(input: ChunkedUploadInit, current_user: dict = Dep
     match = await db.matches.find_one({"id": input.match_id, "user_id": current_user["id"]}, {"_id": 0})
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
+
+    # Disk circuit breaker — refuse upfront so a coach with a 15 GB file isn't
+    # 7 GB into an upload when the disk fills up.
+    _check_disk_pressure(incoming_bytes=input.file_size or 0)
 
     # Check for existing resumable session
     existing = await db.chunked_uploads.find_one({
@@ -618,6 +697,23 @@ async def upload_chunk(
     current_user: dict = Depends(get_current_user)
 ):
     """Upload a single chunk directly to object storage (non-blocking, with retry)"""
+    # Hard floor — abort in-progress uploads only if disk has <500MB free (about
+    # to crash the pod). The 80% / 2GB pre-upload check in init_chunked_upload
+    # already gates new sessions; this is the last line of defense for sessions
+    # that started before disk pressure spiked.
+    try:
+        import shutil as _shutil
+        _, _, free = _shutil.disk_usage(CHUNK_STORAGE_DIR)
+        if free < 500 * 1024 * 1024:  # <500MB free → abort to save the pod
+            logger.error(f"[disk-pressure] aborting chunk upload — only {free/(1024**2):.0f}MB free")
+            raise HTTPException(
+                status_code=503,
+                detail="Disk is full. Upload paused — try resuming in a few minutes once we clear processing backlog.",
+                headers={"Retry-After": "300"},
+            )
+    except (OSError, NameError):
+        pass
+
     upload = await db.chunked_uploads.find_one({"upload_id": upload_id, "user_id": current_user["id"]}, {"_id": 0})
     if not upload:
         raise HTTPException(status_code=404, detail="Upload session not found")
@@ -2005,19 +2101,22 @@ async def startup():
 
 
 async def _cleanup_stale_temp_files():
-    """Delete temp ffmpeg artifacts older than 10 min on boot AND every 30 min.
+    """Delete temp ffmpeg artifacts older than 5 min on boot AND every 5 min.
 
     When the pod is OOM-killed mid-ffmpeg, `finally` cleanup never runs and we
     leak hundreds of MBs of `tmpXXXX.mp4` files. This sweeper reclaims that
     space + logs the current disk usage so operators can spot trends.
 
-    Aggressive 10-min staleness threshold: a healthy ffmpeg job either completes
-    or fails well within 10 minutes (longest video sample compression is ~5min).
+    Aggressive 5-min staleness threshold + 5-min cadence: a healthy ffmpeg job
+    either completes or fails well within 5 minutes for the 240p/8fps proxy.
+    The combo means at any given moment we hold at most ~10 min of leaked
+    temp files instead of the previous ~40 min worst case (30min cadence +
+    10min staleness).
     """
     import time as _time
     import glob
     import shutil as _shutil
-    cutoff = _time.time() - 10 * 60  # 10 minutes ago
+    cutoff = _time.time() - 5 * 60  # 5 minutes ago (was 10)
     patterns = [
         "/var/video_chunks/tmp*",
         "/var/video_chunks/close_ups/tmp*",
@@ -2129,10 +2228,10 @@ def start_coach_pulse_scheduler():
         )
         _scheduler.add_job(
             _cleanup_stale_temp_files,
-            IntervalTrigger(minutes=30),
+            IntervalTrigger(minutes=5),
             id="ffmpeg_temp_cleanup",
             replace_existing=True,
-            misfire_grace_time=600,
+            misfire_grace_time=300,
         )
         _scheduler.add_job(
             _scout_digest_job,

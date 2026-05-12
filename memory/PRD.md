@@ -2,6 +2,33 @@
 
 ## What's Been Implemented
 
+### Disk-Pressure Hardening: Tighter Sweeper + Circuit Breaker (iter51 — Feb 2026)
+
+- **Why**: 6+ pod terminations from ephemeral storage exhaustion. Even on the larger machine, leaked `ffmpeg` temp files + concurrent uploads can still fill `/var/video_chunks` faster than the previous sweeper cleared it. Two complementary defenses below.
+
+**(a) Tighter sweeper** (`server.py:_cleanup_stale_temp_files`):
+- Staleness threshold: **10 min → 5 min**
+- Run cadence: **30 min → 5 min**
+- Combined effect: worst-case leaked-temp-file backlog drops from ~40 min to ~10 min
+
+**(b) Disk-pressure circuit breaker** (new `_check_disk_pressure(incoming_bytes)` in `server.py`):
+- Two triggers (either one fires → HTTP 503):
+  1. `used_pct >= 80%` (DISK_FULL_THRESHOLD_PCT)
+  2. `free_bytes - incoming_bytes < 2 GB` (DISK_FULL_RESERVE_BYTES) — keeps headroom for AI processing temp files
+- Wired into all 3 upload entry points:
+  - `POST /api/videos/upload` (standard <1 GB path)
+  - `POST /api/videos/upload/init` (chunked path — gates upfront so a 15 GB upload doesn't get 7 GB in before failing)
+  - `POST /api/videos/upload/chunk` (last-line-of-defense: hard floor of <500 MB free, aborts in-progress sessions only when pod is about to crash)
+- Returns friendly user-facing message: *"Our servers are under heavy load… Please try again in a few minutes — your file will resume from wherever it stopped."* with `Retry-After: 300`.
+- Fail-open behavior: if `shutil.disk_usage()` itself raises, uploads are NOT blocked (safer than locking everyone out on a stat hiccup).
+
+**Disk stats surfaced in `/api/health`**:
+- Returns `{disk: {used_gb, total_gb, free_gb, used_pct, uploads_blocked, threshold_pct}}` so admins can monitor disk pressure live without shell access.
+
+**Tests** (`/app/backend/tests/test_disk_pressure_circuit_breaker.py`, new, 7 passing):
+- Healthy disk passes; 80% threshold blocks; reserve-bytes check blocks; just-under-threshold passes; OSError fails open.
+- Full regression: 32 upload/disk/chunk/temp tests passing.
+
 ### Build Staleness Warning (iter50 — Feb 2026)
 
 - **Why**: the iter49 chip tells you *which* build is live, but doesn't flag *when it's getting old*. A quiet amber nudge after 7 days catches the case where preview has accumulated weeks of changes that haven't shipped — exactly the pattern that caused the iter49 `.gitignore` saga to go undetected.
