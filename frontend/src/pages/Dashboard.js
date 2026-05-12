@@ -1,8 +1,10 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { API, getAuthHeader, getCurrentUser } from '../App';
+import { API, getAuthHeader, getCurrentUser, clearSession } from '../App';
 import { Plus, VideoCamera, CaretRight, Globe, ChartLineUp, DeviceMobile } from '@phosphor-icons/react';
+import { useMatches } from '../hooks/useMatches';
+import { useFolders } from '../hooks/useFolders';
 import CoachPulseCard from './components/CoachPulseCard';
 import GameOfTheWeekBanner from './components/GameOfTheWeekBanner';
 import DashboardHeader from './components/DashboardHeader';
@@ -17,53 +19,55 @@ import MyReelStatsCard from './components/MyReelStatsCard';
 import InstallGuideModal from '../components/InstallGuideModal';
 import BuildInfoChip from '../components/BuildInfoChip';
 
+/**
+ * Copy-to-clipboard with execCommand fallback for older browsers / iOS Safari.
+ * Returns true on success.
+ */
+const copyToClipboard = (text) => {
+  try {
+    return navigator.clipboard.writeText(text).then(() => true).catch(() => false);
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    document.body.removeChild(ta);
+    return Promise.resolve(ok);
+  }
+};
+
 const Dashboard = () => {
-  const [matches, setMatches] = useState([]);
-  const [folders, setFolders] = useState([]);
+  const navigate = useNavigate();
+  const user = getCurrentUser();
+
   const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showFolderModal, setShowFolderModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [sharingFolder, setSharingFolder] = useState(null);
   const [copied, setCopied] = useState(false);
   const [editingFolder, setEditingFolder] = useState(null);
   const [folderMenuId, setFolderMenuId] = useState(null);
-  const [expandedFolders, setExpandedFolders] = useState({});
   const [formData, setFormData] = useState({ team_home: '', team_away: '', date: '', competition: '' });
   const [folderFormData, setFolderFormData] = useState({ name: '', parent_id: null, is_private: false });
   const [loading, setLoading] = useState(false);
-  const [selectionMode, setSelectionMode] = useState(false);
-  const [selectedMatchIds, setSelectedMatchIds] = useState([]);
-  const [bulkBusy, setBulkBusy] = useState(false);
-  const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [unreadMentions, setUnreadMentions] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
-  const navigate = useNavigate();
-  const user = getCurrentUser();
 
-  const fetchMatches = useCallback(async () => {
-    try {
-      const response = await axios.get(`${API}/matches`, { headers: getAuthHeader() });
-      setMatches(response.data);
-    } catch (err) { console.error('Failed to fetch matches:', err); }
-  }, []);
+  // Data layer — see /app/frontend/src/hooks/{useMatches,useFolders}.js
+  const m = useMatches(selectedFolderId);
+  const f = useFolders();
 
-  const fetchFolders = useCallback(async () => {
-    try {
-      const response = await axios.get(`${API}/folders`, { headers: getAuthHeader() });
-      setFolders(response.data);
-      const expanded = {};
-      response.data.forEach(f => { expanded[f.id] = true; });
-      setExpandedFolders(prev => ({ ...expanded, ...prev }));
-    } catch (err) { console.error('Failed to fetch folders:', err); }
-  }, []);
-
-  useEffect(() => { fetchMatches(); fetchFolders(); }, [fetchMatches, fetchFolders]);
-
+  // Unread counts (mentions + messages) — small enough to leave inline
   useEffect(() => {
     let cancelled = false;
     axios.get(`${API}/coach-network/mentions`, { headers: getAuthHeader() })
-      .then((res) => { if (!cancelled) setUnreadMentions((res.data || []).filter((m) => !m.read_at).length); })
+      .then((res) => { if (!cancelled) setUnreadMentions((res.data || []).filter((x) => !x.read_at).length); })
       .catch(() => { /* silent */ });
     axios.get(`${API}/messages/unread-count`, { headers: getAuthHeader() })
       .then((res) => { if (!cancelled) setUnreadMessages(res.data?.unread || 0); })
@@ -71,59 +75,15 @@ const Dashboard = () => {
     return () => { cancelled = true; };
   }, []);
 
-  const toggleMatchSelection = (id) => {
-    setSelectedMatchIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  };
-
-  const exitSelectionMode = () => { setSelectionMode(false); setSelectedMatchIds([]); };
-
-  const bulkMove = async (folder_id) => {
-    if (selectedMatchIds.length === 0) return;
-    setBulkBusy(true);
-    try {
-      await axios.post(`${API}/matches/bulk/move`, { match_ids: selectedMatchIds, folder_id }, { headers: getAuthHeader() });
-      await fetchMatches();
-      exitSelectionMode();
-    } catch (err) {
-      alert('Bulk move failed: ' + (err.response?.data?.detail || err.message));
-    } finally { setBulkBusy(false); }
-  };
-
-  const bulkSetCompetition = async () => {
-    const comp = window.prompt('Set competition for ' + selectedMatchIds.length + ' selected match' + (selectedMatchIds.length === 1 ? '' : 'es') + ':', '');
-    if (comp === null) return;
-    setBulkBusy(true);
-    try {
-      await axios.post(`${API}/matches/bulk/competition`, { match_ids: selectedMatchIds, competition: comp }, { headers: getAuthHeader() });
-      await fetchMatches();
-      exitSelectionMode();
-    } catch (err) {
-      alert('Bulk update failed: ' + (err.response?.data?.detail || err.message));
-    } finally { setBulkBusy(false); }
-  };
-
-  const bulkDelete = async () => {
-    if (!window.confirm(`Delete ${selectedMatchIds.length} match${selectedMatchIds.length === 1 ? '' : 'es'}? Their videos enter the 24h restore window. Clips and AI analyses are removed permanently.`)) return;
-    setBulkBusy(true);
-    try {
-      await axios.post(`${API}/matches/bulk/delete`, { match_ids: selectedMatchIds }, { headers: getAuthHeader() });
-      await fetchMatches();
-      exitSelectionMode();
-    } catch (err) {
-      alert('Bulk delete failed: ' + (err.response?.data?.detail || err.message));
-    } finally { setBulkBusy(false); }
-  };
+  // ===== Modal coordination handlers (page-local UI concerns) =====
 
   const handleCreateMatch = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const payload = { ...formData };
-      if (selectedFolderId && selectedFolderId !== '__none__') payload.folder_id = selectedFolderId;
-      await axios.post(`${API}/matches`, payload, { headers: getAuthHeader() });
+      await m.createMatch(formData);
       setShowCreateModal(false);
       setFormData({ team_home: '', team_away: '', date: '', competition: '' });
-      fetchMatches();
     } catch (err) { console.error('Failed to create match:', err); }
     finally { setLoading(false); }
   };
@@ -131,62 +91,28 @@ const Dashboard = () => {
   const handleCreateFolder = async (e) => {
     e.preventDefault();
     try {
-      const payload = { ...folderFormData };
-      if (!payload.parent_id) delete payload.parent_id;
-      if (editingFolder) {
-        await axios.patch(`${API}/folders/${editingFolder.id}`, payload, { headers: getAuthHeader() });
-      } else {
-        if (selectedFolderId && selectedFolderId !== '__none__' && !payload.parent_id) payload.parent_id = selectedFolderId;
-        await axios.post(`${API}/folders`, payload, { headers: getAuthHeader() });
-      }
+      await f.createOrUpdateFolder({ editingFolder, folderFormData, selectedFolderId });
       setShowFolderModal(false);
       setEditingFolder(null);
       setFolderFormData({ name: '', parent_id: null, is_private: false });
-      fetchFolders();
     } catch (err) { console.error('Failed to save folder:', err); }
   };
 
   const handleDeleteFolder = async (folderId) => {
-    if (!window.confirm('Delete this folder? Matches will move to parent.')) return;
-    try {
-      await axios.delete(`${API}/folders/${folderId}`, { headers: getAuthHeader() });
-      if (selectedFolderId === folderId) setSelectedFolderId(null);
-      fetchFolders();
-      fetchMatches();
-    } catch (err) { console.error('Failed to delete folder:', err); }
-  };
-
-  const handleMoveMatch = async (matchId, folderId) => {
-    try {
-      await axios.patch(`${API}/matches/${matchId}`, { folder_id: folderId || null }, { headers: getAuthHeader() });
-      fetchMatches();
-    } catch (err) { console.error('Failed to move match:', err); }
-  };
-
-  const handleDeleteMatch = async (match) => {
-    const confirmMsg = `Delete match "${match.team_home} vs ${match.team_away}"? `
-      + (match.video_id
-        ? 'The video enters the 24h restore window. Clips and AI analyses are removed permanently.'
-        : 'This cannot be undone.');
-    if (!window.confirm(confirmMsg)) return;
-    try {
-      await axios.delete(`${API}/matches/${match.id}`, { headers: getAuthHeader() });
-      setMatches(prev => prev.filter(m => m.id !== match.id));
-    } catch (err) {
-      alert('Failed to delete match: ' + (err.response?.data?.detail || err.message));
-    }
+    await f.deleteFolder(folderId, (cleared) => {
+      if (selectedFolderId === cleared) setSelectedFolderId(null);
+      m.fetchMatches();
+    });
   };
 
   const handleToggleShare = async (folder) => {
-    if (folder.share_token) {
-      setSharingFolder(folder);
-      setShowShareModal(true);
-      return;
-    }
     try {
-      const res = await axios.post(`${API}/folders/${folder.id}/share`, {}, { headers: getAuthHeader() });
-      setFolders(prev => prev.map(f => f.id === folder.id ? { ...f, share_token: res.data.share_token } : f));
-      const updated = { ...folder, share_token: res.data.share_token };
+      if (folder.share_token) {
+        setSharingFolder(folder);
+        setShowShareModal(true);
+        return;
+      }
+      const updated = await f.toggleShare(folder);
       setSharingFolder(updated);
       setShowShareModal(true);
     } catch (err) {
@@ -197,52 +123,29 @@ const Dashboard = () => {
   const handleRevokeShare = async () => {
     if (!sharingFolder) return;
     try {
-      await axios.post(`${API}/folders/${sharingFolder.id}/share`, {}, { headers: getAuthHeader() });
-      setFolders(prev => prev.map(f => f.id === sharingFolder.id ? { ...f, share_token: null } : f));
+      await f.revokeShare(sharingFolder);
       setSharingFolder({ ...sharingFolder, share_token: null });
       setShowShareModal(false);
-    } catch (err) {
+    } catch {
       alert('Failed to revoke share link');
     }
   };
 
-  const fallbackCopy = (text) => {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.left = '-9999px';
-    document.body.appendChild(ta);
-    ta.select();
-    try {
-      document.execCommand('copy');
+  const copyShareLink = async () => {
+    if (!sharingFolder?.share_token) return;
+    const url = `${window.location.origin}/api/og/folder/${sharingFolder.share_token}`;
+    const ok = await copyToClipboard(url);
+    if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
+    } else {
       alert('Copy failed — please select and copy the link manually.');
     }
-    document.body.removeChild(ta);
   };
 
-  const copyShareLink = () => {
-    const url = `${window.location.origin}/api/og/folder/${sharingFolder.share_token}`;
-    try {
-      navigator.clipboard.writeText(url).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }).catch(() => { fallbackCopy(url); });
-    } catch {
-      fallbackCopy(url);
-    }
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+  const handleLogout = async () => {
+    await clearSession();
     navigate('/auth');
-  };
-
-  const toggleFolderExpand = (folderId) => {
-    setExpandedFolders(prev => ({ ...prev, [folderId]: !prev[folderId] }));
   };
 
   const openNewFolder = () => {
@@ -261,36 +164,11 @@ const Dashboard = () => {
     setShowFolderModal(true);
   };
 
-  const flatFolderList = useMemo(() => {
-    const result = [];
-    const addChildren = (parentId, depth) => {
-      const children = folders.filter(f => (f.parent_id || null) === parentId).sort((a, b) => a.name.localeCompare(b.name));
-      for (const folder of children) {
-        const hasChildren = folders.some(f => f.parent_id === folder.id);
-        const isExpanded = expandedFolders[folder.id] !== false;
-        result.push({ ...folder, depth, hasChildren, isExpanded });
-        if (hasChildren && isExpanded) addChildren(folder.id, depth + 1);
-      }
-    };
-    addChildren(null, 0);
-    return result;
-  }, [folders, expandedFolders]);
-
-  const displayMatches = useMemo(() => (
-    selectedFolderId === '__none__'
-      ? matches.filter(m => !m.folder_id)
-      : selectedFolderId
-      ? matches.filter(m => m.folder_id === selectedFolderId)
-      : matches
-  ), [matches, selectedFolderId]);
-
-  const selectedFolderName = useMemo(() => (
-    selectedFolderId === '__none__'
-      ? 'Unsorted Matches'
-      : selectedFolderId
-      ? (folders.find(f => f.id === selectedFolderId)?.name || 'Folder')
-      : 'Match Library'
-  ), [folders, selectedFolderId]);
+  const selectedFolderName = (() => {
+    if (selectedFolderId === '__none__') return 'Unsorted Matches';
+    if (selectedFolderId) return f.folders.find((x) => x.id === selectedFolderId)?.name || 'Folder';
+    return 'Match Library';
+  })();
 
   return (
     <div className="min-h-screen bg-[#0A0A0A]">
@@ -299,13 +177,13 @@ const Dashboard = () => {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 flex flex-col lg:flex-row gap-4 lg:gap-6">
         <FolderSidebar
-          matches={matches}
-          flatFolderList={flatFolderList}
+          matches={m.matches}
+          flatFolderList={f.flatFolderList}
           selectedFolderId={selectedFolderId}
           setSelectedFolderId={setSelectedFolderId}
           folderMenuId={folderMenuId}
           setFolderMenuId={setFolderMenuId}
-          onToggleExpand={toggleFolderExpand}
+          onToggleExpand={f.toggleFolderExpand}
           onOpenNewFolder={openNewFolder}
           onEditFolder={openEditFolder}
           onShareFolder={handleToggleShare}
@@ -317,7 +195,7 @@ const Dashboard = () => {
           <div className="flex items-center justify-between mb-8">
             <div>
               <h2 className="text-4xl font-bold mb-2" style={{ fontFamily: 'Bebas Neue' }}>{selectedFolderName}</h2>
-              <p className="text-[#A3A3A3] tracking-wide">{displayMatches.length} match{displayMatches.length !== 1 ? 'es' : ''}</p>
+              <p className="text-[#A3A3A3] tracking-wide">{m.displayMatches.length} match{m.displayMatches.length !== 1 ? 'es' : ''}</p>
             </div>
             {selectedFolderId && selectedFolderId !== '__none__' && (
               <button data-testid="folder-trends-cta-btn" onClick={() => navigate(`/folder/${selectedFolderId}/trends`)}
@@ -330,15 +208,15 @@ const Dashboard = () => {
               <Plus size={24} weight="bold" /> New Match
             </button>
             <button data-testid="toggle-selection-mode-btn"
-              onClick={() => selectionMode ? exitSelectionMode() : setSelectionMode(true)}
+              onClick={() => m.selectionMode ? m.exitSelectionMode() : m.setSelectionMode(true)}
               className={`px-4 py-3 font-bold tracking-wider uppercase text-xs transition-colors border ${
-                selectionMode ? 'border-[#FBBF24] text-[#FBBF24] bg-[#FBBF24]/10' : 'border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F]'
+                m.selectionMode ? 'border-[#FBBF24] text-[#FBBF24] bg-[#FBBF24]/10' : 'border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F]'
               }`}>
-              {selectionMode ? 'Done' : 'Select'}
+              {m.selectionMode ? 'Done' : 'Select'}
             </button>
           </div>
 
-          {!selectionMode && (
+          {!m.selectionMode && (
             <>
               <QuickActionsRow onCreate={() => setShowCreateModal(true)} />
               <MyReelStatsCard />
@@ -359,12 +237,12 @@ const Dashboard = () => {
             </>
           )}
 
-          {selectionMode && (
-            <BulkActionBar selectedCount={selectedMatchIds.length} bulkBusy={bulkBusy} folders={folders}
-              onMove={bulkMove} onSetCompetition={bulkSetCompetition} onDelete={bulkDelete} />
+          {m.selectionMode && (
+            <BulkActionBar selectedCount={m.selectedMatchIds.length} bulkBusy={m.bulkBusy} folders={f.folders}
+              onMove={m.bulkMove} onSetCompetition={m.bulkSetCompetition} onDelete={m.bulkDelete} />
           )}
 
-          {displayMatches.length === 0 ? (
+          {m.displayMatches.length === 0 ? (
             <div className="text-center py-20">
               <VideoCamera size={80} className="text-[#A3A3A3] mx-auto mb-4" />
               <p className="text-xl text-[#A3A3A3] mb-2">No matches here</p>
@@ -372,14 +250,14 @@ const Dashboard = () => {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {displayMatches.map((match) => (
-                <MatchCard key={match.id} match={match} folders={folders}
-                  selectionMode={selectionMode}
-                  isSelected={selectedMatchIds.includes(match.id)}
+              {m.displayMatches.map((match) => (
+                <MatchCard key={match.id} match={match} folders={f.folders}
+                  selectionMode={m.selectionMode}
+                  isSelected={m.selectedMatchIds.includes(match.id)}
                   onNavigate={navigate}
-                  onToggleSelect={toggleMatchSelection}
-                  onMoveMatch={handleMoveMatch}
-                  onDeleteMatch={handleDeleteMatch} />
+                  onToggleSelect={m.toggleMatchSelection}
+                  onMoveMatch={m.moveMatch}
+                  onDeleteMatch={m.deleteMatch} />
               ))}
             </div>
           )}
@@ -393,7 +271,7 @@ const Dashboard = () => {
         onClose={() => { setShowFolderModal(false); setEditingFolder(null); }}
         onSubmit={handleCreateFolder}
         folderFormData={folderFormData} setFolderFormData={setFolderFormData}
-        editingFolder={editingFolder} folders={folders} />
+        editingFolder={editingFolder} folders={f.folders} />
 
       <ShareFolderModal open={showShareModal} sharingFolder={sharingFolder}
         onClose={() => setShowShareModal(false)}

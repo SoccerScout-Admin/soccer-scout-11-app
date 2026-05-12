@@ -2,6 +2,31 @@
 
 ## What's Been Implemented
 
+### iter53 Triple-Header: Disk Banner + Cookie Auth + Component Refactor (Feb 2026)
+
+User asked for "b, c, and d" — disk-pressure banner, oversized-component refactor, and httpOnly cookie auth migration. All three shipped in one iteration.
+
+**(b) DiskPressureBanner** (`/app/frontend/src/components/DiskPressureBanner.js`, new):
+- Polls `/api/health` every 60s globally inside `BrowserRouter`. Renders nothing when healthy.
+- When `uploads_blocked === true`: red strip at top of authenticated app with primary copy ("Heavy server load — new uploads paused for a few minutes"), reassurance copy ("Match film already on the way will keep uploading from where it stopped"), and live stats (`{used_pct}% used · {free_gb} GB free`).
+- Dismiss button persists a 5-min suppression to `localStorage`.
+- Skips public/share/auth routes. Verified end-to-end via Playwright with mocked health responses.
+
+**(d) httpOnly Cookie Auth Migration** (`server.py` + `App.js`):
+- New cookie config: `access_token` cookie with `HttpOnly; Secure (prod); SameSite=Lax; Path=/; Max-Age=604800`. Set by `/api/auth/login` and `/api/auth/register`.
+- `get_current_user()` now reads cookie first, falls back to legacy `Authorization: Bearer` header — **fully backwards compatible** for existing localStorage tokens.
+- New `POST /api/auth/logout` clears the cookie server-side.
+- `axios.defaults.withCredentials = true` set globally — cookies auto-attach to every `/api` call.
+- New `clearSession()` helper unifies logout: calls `/auth/logout`, then clears localStorage.
+- Followed the integration_playbook_expert_v2 cookie auth playbook.
+- Verified: 5 new pytest tests in `test_cookie_auth_migration.py` covering cookie set, cookie-only auth, header-only auth, 401, and logout. **51 total auth + cookie + disk tests pass, 0 regressions.**
+- Migration plan: Phase 1 (this iteration) is dual-write — token in both cookie AND localStorage. Phase 2 (future): drop localStorage write + remove `token` field from response body.
+
+**(c) Component Refactor** (Dashboard.js + ManualResultForm.js):
+- `Dashboard.js`: 421 → 299 lines (−29%). Extracted `useMatches` (126 lines) + `useFolders` (113 lines) custom hooks in `/app/frontend/src/hooks/`.
+- `ManualResultForm.js`: 491 → 368 lines (−25%). Extracted `ManualResultSummary` (177 lines) read-only view.
+- Zero behavior changes — all data-testids preserved. Verified via Playwright smoke test (3 match cards render, selection mode toggles, footer chip + install link work).
+
 ### Disk-Pressure Hardening: Tighter Sweeper + Circuit Breaker (iter51 — Feb 2026)
 
 - **Why**: 6+ pod terminations from ephemeral storage exhaustion. Even on the larger machine, leaked `ffmpeg` temp files + concurrent uploads can still fill `/var/video_chunks` faster than the previous sweeper cleared it. Two complementary defenses below.

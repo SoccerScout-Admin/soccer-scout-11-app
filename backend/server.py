@@ -268,6 +268,38 @@ class PlayerBulkImport(BaseModel):
 
 # ===== Auth =====
 
+# Cookie config — same-origin deployment (preview & production both serve frontend
+# and API from the same host), so SameSite=Lax is sufficient against CSRF for most
+# unsafe-method calls. Path=/ so it's sent on /api/* requests. Max-age matches the
+# 7-day JWT expiry. Secure=True in production (HTTPS).
+ACCESS_TOKEN_COOKIE = "access_token"
+ACCESS_TOKEN_COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # 7 days, matches JWT expiry
+ACCESS_TOKEN_COOKIE_SECURE = os.environ.get("ENVIRONMENT", "").lower() != "development"
+
+
+def _set_auth_cookie(response: Response, token: str) -> None:
+    """Set the httpOnly auth cookie on a FastAPI Response.
+
+    httponly=True → blocks JS read access → XSS-proof.
+    samesite='lax' → blocks cross-site POST/DELETE but allows top-level GET nav.
+    secure=True (in prod) → cookie only sent over HTTPS.
+    path='/' so it's sent on every /api/* call.
+    """
+    response.set_cookie(
+        key=ACCESS_TOKEN_COOKIE,
+        value=token,
+        httponly=True,
+        secure=ACCESS_TOKEN_COOKIE_SECURE,
+        samesite="lax",
+        max_age=ACCESS_TOKEN_COOKIE_MAX_AGE,
+        path="/",
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    response.delete_cookie(key=ACCESS_TOKEN_COOKIE, path="/")
+
+
 def create_token(user_id: str, email: str) -> str:
     payload = {
         "user_id": user_id,
@@ -285,10 +317,23 @@ def verify_token(token: str) -> dict:
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-async def get_current_user(authorization: str = Header(None)):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
-    token = authorization.split(" ")[1]
+async def get_current_user(request: Request, authorization: str = Header(None)):
+    """Authenticate the caller. Reads the httpOnly access_token cookie first
+    (XSS-proof, the migration target); falls back to the legacy Authorization
+    Bearer header so users with existing localStorage tokens stay logged in
+    until their next login refreshes the cookie."""
+    token = None
+    # 1) Preferred: httpOnly cookie
+    cookie_token = request.cookies.get(ACCESS_TOKEN_COOKIE)
+    if cookie_token:
+        token = cookie_token
+    # 2) Legacy fallback: Authorization Bearer header (existing clients)
+    elif authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ", 1)[1]
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     payload = verify_token(token)
     user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
     if not user:
@@ -306,7 +351,7 @@ async def get_user_from_token_param(token: str) -> dict:
 # ===== Auth Endpoints =====
 
 @api_router.post("/auth/register", response_model=AuthResponse)
-async def register(input: RegisterRequest):
+async def register(input: RegisterRequest, response: Response):
     existing = await db.users.find_one({"email": input.email}, {"_id": 0})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -322,22 +367,35 @@ async def register(input: RegisterRequest):
     }
     await db.users.insert_one(user_doc)
     token = create_token(user_id, input.email)
+    _set_auth_cookie(response, token)  # httpOnly cookie — primary auth channel
     logger.info(f"New user registered: {input.email}")
+    # Token still returned in JSON for backwards-compat with old frontends that
+    # haven't shipped the cookie-aware code yet. Safe to remove in a future
+    # iteration once all clients are on >= iter52.
     return AuthResponse(token=token, user={"id": user_id, "email": input.email, "name": input.name, "role": input.role})
 
 @api_router.post("/auth/login", response_model=AuthResponse)
-async def login(input: LoginRequest):
+async def login(input: LoginRequest, response: Response):
     user = await db.users.find_one({"email": input.email}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     try:
         if not bcrypt.checkpw(input.password.encode('utf-8'), user["password"].encode('utf-8')):
             raise HTTPException(status_code=401, detail="Invalid email or password")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Bcrypt error during login for {input.email}: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid email or password")
     token = create_token(user["id"], user["email"])
+    _set_auth_cookie(response, token)
     return AuthResponse(token=token, user={"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]})
+
+@api_router.post("/auth/logout")
+async def logout(response: Response):
+    """Clear the auth cookie. Idempotent — safe to call without an active session."""
+    _clear_auth_cookie(response)
+    return {"status": "logged_out"}
 
 @api_router.get("/auth/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
@@ -349,7 +407,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter51"
+BUILD_VERSION = "iter53"
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",
@@ -370,6 +428,10 @@ SHIPPED_FEATURES = [
     "aggressive-disk-sweeper-5min",
     "disk-pressure-circuit-breaker",
     "disk-stats-in-health-endpoint",
+    "disk-pressure-banner",
+    "httponly-cookie-auth",
+    "dashboard-hook-refactor",
+    "manual-result-summary-split",
 ]
 
 def _get_build_sha() -> str:

@@ -34,11 +34,24 @@ import ScoutListingForm from './pages/ScoutListingForm';
 import ScoutMyListings from './pages/ScoutMyListings';
 import Messages from './pages/Messages';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
+import DiskPressureBanner from './components/DiskPressureBanner';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
 
+// AUTH MIGRATION (iter52): we're moving from localStorage tokens to httpOnly cookies
+// for XSS protection. During the transition both work — the backend reads the cookie
+// first and falls back to the Authorization header. After all existing users have
+// logged in at least once (refreshing their cookie), we can drop the header path.
+//
+// Sending cookies on every API call requires withCredentials. Set it globally so
+// every existing axios call gets it without having to touch ~150 call sites.
+axios.defaults.withCredentials = true;
+
 export const getAuthHeader = () => {
+  // Still returned for backwards compat with the legacy code paths that explicitly
+  // attach it. New auth is cookie-driven so this can return {} safely once we drop
+  // the localStorage fallback in a future iteration.
   const token = localStorage.getItem('token');
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
@@ -48,9 +61,27 @@ export const getCurrentUser = () => {
   return user ? JSON.parse(user) : null;
 };
 
+// `clearSession` — single helper used by logout and 401 cleanup. Calls the
+// backend /auth/logout to clear the httpOnly cookie (only the server can clear
+// it), then nukes localStorage. Safe to call even without an active session.
+export const clearSession = async () => {
+  try {
+    await axios.post(`${API}/auth/logout`);
+  } catch {
+    // Network blip or already logged out — proceed with local cleanup either way
+  }
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+};
+
 const ProtectedRoute = ({ children }) => {
-  const token = localStorage.getItem('token');
-  if (!token) {
+  // Cookie-based sessions can't be inspected from JS (that's the point of
+  // httpOnly). Treat the presence of a stored user OR a legacy token as the
+  // optimistic "still logged in" signal — the next API call validates it
+  // server-side and 401s redirect to /auth via the global axios interceptor.
+  const hasLegacyToken = !!localStorage.getItem('token');
+  const hasUserCache = !!localStorage.getItem('user');
+  if (!hasLegacyToken && !hasUserCache) {
     return <Navigate to="/auth" replace />;
   }
   return children;
@@ -60,11 +91,12 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) { setIsAuthenticated(false); return; }
-    // Revalidate token on mount — if 401, drop stale session.
-    // Also syncs role/name changes (e.g. admin promotion) without logout/login.
-    axios.get(`${API}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+    // Validate the session against the backend on every mount. With cookies, we
+    // no longer need a token in localStorage — /auth/me will use whichever
+    // channel is available (cookie first, then legacy header).
+    const hasAnyCredential = !!localStorage.getItem('token') || !!localStorage.getItem('user');
+    if (!hasAnyCredential) { setIsAuthenticated(false); return; }
+    axios.get(`${API}/auth/me`)
       .then((res) => {
         const u = res.data || {};
         localStorage.setItem('user', JSON.stringify({
@@ -97,6 +129,7 @@ function App() {
     <div className="App">
       <BrowserRouter>
         <PWAInstallPrompt />
+        <DiskPressureBanner />
         <Routes>
           <Route path="/auth" element={<AuthPage setIsAuthenticated={setIsAuthenticated} />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
