@@ -25,6 +25,10 @@ const TeamRoster = () => {
   const [eligible, setEligible] = useState([]);
   const [eligibleLoading, setEligibleLoading] = useState(false);
 
+  // iter59: roster filters — birth year + grade. Empty string = "All".
+  const [filterBirthYear, setFilterBirthYear] = useState('');
+  const [filterGrade, setFilterGrade] = useState('');
+
   // iter57: auto-scroll the inline Add Player form into view when the user
   // clicks the "Add Player" button — fixes the "where did it go?" UX bug
   // particularly painful on mobile where the form opens below the fold.
@@ -188,6 +192,32 @@ const TeamRoster = () => {
     [players]
   );
 
+  // iter59: filter options derived from the actual roster, so the dropdowns
+  // only show values that exist.
+  const filterOptions = useMemo(() => {
+    const years = new Set();
+    const grades = new Set();
+    for (const p of players) {
+      if (p.birth_year) years.add(p.birth_year);
+      if (p.current_grade) grades.add(p.current_grade);
+    }
+    return {
+      birthYears: [...years].sort((a, b) => b - a),  // newest first
+      grades: [...grades].sort(),
+    };
+  }, [players]);
+
+  const filteredPlayers = useMemo(() => {
+    if (!filterBirthYear && !filterGrade) return sortedPlayers;
+    return sortedPlayers.filter(p => {
+      if (filterBirthYear && String(p.birth_year ?? '') !== filterBirthYear) return false;
+      if (filterGrade && (p.current_grade || '') !== filterGrade) return false;
+      return true;
+    });
+  }, [sortedPlayers, filterBirthYear, filterGrade]);
+
+  const clearFilters = () => { setFilterBirthYear(''); setFilterGrade(''); };
+
   const clubInfo = useMemo(() =>
     clubs.find(c => c.id === team?.club),
     [clubs, team?.club]
@@ -195,13 +225,13 @@ const TeamRoster = () => {
 
   const positionGroups = useMemo(() => {
     const groups = { Goalkeeper: [], Defender: [], Midfielder: [], Forward: [], Other: [] };
-    for (const p of sortedPlayers) {
+    for (const p of filteredPlayers) {
       const pos = p.position || 'Other';
       if (groups[pos]) groups[pos].push(p);
       else groups.Other.push(p);
     }
     return Object.entries(groups).filter(([, list]) => list.length > 0);
-  }, [sortedPlayers]);
+  }, [filteredPlayers]);
 
   if (!team) {
     return (
@@ -295,12 +325,60 @@ const TeamRoster = () => {
           />
         )}
 
+        {/* iter59: roster filters — show only when there's at least one filterable
+            attribute on the roster, so an empty roster doesn't render empty UI. */}
+        {players.length > 0 && (filterOptions.birthYears.length > 0 || filterOptions.grades.length > 0) && (
+          <div data-testid="roster-filters" className="bg-[#141414] border border-white/10 px-4 py-3 mb-6 flex flex-wrap items-center gap-3">
+            <span className="text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3]">Filter</span>
+            {filterOptions.birthYears.length > 0 && (
+              <select data-testid="filter-birth-year"
+                value={filterBirthYear}
+                onChange={(e) => setFilterBirthYear(e.target.value)}
+                className="bg-[#0A0A0A] border border-white/10 text-white text-xs px-3 py-2 focus:border-[#007AFF] focus:outline-none">
+                <option value="">All birth years</option>
+                {filterOptions.birthYears.map(y => (
+                  <option key={y} value={String(y)}>{y}</option>
+                ))}
+              </select>
+            )}
+            {filterOptions.grades.length > 0 && (
+              <select data-testid="filter-grade"
+                value={filterGrade}
+                onChange={(e) => setFilterGrade(e.target.value)}
+                className="bg-[#0A0A0A] border border-white/10 text-white text-xs px-3 py-2 focus:border-[#007AFF] focus:outline-none">
+                <option value="">All grades</option>
+                {filterOptions.grades.map(g => (
+                  <option key={g} value={g}>{g}</option>
+                ))}
+              </select>
+            )}
+            <span data-testid="filter-result-count" className="text-xs text-[#A3A3A3] ml-auto">
+              Showing <span className="text-white font-bold">{filteredPlayers.length}</span> of {players.length}
+            </span>
+            {(filterBirthYear || filterGrade) && (
+              <button data-testid="clear-filters-btn" onClick={clearFilters}
+                className="text-[10px] font-bold tracking-wider uppercase text-[#007AFF] hover:text-white px-2 py-1">
+                Clear
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Player Roster */}
         {players.length === 0 ? (
           <div className="text-center py-20 border border-dashed border-white/10">
             <Users size={64} className="text-[#A3A3A3] mx-auto mb-4" />
             <p className="text-xl text-[#A3A3A3] mb-2">No players registered</p>
             <p className="text-sm text-[#666]">Add players to build your team roster</p>
+          </div>
+        ) : filteredPlayers.length === 0 ? (
+          <div data-testid="no-filter-matches" className="text-center py-20 border border-dashed border-white/10">
+            <Users size={48} className="text-[#A3A3A3] mx-auto mb-3" />
+            <p className="text-base text-[#A3A3A3] mb-1">No players match those filters</p>
+            <button data-testid="clear-filters-empty-btn" onClick={clearFilters}
+              className="text-xs font-bold tracking-wider uppercase text-[#007AFF] hover:text-white mt-2">
+              Clear filters →
+            </button>
           </div>
         ) : (
           <div className="space-y-8">

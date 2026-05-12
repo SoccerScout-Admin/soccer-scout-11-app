@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
 import { ArrowLeft, UserCircle, CalendarBlank, Play, Trophy, FilmStrip, Shield, ShieldCheck, Warning, ShareNetwork, Copy, Check, X, Sparkle } from '@phosphor-icons/react';
+import { demographicBadges } from '../utils/playerDemographics';
 
 const STAT_ICON = {
   goal: { label: 'Goals', color: '#10B981', icon: Trophy },
@@ -138,6 +139,19 @@ const PlayerProfile = () => {
               {player.position || 'No position'}
               {data.teams.length > 0 && <> • on {data.teams.length} team{data.teams.length === 1 ? '' : 's'}</>}
             </p>
+            {demographicBadges(player).length > 0 && (
+              <div data-testid="player-demographic-badges" className="flex flex-wrap gap-2 mt-3">
+                {demographicBadges(player).map(({ key, label }) => (
+                  <span
+                    key={key}
+                    data-testid={`badge-${key}`}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold tracking-wider uppercase bg-[#007AFF]/10 text-[#007AFF] border border-[#007AFF]/30"
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </section>
 

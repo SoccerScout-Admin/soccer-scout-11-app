@@ -230,15 +230,53 @@ async def import_csv(input: CsvImport, current_user: dict = Depends(get_current_
 # ---------- Roster file import (CSV) ----------
 
 # Accept a wide range of column header spellings — coaches paste from Excel,
-# Google Sheets, or print rosters where conventions vary wildly.
+# Google Sheets, Hudl exports, TeamSnap exports, or print rosters where
+# conventions vary wildly.
 _HEADER_ALIASES = {
     "name": {"name", "player", "player name", "full name", "fullname", "athlete"},
-    "number": {"number", "no", "no.", "#", "jersey", "jersey number", "shirt", "shirt no"},
-    "position": {"position", "pos", "pos.", "primary position"},
+    # iter59: Hudl/TeamSnap exports split into First Name + Last Name.
+    "first_name": {"first name", "firstname", "first", "given name"},
+    "last_name": {"last name", "lastname", "last", "family name", "surname"},
+    "number": {"number", "no", "no.", "#", "jersey", "jersey number", "shirt", "shirt no", "uniform"},
+    "position": {"position", "pos", "pos.", "primary position", "primary pos"},
     # iter58: roster demographics for HS/club/college rosters
-    "birth_year": {"birth year", "birthyear", "year of birth", "yob", "born", "birth"},
+    "birth_year": {
+        "birth year", "birthyear", "year of birth", "yob", "born", "birth",
+        # iter59: Hudl/TeamSnap full-date columns — our regex extracts the year
+        "date of birth", "dob", "birthdate", "birth date",
+    },
     "current_grade": {"grade", "current grade", "class", "year", "school year", "level"},
+    # iter59: Hudl exports a "Grad Year" — we'll derive current_grade from it.
+    "grad_year": {"grad year", "graduation year", "class of", "graduating class"},
+    # iter59: TeamSnap exports a "Member Type" — we skip rows that aren't players.
+    "member_type": {"member type", "role", "type"},
 }
+
+# iter59: Map grad_year offset → current_grade label. Computed as
+# (grad_year - current_school_year_end), with grad year > current year being
+# underclassmen. Symmetric with the frontend `classOfLabel` derivation.
+_GRAD_TO_GRADE = {
+    -1: "Graduate / Post-Grad",
+    0: "12th (Senior)",
+    1: "11th (Junior)",
+    2: "10th (Sophomore)",
+    3: "9th (Freshman)",
+    4: "8th",
+    5: "7th",
+    6: "6th",
+}
+
+
+def _grade_from_grad_year(grad_year: int) -> Optional[str]:
+    """Convert a 4-digit grad year (e.g. 2027) → grade label like '11th (Junior)'.
+
+    Uses Aug–Jul school-year semantics so a Feb 2026 import treats grad year
+    2026 as the current senior class.
+    """
+    now = datetime.now(timezone.utc)
+    school_year_end = now.year + 1 if now.month >= 7 else now.year
+    offset = grad_year - school_year_end
+    return _GRAD_TO_GRADE.get(offset)
 
 
 def _normalize_header(h: str) -> str:
@@ -323,12 +361,16 @@ async def import_team_roster(
     reader = csv.DictReader(io.StringIO(text))
     fieldnames = reader.fieldnames or []
     columns = _resolve_columns(fieldnames)
-    if not columns["name"]:
+    # iter59: accept either a single 'name' column OR split first+last from
+    # Hudl/TeamSnap exports.
+    has_split_name = columns["first_name"] and columns["last_name"]
+    if not columns["name"] and not has_split_name:
         raise HTTPException(
             status_code=400,
             detail=(
                 "Could not find a 'name' column. Accepted headers: "
-                "name, player, player name, full name, athlete."
+                "name, player, player name, full name, athlete, "
+                "or split First Name + Last Name (Hudl/TeamSnap format)."
             ),
         )
 
@@ -337,7 +379,21 @@ async def import_team_roster(
     skipped = 0
 
     for idx, row in enumerate(reader, start=2):  # row 1 is the header
-        raw_name = (row.get(columns["name"]) or "").strip()
+        # iter59: TeamSnap exports include coaches/managers — skip non-player rows.
+        if columns["member_type"]:
+            member = (row.get(columns["member_type"]) or "").strip().lower()
+            if member and member not in {"player", "athlete"}:
+                skipped += 1
+                continue
+
+        # iter59: resolve name from either single column or first+last split.
+        if columns["name"]:
+            raw_name = (row.get(columns["name"]) or "").strip()
+        else:
+            first = (row.get(columns["first_name"]) or "").strip()
+            last = (row.get(columns["last_name"]) or "").strip()
+            raw_name = f"{first} {last}".strip()
+
         if not raw_name:
             skipped += 1
             continue
@@ -395,6 +451,24 @@ async def import_team_roster(
         current_grade: Optional[str] = None
         if columns["current_grade"]:
             current_grade = (row.get(columns["current_grade"]) or "").strip() or None
+        # iter59: Hudl exports use "Grad Year" instead — derive the grade label
+        # if a direct one wasn't provided.
+        if not current_grade and columns["grad_year"]:
+            raw_gy = (row.get(columns["grad_year"]) or "").strip()
+            if raw_gy:
+                import re as _re2
+                m_gy = _re2.search(r"\d{4}", raw_gy)
+                if m_gy:
+                    try:
+                        gy = int(m_gy.group())
+                        current_grade = _grade_from_grad_year(gy)
+                        if current_grade is None:
+                            errors.append({
+                                "row": idx,
+                                "reason": f"Grad year '{raw_gy}' for {raw_name} is outside our HS/college range — grade not derived.",
+                            })
+                    except ValueError:
+                        pass
 
         parsed.append({
             "row": idx,

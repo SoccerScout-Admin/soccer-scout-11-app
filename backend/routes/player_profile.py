@@ -57,7 +57,12 @@ async def _build_profile_payload(player: dict, user_id: str, public: bool) -> di
 
         public_player = {
             k: player.get(k)
-            for k in {"id", "name", "number", "position", "profile_pic_url", "team"}
+            for k in {
+                "id", "name", "number", "position", "profile_pic_url", "team",
+                # iter59: surface demographic fields on the public dossier so
+                # recruiters/scouts can see age-group + graduation year.
+                "birth_year", "current_grade",
+            }
         }
         public_clip_fields = {
             "id", "title", "clip_type", "start_time", "end_time",

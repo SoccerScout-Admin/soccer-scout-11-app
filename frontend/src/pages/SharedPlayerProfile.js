@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import axios from 'axios';
 import { API } from '../App';
 import { UserCircle, CalendarBlank, Play, Trophy, FilmStrip, Shield, ShieldCheck, Warning, Copy, Check, X, Link as LinkIcon } from '@phosphor-icons/react';
+import { demographicBadges } from '../utils/playerDemographics';
 
 const STAT_META = {
   goal: { label: 'Goals', color: '#10B981', icon: Trophy },
@@ -124,6 +125,19 @@ const SharedPlayerProfile = () => {
                 <span>{data.teams.length} team{data.teams.length === 1 ? '' : 's'}</span>
               )}
             </div>
+            {demographicBadges(player).length > 0 && (
+              <div data-testid="public-demographic-badges" className="flex flex-wrap gap-2 mt-3">
+                {demographicBadges(player).map(({ key, label }) => (
+                  <span
+                    key={key}
+                    data-testid={`public-badge-${key}`}
+                    className="inline-flex items-center gap-1 px-3 py-1 text-xs font-bold tracking-wider uppercase bg-[#007AFF]/15 text-[#007AFF] border border-[#007AFF]/40"
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="text-xs text-[#666] mt-3">Shared by Coach {owner}</div>
           </div>
         </section>

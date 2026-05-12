@@ -2,6 +2,43 @@
 
 ## What's Been Implemented
 
+### Player Demographics — Derived Analytics + Hudl/TeamSnap Imports (iter59 — Feb 2026)
+
+User asked: continue from iter58 — verify CSV demographics end-to-end, then ship Player Age/Grade derived analytics, then Hudl/TeamSnap roster import.
+
+**(a) End-to-end CSV verification**
+- 6 new pytest cases covering `birth_year` + `current_grade` canonical headers, alias headers (YOB / Class), full-date birth-year extraction, out-of-range birth-year warnings, optional demographic fields, and template content. All 18 roster-import tests pass.
+- UX gap fixed: `RosterImportModal.js` preview table now surfaces a "Birth Yr" and "Grade" column (only when at least one row has the value), so coaches can visually verify demographic parsing before importing.
+
+**(b) Derived analytics — age groups + class-of**
+- **Bug fix**: `routes/player_profile.py::_build_profile_payload(public=True)` was stripping `birth_year` and `current_grade` from the public dossier payload, so shared player links didn't show the data. Fixed.
+- New util `frontend/src/utils/playerDemographics.js`:
+  - `ageGroupLabel(birth_year)` → e.g. `U18` (U-system soccer convention)
+  - `classOfLabel(current_grade)` → e.g. `Class of 2028` (HS + college aware; assumes Aug→Jul academic year)
+  - `demographicBadges(player)` → `[{key, label}]` for one-line rendering
+- Badge chips rendered on:
+  - `PlayerProfile.js` private dossier hero (`data-testid="player-demographic-badges"`)
+  - `SharedPlayerProfile.js` public dossier hero (`data-testid="public-demographic-badges"`)
+- **Roster filters** on `TeamRoster.js`: birth year + grade dropdowns (only render when the roster has those values), with a live "Showing X of Y" counter and a Clear button. Empty-result state has its own messaging + clear-CTA.
+- Backend test: `test_public_dossier_demographics.py` (3 tests) — confirms public dossier returns birth_year + current_grade and never leaks `user_id` / `profile_pic_path`.
+
+**(c) Hudl / TeamSnap CSV exports — auto-detected**
+- Decision: skipped full OAuth (Hudl requires partner-level API access). Instead, extended the existing smart-parser path so coaches can paste their CSV exports verbatim and we figure out the columns.
+- New header aliases in `routes/players.py::_HEADER_ALIASES`:
+  - `first_name` ← First Name, Firstname, First, Given Name
+  - `last_name` ← Last Name, Lastname, Last, Family Name, Surname
+  - `birth_year` extended with: Date of Birth, DOB, Birthdate, Birth Date
+  - `grad_year` ← Grad Year, Graduation Year, Class of, Graduating Class
+  - `member_type` ← Member Type, Role, Type
+- Parser logic:
+  - If `name` column absent, combines `first_name + last_name` into a single name.
+  - If `current_grade` absent but `grad_year` present, derives the grade via `_grade_from_grad_year` (Aug→Jul school-year semantics, matches frontend `classOfLabel`).
+  - If `member_type` present, skips rows whose type is not `player`/`athlete` (TeamSnap exports include coaches/managers).
+- 6 new pytest cases cover Hudl split-name + Grad Year, TeamSnap Member Type skipping, blank-first/last edge case, grad-year without grade column, explicit grade beats grad year, and the updated 400 error message mentions the split-name fallback. **All 24 roster-import tests pass.**
+- UI hint added in `RosterImportModal.js`: "✓ Hudl & TeamSnap exports work out of the box" (`data-testid="hudl-teamsnap-hint"`).
+
+**Testing summary (iter59)**: 24 roster-import tests + 3 public-dossier-demographics tests + 5 cookie-auth + 7 CSRF + 5 rate-limiter tests = 44 passing in touched suites. Pre-existing `test_delete_match_cross_user_rejected` failure exists on pristine main — unrelated to this work.
+
 ### CSV Roster Import — Birth Year + Grade Support (iter58 — Feb 2026)
 
 User asked: "extend the CSV importer to accept birth_year + current_grade, plus add a downloadable CSV roster template."
