@@ -3,6 +3,7 @@ import axios from 'axios';
 import { API, getAuthHeader } from '../../App';
 import { Trophy, Plus, Trash, Check, ClipboardText, X } from '@phosphor-icons/react';
 import ManualResultSummary from './ManualResultSummary';
+import { useScrollIntoViewOnOpen } from '../../hooks/useScrollIntoViewOnOpen';
 
 const EVENT_TYPES = [
   { key: 'goal', label: 'Goal', color: '#10B981' },
@@ -28,6 +29,11 @@ const ManualResultForm = ({ match, players, onSaved }) => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [quickGoalFlash, setQuickGoalFlash] = useState(null);
+
+  // iter57: auto-scroll the editor into view when the user clicks "Edit"
+  // (or first-time-entry). Fixes the silent-no-feedback UX on mobile where
+  // the form opens below the fold and the page doesn't move.
+  const editorRef = useScrollIntoViewOnOpen(editing);
   const [finishing, setFinishing] = useState(false);
   const [aiSummary, setAiSummary] = useState(null);
   const [shareRecapOpen, setShareRecapOpen] = useState(false);
@@ -207,7 +213,7 @@ const ManualResultForm = ({ match, players, onSaved }) => {
 
   // Editor (or first-time entry)
   return (
-    <div data-testid="manual-result-form" className="bg-[#141414] border border-[#60A5FA]/30 p-4 sm:p-6 mb-6">
+    <div ref={editorRef} data-testid="manual-result-form" className="bg-[#141414] border border-[#60A5FA]/30 p-4 sm:p-6 mb-6">
       <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <ClipboardText size={22} weight="bold" className="text-[#60A5FA]" />

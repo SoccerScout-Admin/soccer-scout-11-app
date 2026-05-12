@@ -104,6 +104,12 @@ class Player(BaseModel):
     team: Optional[str] = None
     profile_pic_url: Optional[str] = None
     share_token: Optional[str] = None
+    # iter57: roster demographics. birth_year is the canonical store; age is
+    # computed on the fly (current_year - birth_year) so we never let the
+    # value drift stale. current_grade is freeform string (e.g. "9th",
+    # "Sophomore", "U16") so it works for HS, club, and college teams.
+    birth_year: Optional[int] = None
+    current_grade: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 class Team(BaseModel):

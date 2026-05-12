@@ -313,6 +313,8 @@ Be specific. Reference the clip counts in your reasoning. Be honest about rating
             "number": player.get("number"),
             "position": player.get("position"),
             "profile_pic_url": player.get("profile_pic_url"),
+            "birth_year": player.get("birth_year"),
+            "current_grade": player.get("current_grade"),
         },
         "team": {"id": target_team["id"], "name": team_name, "season": season},
         "stats": {

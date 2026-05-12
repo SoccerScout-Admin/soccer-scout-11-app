@@ -451,7 +451,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter56"
+BUILD_VERSION = "iter57"
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",
@@ -483,6 +483,10 @@ SHIPPED_FEATURES = [
     "download-clips-zip-refactor",
     "test-credential-fixture",
     "unused-imports-cleanup",
+    "player-edit-modal",
+    "player-birth-year-and-grade",
+    "auto-scroll-on-form-open",
+    "radon-precommit-hook",
 ]
 
 def _get_build_sha() -> str:

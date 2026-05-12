@@ -26,6 +26,21 @@ class PlayerCreate(BaseModel):
     number: Optional[int] = None
     position: Optional[str] = None
     team: Optional[str] = None
+    birth_year: Optional[int] = None
+    current_grade: Optional[str] = None
+
+
+class PlayerUpdate(BaseModel):
+    """iter57: PATCH body. All fields optional — only provided ones are
+    applied. Switched from query params → JSON body so the schema can grow
+    without endpoint signature explosion."""
+    name: Optional[str] = None
+    number: Optional[int] = None
+    position: Optional[str] = None
+    team: Optional[str] = None
+    match_id: Optional[str] = None
+    birth_year: Optional[int] = None
+    current_grade: Optional[str] = None
 
 
 class CsvImport(BaseModel):
@@ -83,6 +98,8 @@ async def create_player(input: PlayerCreate, current_user: dict = Depends(get_cu
         number=input.number,
         position=input.position,
         team=input.team,
+        birth_year=input.birth_year,
+        current_grade=input.current_grade,
     )
     await db.players.insert_one(player.model_dump())
     return player.model_dump()
@@ -450,32 +467,23 @@ async def view_profile_pic(player_id: str):
 @router.patch("/players/{player_id}")
 async def update_player(
     player_id: str,
-    name: Optional[str] = None,
-    number: Optional[int] = None,
-    position: Optional[str] = None,
-    team: Optional[str] = None,
-    match_id: Optional[str] = None,
+    update: PlayerUpdate,
     current_user: dict = Depends(get_current_user),
 ):
+    """Edit an existing player. JSON body — only provided fields are applied.
+
+    iter57: switched from query params to a JSON body so the schema can grow
+    cleanly (birth_year, current_grade added). Frontend sends a partial
+    object; we filter to non-None values and $set them."""
     player = await db.players.find_one(
         {"id": player_id, "user_id": current_user["id"]}, {"_id": 0}
     )
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
-    updates = {}
-    if name is not None:
-        updates["name"] = name
-    if number is not None:
-        updates["number"] = number
-    if position is not None:
-        updates["position"] = position
-    if team is not None:
-        updates["team"] = team
-    if match_id is not None:
-        updates["match_id"] = match_id
-    if updates:
-        await db.players.update_one({"id": player_id}, {"$set": updates})
-    return {"status": "updated"}
+    payload = update.model_dump(exclude_none=True)
+    if payload:
+        await db.players.update_one({"id": player_id}, {"$set": payload})
+    return {"status": "updated", "fields_updated": list(payload.keys())}
 
 
 # ===== Roster discovery for "Add Existing Player" flow =====

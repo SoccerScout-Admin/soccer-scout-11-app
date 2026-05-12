@@ -1,0 +1,32 @@
+# Pre-commit config — runs locally before each `git commit`.
+# Install once: `pip install pre-commit && pre-commit install`
+#
+# What this catches:
+#   - radon: fails the commit if ANY function lands at C-grade complexity
+#     (≥11) or worse. Catches the next 168-line monster before it ships.
+#   - ruff: standard Python linting (unused imports, undefined names, etc.)
+#
+# Why no JS/TS hook here? The frontend pipeline already runs eslint via
+# Create-React-App's webpack-dev-server hot reload; CI catches errors there.
+
+repos:
+  - repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        name: ruff (python lint)
+        files: ^backend/
+        args: [--select=F401,F811,F821,F841,E711,E712, --fix]
+      - id: ruff-format
+        name: ruff (python format check)
+        files: ^backend/
+        stages: [manual]  # opt-in formatting; don't auto-reformat on every commit
+
+  - repo: local
+    hooks:
+      - id: radon-complexity-gate
+        name: radon complexity gate (block new C-grade+ functions)
+        entry: bash -c 'cd backend && radon cc -nc . | tee /tmp/radon-out.txt && [ -z "$(grep -E "^\s+[CDEF]" /tmp/radon-out.txt)" ] || { echo "BLOCKED: a function has complexity >=11 (C-grade). Refactor before committing."; exit 1; }'
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false

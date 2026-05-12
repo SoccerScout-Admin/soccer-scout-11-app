@@ -2,8 +2,10 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../App';
-import { ArrowLeft, Users, Plus, Trash, Upload, UserCircle, CalendarBlank, Shield, ShareNetwork, Copy, Check, X, UserPlus, FileCsv } from '@phosphor-icons/react';
+import { ArrowLeft, Users, Plus, Trash, Upload, UserCircle, CalendarBlank, Shield, ShareNetwork, Copy, Check, X, UserPlus, FileCsv, PencilSimple } from '@phosphor-icons/react';
 import RosterImportModal from './components/RosterImportModal';
+import PlayerFormModal, { ageFromBirthYear } from '../components/PlayerFormModal';
+import { useScrollIntoViewOnOpen } from '../hooks/useScrollIntoViewOnOpen';
 
 const TeamRoster = () => {
   const { teamId } = useParams();
@@ -12,7 +14,8 @@ const TeamRoster = () => {
   const [players, setPlayers] = useState([]);
   const [clubs, setClubs] = useState([]);
   const [showAddPlayer, setShowAddPlayer] = useState(false);
-  const [playerForm, setPlayerForm] = useState({ name: '', number: '', position: '' });
+  const [editingPlayer, setEditingPlayer] = useState(null);  // iter57: edit support
+  const [submittingPlayer, setSubmittingPlayer] = useState(false);
   const [uploadingPic, setUploadingPic] = useState(null);
   const [picVersions, setPicVersions] = useState({});
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -21,6 +24,11 @@ const TeamRoster = () => {
   const [showImport, setShowImport] = useState(false);
   const [eligible, setEligible] = useState([]);
   const [eligibleLoading, setEligibleLoading] = useState(false);
+
+  // iter57: auto-scroll the inline Add Player form into view when the user
+  // clicks the "Add Player" button — fixes the "where did it go?" UX bug
+  // particularly painful on mobile where the form opens below the fold.
+  const addPlayerRef = useScrollIntoViewOnOpen(showAddPlayer);
 
   const fetchTeam = useCallback(async () => {
     try {
@@ -49,21 +57,38 @@ const TeamRoster = () => {
     fetchClubs();
   }, [fetchTeam, fetchPlayers, fetchClubs]);
 
-  const handleAddPlayer = async (e) => {
-    e.preventDefault();
-    if (!playerForm.name.trim()) return;
+  const handleAddPlayer = async (payload) => {
+    setSubmittingPlayer(true);
     try {
       await axios.post(`${API}/players`, {
         team_id: teamId,
-        name: playerForm.name,
-        number: playerForm.number !== '' ? parseInt(playerForm.number) : null,
-        position: playerForm.position,
-        team: team?.name || ''
+        team: team?.name || '',
+        ...payload,
       }, { headers: getAuthHeader() });
-      setPlayerForm({ name: '', number: '', position: '' });
       setShowAddPlayer(false);
       fetchPlayers();
-    } catch (err) { console.error('Failed to add player:', err); }
+    } catch (err) {
+      console.error('Failed to add player:', err);
+      alert('Failed to add player: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setSubmittingPlayer(false);
+    }
+  };
+
+  // iter57: edit existing player (name typos, jersey changes, etc.)
+  const handleEditPlayer = async (payload) => {
+    if (!editingPlayer) return;
+    setSubmittingPlayer(true);
+    try {
+      await axios.patch(`${API}/players/${editingPlayer.id}`, payload, { headers: getAuthHeader() });
+      setEditingPlayer(null);
+      fetchPlayers();
+    } catch (err) {
+      console.error('Failed to edit player:', err);
+      alert('Failed to update player: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setSubmittingPlayer(false);
+    }
   };
 
   const handleDeletePlayer = async (playerId) => {
@@ -248,46 +273,26 @@ const TeamRoster = () => {
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {/* Add Player Form */}
         {showAddPlayer && (
-          <form onSubmit={handleAddPlayer} data-testid="add-player-form"
-            className="bg-[#141414] border border-white/10 p-4 sm:p-6 mb-8">
-            <h3 className="text-sm font-bold uppercase tracking-wider text-white mb-4">Register New Player</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 mb-4">
-              <div className="sm:col-span-2 md:col-span-1">
-                <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Name *</label>
-                <input data-testid="player-name-input" type="text" value={playerForm.name}
-                  onChange={(e) => setPlayerForm({ ...playerForm, name: e.target.value })}
-                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none" required />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Jersey Number</label>
-                <input data-testid="player-number-input" type="number" inputMode="numeric" min="0" max="99" value={playerForm.number}
-                  onChange={(e) => setPlayerForm({ ...playerForm, number: e.target.value })}
-                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none" />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1">Position</label>
-                <select data-testid="player-position-select" value={playerForm.position}
-                  onChange={(e) => setPlayerForm({ ...playerForm, position: e.target.value })}
-                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none">
-                  <option value="">Select...</option>
-                  <option value="Goalkeeper">Goalkeeper</option>
-                  <option value="Defender">Defender</option>
-                  <option value="Midfielder">Midfielder</option>
-                  <option value="Forward">Forward</option>
-                </select>
-              </div>
-            </div>
-            <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
-              <button type="button" onClick={() => setShowAddPlayer(false)}
-                className="px-4 py-3 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors text-xs font-bold tracking-wider uppercase">
-                Cancel
-              </button>
-              <button data-testid="submit-player-btn" type="submit"
-                className="bg-[#007AFF] hover:bg-[#005bb5] text-white px-6 py-3 font-bold tracking-wider uppercase text-xs transition-colors">
-                Add Player
-              </button>
-            </div>
-          </form>
+          <div ref={addPlayerRef}>
+            <PlayerFormModal
+              mode="create"
+              inline
+              submitting={submittingPlayer}
+              onSubmit={handleAddPlayer}
+              onCancel={() => setShowAddPlayer(false)}
+            />
+          </div>
+        )}
+
+        {/* iter57: edit existing player — name typos, jersey changes, position shifts */}
+        {editingPlayer && (
+          <PlayerFormModal
+            mode="edit"
+            initial={editingPlayer}
+            submitting={submittingPlayer}
+            onSubmit={handleEditPlayer}
+            onCancel={() => setEditingPlayer(null)}
+          />
         )}
 
         {/* Player Roster */}
@@ -341,7 +346,23 @@ const TeamRoster = () => {
                           <h3 className="text-base font-semibold text-white truncate">{player.name}</h3>
                         </div>
                         <p className="text-xs text-[#666] mt-0.5">{player.position || 'No position'}</p>
+                        {/* iter57: roster demographics line — only renders when at least one field is set */}
+                        {(player.birth_year || player.current_grade) && (
+                          <p data-testid={`player-demo-${player.id}`} className="text-[10px] text-[#A3A3A3] mt-0.5 tracking-wide truncate">
+                            {player.birth_year && <span>Age {ageFromBirthYear(player.birth_year)} · </span>}
+                            {player.birth_year && <span>Born {player.birth_year}</span>}
+                            {player.birth_year && player.current_grade && <span> · </span>}
+                            {player.current_grade && <span>{player.current_grade}</span>}
+                          </p>
+                        )}
                       </div>
+                      {/* iter57: Edit (always visible — mobile coaches need to fix typos with one tap) */}
+                      <button data-testid={`edit-player-${player.id}`}
+                        onClick={(e) => { e.stopPropagation(); setEditingPlayer(player); }}
+                        title="Edit player"
+                        className="p-2 text-[#666] hover:text-[#007AFF] hover:bg-[#007AFF]/10 transition-colors">
+                        <PencilSimple size={16} />
+                      </button>
                       {/* Delete */}
                       <button data-testid={`delete-player-${player.id}`}
                         onClick={(e) => { e.stopPropagation(); handleDeletePlayer(player.id); }}

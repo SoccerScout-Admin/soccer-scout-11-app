@@ -187,6 +187,17 @@ const PlayerSeasonTrends = () => {
                 <p className="text-sm text-[#A3A3A3] mt-1">
                   {data.rubric.label} • {data.team.name} • {data.team.season}
                 </p>
+                {/* iter57: recruiter-facing demographics line */}
+                {(data.player.birth_year || data.player.current_grade) && (
+                  <p data-testid="player-demographics" className="text-xs text-[#FBBF24] mt-1 tracking-wide">
+                    {data.player.birth_year && (() => {
+                      const age = new Date().getFullYear() - data.player.birth_year;
+                      return <span>Age {age} · Born {data.player.birth_year}</span>;
+                    })()}
+                    {data.player.birth_year && data.player.current_grade && <span> · </span>}
+                    {data.player.current_grade && <span>{data.player.current_grade}</span>}
+                  </p>
+                )}
                 <p className="text-xl text-white mt-3 leading-relaxed" style={{ fontFamily: 'Bebas Neue' }}>
                   {data.report.player_summary}
                 </p>

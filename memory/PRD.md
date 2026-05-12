@@ -2,6 +2,38 @@
 
 ## What's Been Implemented
 
+### Player Roster: Edit + Demographics + Auto-Scroll (iter57 — Feb 2026)
+
+User asked for three features plus the pre-commit hook from iter56's improvement suggestion.
+
+**(A) Auto-scroll on inline form open** (`/app/frontend/src/hooks/useScrollIntoViewOnOpen.js`, new):
+- Reusable hook that scrolls an element into view + auto-focuses the first input when its `open` flag flips false → true.
+- Uses `scrollIntoView({behavior:'smooth', block:'center'})` so the form lands mid-viewport (preserves spatial context with the button above it). Auto-focus with `preventScroll:true` triggers mobile keyboards immediately, saving one tap.
+- Applied to: `TeamRoster.js` Add Player form, `ManualResultForm.js` editor (when toggling from summary to edit mode). Verified via Playwright that focus correctly lands on the name input after click.
+
+**(B) Manual player editing** (`routes/players.py` + `TeamRoster.js` + new `PlayerFormModal.js`):
+- Backend: `PATCH /api/players/{id}` switched from query params to JSON body (`PlayerUpdate` Pydantic model). Only provided fields are `$set` — partial updates are safe. Same endpoint name, no breaking change since no callers existed.
+- Frontend: new shared `PlayerFormModal` component powers both Add (inline) and Edit (modal overlay). Pencil icon next to every player on the roster opens the edit modal pre-filled with their current values. Verified end-to-end: name typo → fixed; jersey number 7 → 17; grade Junior → Senior. All persisted.
+
+**(C) Birth year + age + current grade fields**:
+- Backend: added `birth_year: Optional[int]` + `current_grade: Optional[str]` to the `Player` Pydantic model. Both nullable — existing players unaffected. Surfaced on the public dossier (`player_trends.py` payload).
+- Age is computed (`current_year - birth_year`), never stored — can't drift stale when the year rolls over.
+- Frontend grade dropdown: 6th, 7th, 8th, 9th (Freshman), 10th (Sophomore), 11th (Junior), 12th (Senior), College Fr/So/Jr/Sr, Graduate/Post-Grad. Covers HS, club, and college rosters. Birth year input is numeric with min/max sanity bounds (current_year-30 to current_year-5).
+- Roster card shows a compact demographics line: "Age 19 · Born 2007 · 11th (Junior)" only when at least one field is set.
+- Player season-trends dossier (`PlayerSeasonTrends.js`) now shows the same line in amber under the player name — gives recruiters age + grade context at a glance.
+
+**Plus: pre-commit hook** (`.pre-commit-config.yaml`, new):
+- `radon-complexity-gate` blocks any commit that introduces a C-grade (≥11 cyclomatic complexity) function in `backend/`. Catches the next 168-line monster at write-time.
+- `ruff` auto-fixes unused imports / undefined names / `==True` etc. on every commit.
+- Install: `pip install pre-commit && pre-commit install`. One-time setup per dev machine.
+
+**Verified end-to-end** via Playwright + curl:
+- Add player with all 5 fields → card shows "Age 19 · Born 2007 · 11th (Junior)"
+- Edit modal opens pre-filled with name, number, position, birth_year, grade
+- Update name + grade + jersey → all 3 changes persist + reflect in UI
+- Auto-focus correctly lands on name input after clicking Add Player
+- Backend PATCH endpoint accepts JSON body, returns `{status:"updated", fields_updated:[...]}`
+
 ### Code Quality Pass (iter56 — Feb 2026)
 
 User shared a code review report. I evaluated each finding before acting:
