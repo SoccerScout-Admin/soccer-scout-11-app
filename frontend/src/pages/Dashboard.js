@@ -15,6 +15,7 @@ import BulkActionBar from './components/BulkActionBar';
 import QuickActionsRow from './components/QuickActionsRow';
 import MyReelStatsCard from './components/MyReelStatsCard';
 import InstallGuideModal from '../components/InstallGuideModal';
+import BuildInfoChip from '../components/BuildInfoChip';
 
 const Dashboard = () => {
   const [matches, setMatches] = useState([]);
@@ -403,9 +404,7 @@ const Dashboard = () => {
       {/* Discreet footer link — drives org-wide adoption (assistant coaches, players) */}
       <footer className="border-t border-white/5 px-4 sm:px-6 py-3 mt-8">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <p className="text-[10px] tracking-[0.2em] uppercase text-[#666]">
-            Soccer Scout 11 · v1.0
-          </p>
+          <BuildInfoChip />
           <button
             data-testid="install-on-another-device-btn"
             onClick={() => setShowInstallGuide(true)}

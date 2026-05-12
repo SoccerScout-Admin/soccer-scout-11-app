@@ -345,6 +345,46 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 
 # ===== Health =====
 
+# Build metadata — captured at module load so it reflects the actual deployed code.
+# BUILD_VERSION should be bumped each iteration that ships to production.
+# SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
+# "yes, the latest code reached production".
+BUILD_VERSION = "iter49"
+SHIPPED_FEATURES = [
+    "auto-highlight-reels",
+    "trending-reel-library",
+    "weekly-reel-recap",
+    "disk-safety-sweepers",
+    "pwa-install-modal",
+    "qr-code-install-share",
+    "pwa-install-share-teammate",
+    "upload-limit-20gb",
+    "compress-before-upload-tip",
+    "smart-large-file-nudge",
+    "compression-calculator",
+    "send-compression-instructions",
+    "notify-when-upload-done",
+    "gitignore-deploy-fix",
+]
+
+def _get_build_sha() -> str:
+    """Best-effort git SHA lookup. Returns 'unknown' if git isn't available
+    (e.g., in a minimal deployment image with .git stripped)."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=2, cwd="/app",
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or "unknown"
+    except Exception:
+        pass
+    return "unknown"
+
+BUILD_SHA = _get_build_sha()
+BUILT_AT = datetime.now(timezone.utc).isoformat()
+
 @api_router.get("/health")
 async def health_check():
     try:
@@ -353,6 +393,19 @@ async def health_check():
     except Exception:
         db_status = "disconnected"
     return {"status": "healthy", "service": "soccer-scout-api", "database": db_status, "timestamp": datetime.now(timezone.utc).isoformat()}
+
+@api_router.get("/health/deploy")
+async def deploy_health():
+    """Returns build metadata so the user can verify which version is live in
+    production without clicking through every feature. Public endpoint — no
+    auth required (build info isn't sensitive)."""
+    return {
+        "build": BUILD_VERSION,
+        "sha": BUILD_SHA,
+        "built_at": BUILT_AT,
+        "features": SHIPPED_FEATURES,
+        "feature_count": len(SHIPPED_FEATURES),
+    }
 
 @app.get("/health")
 async def root_health_check():

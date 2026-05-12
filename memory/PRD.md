@@ -2,6 +2,22 @@
 
 ## What's Been Implemented
 
+### Build Info Chip + `/api/health/deploy` (iter50 — Feb 2026)
+
+- **Why**: after each redeploy, the user needs a way to confirm production is actually running the latest code without clicking through every feature. Especially valuable after the iter49 `.gitignore` saga, where multiple deploys silently shipped stale code.
+- **Backend** (`server.py`):
+  - New `GET /api/health/deploy` returns `{build, sha, built_at, features, feature_count}`.
+  - `BUILD_VERSION = "iter49"` constant + `SHIPPED_FEATURES` array (14 entries) defined at module load.
+  - `_get_build_sha()` runs `git rev-parse --short HEAD` with a 2s timeout and `cwd=/app`; falls back to `"unknown"` if git is stripped from the deployment image.
+  - `BUILT_AT` ISO timestamp captured at module load (reflects actual deploy time, not request time).
+  - Public endpoint — no auth required (build info isn't sensitive).
+- **Frontend** (`/app/frontend/src/components/BuildInfoChip.js`, new):
+  - Fetches `/api/health/deploy` on mount, renders a discreet `v1.0 · iter49` chip in the dashboard footer (replacing the previous static "v1.0" text).
+  - Click → modal with: build label, git SHA (monospace), localized build timestamp, feature count, and the full feature list with green check icons.
+  - Silent failure mode — if the endpoint is unreachable, the chip just doesn't render (no broken UI).
+- **Verified end-to-end**: curl confirms the endpoint returns correct payload (`iter49`, real SHA `cf2cd75`, 14 features). Playwright opens the footer chip, asserts 14 feature list items, and confirms three flagship features (`compression-calculator`, `notify-when-upload-done`, `gitignore-deploy-fix`) appear.
+- **Maintenance note**: bump `BUILD_VERSION` in `server.py:~349` and append to `SHIPPED_FEATURES` array each time features ship to prod. Source of truth for "what's live".
+
 ### Deployment Blocker Fix: .gitignore Cleanup (iter49 — Feb 2026)
 
 - **User reported**: production deployment failed at the "managing secrets" step with `failed to fetch envs from source pod: ... pods "agent-env-71a126e7-ebd7-4add-81d0-147a3aeb2fff" not found`.
