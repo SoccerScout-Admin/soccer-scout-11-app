@@ -2,6 +2,25 @@
 
 ## What's Been Implemented
 
+### CSRF Protection — Double-Submit Token (iter54 — Feb 2026)
+
+User asked: "wire CSRF protection on top of cookie auth". Implemented the OWASP-recommended double-submit-token pattern, closing the last remaining attack vector on the cookie auth from iter52.
+
+**Backend** (`server.py`):
+- New `csrf_token` cookie (32 bytes URL-safe random via `secrets.token_urlsafe(32)`). **Not** HttpOnly — frontend MUST read it via JS. Same `SameSite=Lax; Secure; Max-Age=7d; Path=/` attributes as access_token.
+- Set in `/api/auth/login` and `/api/auth/register` responses, cleared in `/api/auth/logout`.
+- New `csrf_protection_middleware`: skips safe methods (GET/HEAD/OPTIONS), non-/api paths, auth bootstrap endpoints, and legacy `Authorization: Bearer` requests (which are CSRF-immune by design). On any other cookie-authenticated unsafe-method call, requires `X-CSRF-Token` header matching the cookie value (constant-time compare via `hmac.compare_digest`). Mismatch → JSON 403 with clear "refresh the page" message.
+
+**Frontend** (`App.js`):
+- New `axios.interceptors.request.use(...)` reads `csrf_token` via `document.cookie` and echoes it back in `X-CSRF-Token` header on every POST/PUT/PATCH/DELETE. Zero changes needed at any of the ~150 call sites.
+
+**Critical fix discovered** — `routes/auth.py` had a SECOND `get_current_user` dependency that was still header-only (used by ~20 modular route files like `routes/matches.py`, `routes/folders.py`, `routes/videos.py`, etc.). My iter52 cookie migration only updated `server.py:get_current_user`, so cookie auth was silently broken on most endpoints. Synced both deps to read cookie → header fallback. All affected routes now work with the new cookie auth.
+
+**Verified end-to-end**:
+- 7 new pytest tests in `test_csrf_protection.py` (all passing): cookie set, GET no-CSRF, POST blocked without header, POST succeeds with matching header, POST blocked with mismatched header, legacy Bearer bypass, auth endpoints exempt.
+- Browser-side Playwright verification: `access_token` cookie HttpOnly=True (XSS-proof), `csrf_token` cookie HttpOnly=False + JS-readable (double-submit echo source), values match. App dashboard renders all 3 matches + Reel Stats + Coach Pulse via cookie-authenticated axios GETs.
+- 58 total auth/cookie/csrf/disk regression tests passing, 0 regressions.
+
 ### iter53 Triple-Header: Disk Banner + Cookie Auth + Component Refactor (Feb 2026)
 
 User asked for "b, c, and d" — disk-pressure banner, oversized-component refactor, and httpOnly cookie auth migration. All three shipped in one iteration.

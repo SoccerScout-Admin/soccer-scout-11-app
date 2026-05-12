@@ -48,6 +48,36 @@ export const API = `${BACKEND_URL}/api`;
 // every existing axios call gets it without having to touch ~150 call sites.
 axios.defaults.withCredentials = true;
 
+// CSRF protection (iter54): the backend pairs the httpOnly access_token cookie
+// with a JS-readable csrf_token cookie. We echo that cookie value back in the
+// X-CSRF-Token header on every unsafe-method request (POST/PUT/PATCH/DELETE).
+// The backend rejects (403) any cookie-authenticated unsafe-method call that
+// doesn't match. A cross-origin attacker can't read the cookie (SOP blocks
+// document.cookie cross-site), so they can't forge the matching header.
+const _CSRF_COOKIE = 'csrf_token';
+const _CSRF_HEADER = 'X-CSRF-Token';
+const _UNSAFE_METHODS = new Set(['post', 'put', 'patch', 'delete']);
+
+const _readCookie = (name) => {
+  if (typeof document === 'undefined') return null;
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length === 2) return parts.pop().split(';').shift();
+  return null;
+};
+
+axios.interceptors.request.use((config) => {
+  const method = (config.method || 'get').toLowerCase();
+  if (_UNSAFE_METHODS.has(method)) {
+    const token = _readCookie(_CSRF_COOKIE);
+    if (token) {
+      config.headers = config.headers || {};
+      config.headers[_CSRF_HEADER] = token;
+    }
+  }
+  return config;
+});
+
 export const getAuthHeader = () => {
   // Still returned for backwards compat with the legacy code paths that explicitly
   // attach it. New auth is cookie-driven so this can return {} safely once we drop

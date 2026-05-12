@@ -1,5 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Header, UploadFile, File, Depends, Request, Query
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse, JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
@@ -276,6 +276,40 @@ ACCESS_TOKEN_COOKIE = "access_token"
 ACCESS_TOKEN_COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # 7 days, matches JWT expiry
 ACCESS_TOKEN_COOKIE_SECURE = os.environ.get("ENVIRONMENT", "").lower() != "development"
 
+# CSRF protection — double-submit token pattern (iter54).
+# We pair every cookie-authenticated session with a non-HttpOnly `csrf_token`
+# cookie. Frontend reads it via document.cookie and echoes it back as the
+# `X-CSRF-Token` header on every unsafe-method request. Server compares the
+# two — if they don't match → 403. An attacker on another origin cannot read
+# the cookie (Same-Origin Policy blocks document.cookie cross-site), so they
+# cannot forge the matching header → cookie auth is now CSRF-proof.
+CSRF_COOKIE = "csrf_token"
+CSRF_HEADER = "X-CSRF-Token"
+CSRF_COOKIE_MAX_AGE = ACCESS_TOKEN_COOKIE_MAX_AGE  # same lifetime as session
+
+def _generate_csrf_token() -> str:
+    """32 bytes of URL-safe randomness — ~256 bits of entropy. Unguessable."""
+    import secrets
+    return secrets.token_urlsafe(32)
+
+def _set_csrf_cookie(response: Response, token: str) -> None:
+    """Set the CSRF token cookie. NOT HttpOnly — frontend must read it via JS
+    to echo in the X-CSRF-Token header (that's the double-submit pattern).
+    SameSite=Lax + Secure still apply, so the cookie won't be sent on
+    cross-site unsafe methods regardless."""
+    response.set_cookie(
+        key=CSRF_COOKIE,
+        value=token,
+        httponly=False,  # must be JS-readable for the double-submit echo
+        secure=ACCESS_TOKEN_COOKIE_SECURE,
+        samesite="lax",
+        max_age=CSRF_COOKIE_MAX_AGE,
+        path="/",
+    )
+
+def _clear_csrf_cookie(response: Response) -> None:
+    response.delete_cookie(key=CSRF_COOKIE, path="/")
+
 
 def _set_auth_cookie(response: Response, token: str) -> None:
     """Set the httpOnly auth cookie on a FastAPI Response.
@@ -368,6 +402,7 @@ async def register(input: RegisterRequest, response: Response):
     await db.users.insert_one(user_doc)
     token = create_token(user_id, input.email)
     _set_auth_cookie(response, token)  # httpOnly cookie — primary auth channel
+    _set_csrf_cookie(response, _generate_csrf_token())  # csrf double-submit token
     logger.info(f"New user registered: {input.email}")
     # Token still returned in JSON for backwards-compat with old frontends that
     # haven't shipped the cookie-aware code yet. Safe to remove in a future
@@ -389,12 +424,14 @@ async def login(input: LoginRequest, response: Response):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     token = create_token(user["id"], user["email"])
     _set_auth_cookie(response, token)
+    _set_csrf_cookie(response, _generate_csrf_token())  # csrf double-submit token
     return AuthResponse(token=token, user={"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]})
 
 @api_router.post("/auth/logout")
 async def logout(response: Response):
-    """Clear the auth cookie. Idempotent — safe to call without an active session."""
+    """Clear the auth cookie + CSRF cookie. Idempotent — safe to call without an active session."""
     _clear_auth_cookie(response)
+    _clear_csrf_cookie(response)
     return {"status": "logged_out"}
 
 @api_router.get("/auth/me")
@@ -407,7 +444,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter53"
+BUILD_VERSION = "iter54"
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",
@@ -432,6 +469,8 @@ SHIPPED_FEATURES = [
     "httponly-cookie-auth",
     "dashboard-hook-refactor",
     "manual-result-summary-split",
+    "csrf-double-submit-protection",
+    "routes-auth-cookie-sync-fix",
 ]
 
 def _get_build_sha() -> str:
@@ -2122,6 +2161,80 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ===== CSRF Middleware =====
+#
+# Enforces the double-submit token check for cookie-authenticated requests.
+# Runs AFTER CORS (lower in source = earlier in inbound middleware chain — yes,
+# Starlette wraps middleware in reverse order, so add_middleware calls AFTER
+# CORSMiddleware run BEFORE it on inbound requests. That's what we want — CSRF
+# rejections still get CORS headers attached on the way out.)
+#
+# Skip conditions (request passes through without CSRF check):
+#   1. Safe methods (GET, HEAD, OPTIONS) — by definition can't mutate state
+#   2. Path not under /api (frontend assets, websocket upgrades, etc.)
+#   3. Login/register/logout endpoints — they bootstrap the CSRF token, can't have one yet
+#   4. Authorization: Bearer header present — legacy clients use explicit credentials,
+#      which are inherently CSRF-immune (an attacker can't make the browser send a
+#      custom header on a cross-site request without CORS preflight, which fails)
+#   5. No access_token cookie — the request is either unauthenticated (the route
+#      will 401) or path-token-authenticated (public share links, video src tags)
+#
+# When the check applies:
+#   csrf_token cookie value MUST equal X-CSRF-Token header value.
+#   Mismatch → 403.
+
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+CSRF_EXEMPT_PATHS = {
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/logout",
+}
+
+@app.middleware("http")
+async def csrf_protection_middleware(request: Request, call_next):
+    method = request.method.upper()
+    path = request.url.path
+
+    # 1) Safe methods: never CSRF-relevant
+    if method in SAFE_METHODS:
+        return await call_next(request)
+    # 2) Non-API: not our concern
+    if not path.startswith("/api"):
+        return await call_next(request)
+    # 3) Auth bootstrap endpoints
+    if path in CSRF_EXEMPT_PATHS:
+        return await call_next(request)
+
+    # 4) Legacy header-based auth → inherently CSRF-immune
+    authorization = request.headers.get("authorization", "")
+    if authorization.startswith("Bearer "):
+        return await call_next(request)
+
+    # 5) No cookie session → either unauthenticated (route handles it) or
+    #    path-token authenticated (public shares). Either way, no cookie =
+    #    no CSRF surface.
+    if not request.cookies.get(ACCESS_TOKEN_COOKIE):
+        return await call_next(request)
+
+    # Now we have: unsafe method + /api/* + cookie session. CSRF check required.
+    cookie_token = request.cookies.get(CSRF_COOKIE)
+    header_token = request.headers.get(CSRF_HEADER)
+    # Constant-time compare to avoid timing oracle (token comparisons are usually
+    # too fast for timing attacks to matter in practice, but it's free to be safe).
+    import hmac as _hmac
+    if not cookie_token or not header_token or not _hmac.compare_digest(cookie_token, header_token):
+        logger.warning(
+            f"[csrf] BLOCKED {method} {path} — cookie_present={bool(cookie_token)} "
+            f"header_present={bool(header_token)} match={cookie_token == header_token if cookie_token and header_token else False}"
+        )
+        # Return a JSON 403 manually so CORS still wraps it
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "CSRF token missing or invalid. Refresh the page to renew your session."},
+        )
+
+    return await call_next(request)
 
 @app.on_event("startup")
 async def startup():
