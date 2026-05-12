@@ -2,7 +2,19 @@
 
 ## What's Been Implemented
 
-### Build Info Chip + `/api/health/deploy` (iter50 — Feb 2026)
+### Build Staleness Warning (iter50 — Feb 2026)
+
+- **Why**: the iter49 chip tells you *which* build is live, but doesn't flag *when it's getting old*. A quiet amber nudge after 7 days catches the case where preview has accumulated weeks of changes that haven't shipped — exactly the pattern that caused the iter49 `.gitignore` saga to go undetected.
+- **Implementation** (`BuildInfoChip.js`):
+  - Computes `daysOld = floor((Date.now() - built_at) / 86400000)` in a `useMemo` keyed on `info.built_at`.
+  - When `daysOld >= 7`: chip text + warning icon turn amber, tooltip becomes `"Stale build ({N} days old) — consider redeploying"`, modal renders an amber warning block at the top with a "Save to GitHub + redeploy" CTA.
+  - When fresh: chip stays neutral (the previous discreet style).
+  - `data-stale="true|false"` attribute on the chip for easy E2E testing.
+- **Threshold**: 7 days, hardcoded `STALE_THRESHOLD_DAYS`. Easily bumpable if it becomes too noisy.
+- **Verified**: Playwright confirmed both states — fresh `iter50` chip stays neutral, mocked old `built_at` (41 days) flips chip to amber with correct tooltip + modal warning block + "redeploy" nudge in the body copy.
+- **Backend bump**: `BUILD_VERSION` advanced to `iter50`, `SHIPPED_FEATURES` extended to 16 entries with `build-info-chip` + `build-staleness-warning`.
+
+### Build Info Chip + `/api/health/deploy` (iter49b — Feb 2026)
 
 - **Why**: after each redeploy, the user needs a way to confirm production is actually running the latest code without clicking through every feature. Especially valuable after the iter49 `.gitignore` saga, where multiple deploys silently shipped stale code.
 - **Backend** (`server.py`):

@@ -7,10 +7,12 @@
  * each redeploy the user can confirm the latest code is live without
  * clicking through every feature.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { API } from '../App';
-import { X, CheckCircle, GitBranch } from '@phosphor-icons/react';
+import { X, CheckCircle, GitBranch, Warning } from '@phosphor-icons/react';
+
+const STALE_THRESHOLD_DAYS = 7;
 
 const BuildInfoChip = () => {
   const [info, setInfo] = useState(null);
@@ -24,17 +26,34 @@ const BuildInfoChip = () => {
     return () => { cancelled = true; };
   }, []);
 
+  // Compare build time vs now → if older than threshold, surface a stale-build warning.
+  const staleness = useMemo(() => {
+    if (!info?.built_at) return { isStale: false, daysOld: 0 };
+    const builtMs = new Date(info.built_at).getTime();
+    if (Number.isNaN(builtMs)) return { isStale: false, daysOld: 0 };
+    const daysOld = Math.floor((Date.now() - builtMs) / (1000 * 60 * 60 * 24));
+    return { isStale: daysOld >= STALE_THRESHOLD_DAYS, daysOld };
+  }, [info]);
+
   if (!info) return null;
+
+  const chipColor = staleness.isStale
+    ? 'text-[#FBBF24] hover:text-[#fcd34d]'
+    : 'text-[#666] hover:text-[#007AFF]';
 
   return (
     <>
       <button
         type="button"
         data-testid="build-info-chip"
+        data-stale={staleness.isStale ? 'true' : 'false'}
         onClick={() => setOpen(true)}
-        title={`Click for full build details — SHA ${info.sha}`}
-        className="text-[10px] tracking-[0.2em] uppercase text-[#666] hover:text-[#007AFF] transition-colors cursor-pointer">
-        v1.0 · <span className="text-[#A3A3A3] font-bold">{info.build}</span>
+        title={staleness.isStale
+          ? `Stale build (${staleness.daysOld} days old) — consider redeploying`
+          : `Click for full build details — SHA ${info.sha}`}
+        className={`text-[10px] tracking-[0.2em] uppercase transition-colors cursor-pointer inline-flex items-center gap-1.5 ${chipColor}`}>
+        {staleness.isStale && <Warning size={11} weight="fill" className="text-[#FBBF24]" />}
+        v1.0 · <span className={`font-bold ${staleness.isStale ? 'text-[#FBBF24]' : 'text-[#A3A3A3]'}`}>{info.build}</span>
       </button>
 
       {open && (
@@ -68,6 +87,22 @@ const BuildInfoChip = () => {
             </div>
 
             <div className="p-5">
+              {staleness.isStale && (
+                <div
+                  data-testid="build-staleness-warning"
+                  className="mb-4 bg-[#FBBF24]/10 border border-[#FBBF24]/40 p-3 flex items-start gap-2">
+                  <Warning size={16} weight="fill" className="text-[#FBBF24] flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs font-bold text-white">
+                      Stale build · {staleness.daysOld} days old
+                    </p>
+                    <p className="text-[11px] text-[#CFCFCF] mt-0.5 leading-snug">
+                      Preview likely has newer code. Save to GitHub + redeploy to ship the latest features.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <p className="text-xs text-[#A3A3A3] mb-3">
                 Built <span className="text-white">{new Date(info.built_at).toLocaleString()}</span>
                 {' · '}
