@@ -33,7 +33,7 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
 import secrets
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode
 
 from db import db
@@ -140,6 +140,129 @@ def _email_html(
 </body></html>"""
 
 
+# ===== Engagement milestones (auto follow-up) =====
+
+# Trigger threshold: 3+ clicks within the last 48 hours. Tuned to mean
+# "recipient is repeatedly checking back" — a stronger interest signal than
+# a single click, which could just be a curious open.
+_HOT_LEAD_CLICK_THRESHOLD = 3
+_HOT_LEAD_WINDOW_HOURS = 48
+
+
+def _hot_lead_email_html(
+    coach_name: str,
+    recipient_label: str,
+    team_name: str,
+    filter_summary: str,
+    click_count: int,
+    inbox_url: str,
+) -> str:
+    """Inline-HTML notification — drops in any email client without external assets."""
+    return f"""\
+<!doctype html>
+<html><body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:24px 0;background:#f4f4f4;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;">
+        <tr><td style="padding:32px 32px 16px 32px;background:#0F1A2E;color:#fff;">
+          <div style="font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#10B981;margin-bottom:6px;">Hot Lead</div>
+          <div style="font-size:22px;font-weight:700;">{recipient_label} keeps coming back</div>
+          <div style="font-size:14px;color:#A3A3A3;margin-top:6px;">{team_name} · {filter_summary}</div>
+        </td></tr>
+        <tr><td style="padding:28px 32px;">
+          <p style="margin:0 0 12px 0;color:#222;font-size:15px;">Hi {coach_name},</p>
+          <p style="margin:0 0 18px 0;color:#444;line-height:1.55;">
+            <strong>{recipient_label}</strong> has opened your shared roster
+            <strong>{click_count} times</strong> in the last {_HOT_LEAD_WINDOW_HOURS} hours.
+            That's a strong interest signal — now's a great time to reach out.
+          </p>
+          <div style="margin:24px 0;">
+            <a href="{inbox_url}" style="background:#10B981;color:#fff;text-decoration:none;padding:14px 28px;border-radius:4px;font-weight:600;font-size:14px;letter-spacing:1px;text-transform:uppercase;display:inline-block;">View Outreach →</a>
+          </div>
+          <p style="margin:24px 0 0 0;color:#888;font-size:12px;line-height:1.5;">
+            You're getting this because a recipient triggered Soccer Scout's
+            repeated-open notification. We only send this once per outreach.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+
+
+async def _maybe_trigger_hot_lead(link: dict) -> None:
+    """If this lens link just crossed the engagement threshold AND we haven't
+    already pinged the coach about it, send the Hot Lead email and mark the
+    link so we never double-notify.
+
+    Idempotent — safe to call after every click. Failures are swallowed (we
+    never want a notification side-effect to break the redirect path).
+    """
+    if link.get("repeated_open_notified_at"):
+        return  # already notified — leave it alone
+
+    try:
+        window_start = (
+            datetime.now(timezone.utc) - timedelta(hours=_HOT_LEAD_WINDOW_HOURS)
+        ).isoformat()
+        recent = await db.lens_link_clicks.count_documents({
+            "lens_link_id": link["id"],
+            "clicked_at": {"$gte": window_start},
+        })
+        if recent < _HOT_LEAD_CLICK_THRESHOLD:
+            return
+
+        # Atomic set-if-null guard so two near-simultaneous clicks can't both
+        # fire the email. Only the first wins; the second sees the timestamp.
+        now_iso = _now_iso()
+        guard = await db.lens_links.update_one(
+            {"id": link["id"], "repeated_open_notified_at": None},
+            {"$set": {"repeated_open_notified_at": now_iso}},
+        )
+        if guard.modified_count == 0:
+            return  # lost the race
+
+        coach = await db.users.find_one(
+            {"id": link["user_id"]}, {"_id": 0, "name": 1, "email": 1}
+        )
+        if not coach or not coach.get("email"):
+            return
+
+        team = await db.teams.find_one(
+            {"id": link["team_id"]}, {"_id": 0, "name": 1}
+        )
+        team_name = (team or {}).get("name", "your team")
+        filters = LensFilters(**(link.get("filters") or {}))
+        filter_summary = _human_filter_summary(filters)
+        recipient_label = link.get("recipient_name") or link.get("recipient_email", "Recipient")
+        base = _public_base()
+        inbox_url = f"{base}/team/{link['team_id']}" if base else f"/team/{link['team_id']}"
+        subject = f"🔥 Hot lead — {recipient_label} keeps opening your roster"
+        html = _hot_lead_email_html(
+            coach_name=coach.get("name", "Coach"),
+            recipient_label=recipient_label,
+            team_name=team_name,
+            filter_summary=filter_summary,
+            click_count=recent,
+            inbox_url=inbox_url,
+        )
+        await send_or_queue(
+            to_email=coach["email"],
+            subject=subject,
+            html=html,
+            kind="hot_lead_notification",
+            metadata={
+                "lens_link_id": link["id"],
+                "click_count": recent,
+                "recipient_email": link.get("recipient_email"),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        # Never fail the click — recipient still gets redirected.
+        import logging as _log
+        _log.getLogger(__name__).exception("hot-lead notification failed")
+
+
 # ===== Endpoints =====
 
 @router.post("/lens-links")
@@ -179,6 +302,9 @@ async def create_lens_link(
         "tracking_token": tracking_token,
         "click_count": 0,
         "last_clicked_at": None,
+        # iter59d: set to ISO timestamp once the Hot Lead email has fired.
+        # Stays None forever if the recipient never opens 3x in 48h.
+        "repeated_open_notified_at": None,
         "created_at": _now_iso(),
     }
     await db.lens_links.insert_one(dict(lens_link))
@@ -260,6 +386,10 @@ async def lens_track(tracking_token: str, request: Request):
             "$set": {"last_clicked_at": click_doc["clicked_at"]},
         },
     )
+
+    # iter59d: fire a Hot Lead email if this click pushed the recipient over
+    # the engagement threshold. Idempotent + failure-tolerant — see helper.
+    await _maybe_trigger_hot_lead(link)
 
     # Build redirect URL — same logic as `_build_target_url` but without env
     # base, since the recipient already followed an absolute URL to get here.

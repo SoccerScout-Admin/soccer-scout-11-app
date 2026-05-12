@@ -2,6 +2,32 @@
 
 ## What's Been Implemented
 
+### Hot Lead Auto-Followup — Engagement Milestones (iter59d — Feb 2026)
+
+User asked: when a recipient opens a tracked lens link 3+ times in 48 hours, fire an in-app/email notification to the coach so passive interest signals turn into active conversation starters.
+
+**Backend** (`routes/recruiter_lens.py` — `_maybe_trigger_hot_lead` helper):
+- Called from `lens_track` after every click row is inserted.
+- Engagement threshold: **3+ clicks within last 48 hours** (`_HOT_LEAD_CLICK_THRESHOLD`, `_HOT_LEAD_WINDOW_HOURS`).
+- Atomic guard via `update_one({"repeated_open_notified_at": None}, ...)` — two near-simultaneous clicks can't both fire the email. Only the first wins; the second is a no-op.
+- Sends a "🔥 Hot Lead" email via `send_or_queue` with a polished inline-HTML template (Resend, falls back to MongoDB queue on quota errors).
+- Failure-tolerant: any exception is logged but never breaks the click redirect — recipient always lands on the filtered page.
+- New field on every `lens_link`: `repeated_open_notified_at` (ISO timestamp, `null` until triggered).
+
+**Email design**: Dark hero with "Hot Lead" / "{recipient} keeps coming back" / "{team} · {filter_summary}", body explains the click count + time window, single green CTA button to the team roster page, footer note confirming "we only send this once per outreach."
+
+**Frontend** (`SentLensLinksPanel.js`):
+- Hot-lead rows get a `bg-[#10B981]/5` highlight (subtle green tint) — instantly scannable.
+- "🔥 Hot Lead" pill (`data-testid="hot-lead-badge-{id}"`) renders next to the recipient name when `repeated_open_notified_at` is set.
+
+**Tests** (`test_recruiter_outreach.py` — 4 new pytest cases):
+- Single click does NOT trigger notification (`repeated_open_notified_at` stays `null`).
+- 3 clicks within 48h DOES trigger and sets the timestamp.
+- Already-notified link does NOT re-fire on subsequent clicks (timestamp is pinned to the first trigger; clicks 4–6 don't change it).
+- Old clicks outside the 48h window don't count — only 2 fresh clicks + 1 backdated to 3 days ago = no notification despite `click_count=3`.
+
+**Test totals (iter59 family)**: 46 passing — 16 outreach (incl. 4 hot-lead) + 3 recruiter lens + 24 roster import + 3 public dossier demographics. Verified together in a single pytest run with full coverage on the engagement-milestone logic.
+
 ### Recruiter Outreach — Tracked Email Send + Open Analytics (iter59c — Feb 2026)
 
 User asked: build the "Send to a specific coach" flow that pairs the iter59b filtered lens URL with an automated email + tracks who clicked. Turn a passive share into a measurable recruiting funnel.

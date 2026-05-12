@@ -323,3 +323,150 @@ def test_team_id_not_found_returns_404(coach):
         headers={**coach["headers"], "Content-Type": "application/json"},
     )
     assert r.status_code == 404
+
+
+# ---------- iter59d: Hot Lead engagement-milestone notifications ----------
+
+def test_single_click_does_not_trigger_hot_lead(team, coach):
+    create = requests.post(
+        f"{BASE_URL}/api/lens-links",
+        json={
+            "team_id": team["id"],
+            "filters": {},
+            "recipient_email": "lukewarm@example.com",
+        },
+        headers={**coach["headers"], "Content-Type": "application/json"},
+    )
+    tracking = create.json()["lens_link"]["tracking_token"]
+    requests.get(f"{BASE_URL}/api/lens-track/{tracking}", allow_redirects=False)
+
+    listed = requests.get(
+        f"{BASE_URL}/api/lens-links",
+        params={"team_id": team["id"]},
+        headers=coach["headers"],
+    )
+    row = next(r for r in listed.json() if r["tracking_token"] == tracking)
+    assert row["click_count"] == 1
+    assert row["repeated_open_notified_at"] is None, (
+        "Should not notify on a single click"
+    )
+
+
+def test_three_clicks_in_window_triggers_hot_lead(team, coach):
+    """3 clicks total within 48h should set repeated_open_notified_at."""
+    create = requests.post(
+        f"{BASE_URL}/api/lens-links",
+        json={
+            "team_id": team["id"],
+            "filters": {"class_of": "2027"},
+            "recipient_email": "hot@example.com",
+            "recipient_name": "Eager Coach",
+        },
+        headers={**coach["headers"], "Content-Type": "application/json"},
+    )
+    body = create.json()
+    tracking = body["lens_link"]["tracking_token"]
+    link_id = body["lens_link"]["id"]
+
+    for _ in range(3):
+        requests.get(f"{BASE_URL}/api/lens-track/{tracking}", allow_redirects=False)
+
+    listed = requests.get(
+        f"{BASE_URL}/api/lens-links",
+        params={"team_id": team["id"]},
+        headers=coach["headers"],
+    )
+    row = next(r for r in listed.json() if r["id"] == link_id)
+    assert row["click_count"] == 3
+    assert row["repeated_open_notified_at"] is not None, (
+        "Should notify after 3 clicks in 48h"
+    )
+
+
+def test_hot_lead_does_not_re_fire_on_subsequent_clicks(team, coach):
+    """Once notified, subsequent clicks must NOT re-fire the email — the
+    repeated_open_notified_at timestamp stays pinned to the first trigger."""
+    create = requests.post(
+        f"{BASE_URL}/api/lens-links",
+        json={
+            "team_id": team["id"],
+            "filters": {},
+            "recipient_email": "repeated@example.com",
+        },
+        headers={**coach["headers"], "Content-Type": "application/json"},
+    )
+    tracking = create.json()["lens_link"]["tracking_token"]
+    link_id = create.json()["lens_link"]["id"]
+
+    # Cross the threshold
+    for _ in range(3):
+        requests.get(f"{BASE_URL}/api/lens-track/{tracking}", allow_redirects=False)
+    first = requests.get(
+        f"{BASE_URL}/api/lens-links",
+        params={"team_id": team["id"]},
+        headers=coach["headers"],
+    ).json()
+    initial_ts = next(r for r in first if r["id"] == link_id)["repeated_open_notified_at"]
+    assert initial_ts is not None
+
+    # Three more clicks — timestamp must not change
+    for _ in range(3):
+        requests.get(f"{BASE_URL}/api/lens-track/{tracking}", allow_redirects=False)
+    second = requests.get(
+        f"{BASE_URL}/api/lens-links",
+        params={"team_id": team["id"]},
+        headers=coach["headers"],
+    ).json()
+    later_row = next(r for r in second if r["id"] == link_id)
+    assert later_row["click_count"] == 6
+    assert later_row["repeated_open_notified_at"] == initial_ts
+
+
+def test_old_clicks_outside_window_dont_count(team, coach):
+    """If only 2 clicks fall inside the 48h window (others are stale), don't
+    fire the notification — we backfill the click rows with old timestamps
+    to simulate."""
+    from datetime import datetime, timezone, timedelta
+
+    create = requests.post(
+        f"{BASE_URL}/api/lens-links",
+        json={
+            "team_id": team["id"],
+            "filters": {},
+            "recipient_email": "stale@example.com",
+        },
+        headers={**coach["headers"], "Content-Type": "application/json"},
+    )
+    tracking = create.json()["lens_link"]["tracking_token"]
+    link_id = create.json()["lens_link"]["id"]
+
+    # First click — backdate it to 3 days ago so it's outside the window
+    requests.get(f"{BASE_URL}/api/lens-track/{tracking}", allow_redirects=False)
+    stale_ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+
+    async def backdate():
+        from db import db
+        # Backdate the first click row
+        first_click = await db.lens_link_clicks.find_one(
+            {"lens_link_id": link_id}, {"_id": 0},
+        )
+        await db.lens_link_clicks.update_one(
+            {"id": first_click["id"]},
+            {"$set": {"clicked_at": stale_ts}},
+        )
+    _run_async(backdate())
+
+    # Now 2 fresh clicks — total click_count=3 but only 2 in window
+    requests.get(f"{BASE_URL}/api/lens-track/{tracking}", allow_redirects=False)
+    requests.get(f"{BASE_URL}/api/lens-track/{tracking}", allow_redirects=False)
+
+    listed = requests.get(
+        f"{BASE_URL}/api/lens-links",
+        params={"team_id": team["id"]},
+        headers=coach["headers"],
+    ).json()
+    row = next(r for r in listed if r["id"] == link_id)
+    assert row["click_count"] == 3
+    assert row["repeated_open_notified_at"] is None, (
+        "Should not notify when only 2 of 3 clicks are inside the 48h window"
+    )

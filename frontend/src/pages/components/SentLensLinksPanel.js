@@ -12,7 +12,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { API, getAuthHeader } from '../../App';
-import { Funnel, CursorClick, Clock, EnvelopeSimple } from '@phosphor-icons/react';
+import { Funnel, CursorClick, Clock, EnvelopeSimple, Fire } from '@phosphor-icons/react';
 
 const formatRelative = (iso) => {
   if (!iso) return 'Never';
@@ -75,13 +75,26 @@ const SentLensLinksPanel = ({ teamId, refreshKey = 0 }) => {
             </tr>
           </thead>
           <tbody>
-            {links.map((link) => (
+            {links.map((link) => {
+              const isHotLead = !!link.repeated_open_notified_at;
+              return (
               <tr key={link.id} data-testid={`lens-link-${link.id}`}
-                className="border-t border-white/5 bg-[#141414] hover:bg-[#1A1A1A] transition-colors">
+                className={`border-t border-white/5 transition-colors ${
+                  isHotLead
+                    ? 'bg-[#10B981]/5 hover:bg-[#10B981]/10'
+                    : 'bg-[#141414] hover:bg-[#1A1A1A]'
+                }`}>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2 text-white truncate">
                     <EnvelopeSimple size={14} className="text-[#666] flex-shrink-0" />
                     <span className="truncate">{link.recipient_name || link.recipient_email}</span>
+                    {isHotLead && (
+                      <span data-testid={`hot-lead-badge-${link.id}`}
+                        title="Recipient has opened this link 3+ times in 48 hours"
+                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[9px] font-bold tracking-wider uppercase bg-[#10B981] text-white">
+                        <Fire size={9} weight="fill" /> Hot Lead
+                      </span>
+                    )}
                   </div>
                   {link.recipient_name && (
                     <div className="text-[10px] text-[#666] truncate ml-6">{link.recipient_email}</div>
@@ -112,7 +125,8 @@ const SentLensLinksPanel = ({ teamId, refreshKey = 0 }) => {
                   {formatRelative(link.created_at)}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
