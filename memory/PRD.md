@@ -2,6 +2,45 @@
 
 ## What's Been Implemented
 
+### Recruiter Outreach — Tracked Email Send + Open Analytics (iter59c — Feb 2026)
+
+User asked: build the "Send to a specific coach" flow that pairs the iter59b filtered lens URL with an automated email + tracks who clicked. Turn a passive share into a measurable recruiting funnel.
+
+**Backend** (`routes/recruiter_lens.py`, NEW module — 4 endpoints):
+- `POST /api/lens-links` (auth): coach creates a tracked outreach. Body = `{team_id, filters: {birth_year?, class_of?, position?}, recipient_email, recipient_name?, message?}`.
+  - Auto-enables team `share_token` if the team isn't yet publicly shared (so the recipient lands somewhere real — no dead links).
+  - Generates a 14-char tracking token, stores in new `lens_links` collection.
+  - Sends a polished inline-HTML email via `services.email_queue.send_or_queue` (reuses the existing Resend integration with quota-fallback to MongoDB queue).
+  - Returns `{lens_link, tracked_url, target_url, email_status}` so the UI shows what happened.
+- `GET /api/lens-links?team_id=X` (auth): list the coach's outreach with click counts + last-opened timestamps.
+- `GET /api/lens-track/{token}` (PUBLIC, no auth): inserts a click row into `lens_link_clicks`, bumps `click_count` + `last_clicked_at` on the parent, 302-redirects to `/shared-team/{share_token}?{filters}`. Bogus tokens silently redirect to `/` so we don't leak existence info.
+- `GET /api/lens-links/{id}/clicks` (auth): drill-down with individual click rows (ip, user-agent, timestamp). Returns 404 if another coach owns the link.
+
+**Data model**:
+- `lens_links`: `{id, user_id, team_id, team_share_token, filters, recipient_email, recipient_name, message, tracking_token, click_count, last_clicked_at, created_at}`
+- `lens_link_clicks`: `{id, lens_link_id, ip_address, user_agent, clicked_at}`
+
+**Frontend**:
+- `RecruiterOutreachModal.js` (NEW): polished modal with filter-preview chips, three inputs (email required, name + message optional), success state showing the tracked URL + email delivery status (delivered/queued).
+- `SentLensLinksPanel.js` (NEW): table above the filter strip showing recipient, filter summary, **click count** (green when >0), last-opened relative time, and sent-at. Auto-hides when the coach hasn't sent any outreach for this team yet — no clutter for non-adopters.
+- `TeamRoster.js`: green "Email Recruiter" button next to the existing "Share this view" button (works even when team isn't shared yet — backend auto-enables). On success, refreshes both team data (to surface the new share_token) and the panel (to show the new row).
+
+**Email template**: Inline-styled HTML email with no external assets (renders in any client). Subject line includes coach name, team, and filter summary (e.g. "Coach Jane sent you a roster: Lakeshore FC (Class of 2027 · Forwards)"). Personal-message block conditionally rendered. Single CTA button to the tracked URL.
+
+**Tests** (`test_recruiter_outreach.py`, NEW — 12 tests):
+- Auth required on create + list + clicks endpoints
+- Tenant isolation (can't email-blast another coach's team; can't read their clicks)
+- Tracked URL contains the tracking token; target URL preserves filters
+- Auto-share-enablement on a fresh team
+- 302 redirect with correct query params + click row inserted + counter bumped
+- Multiple clicks accumulate
+- Bogus token redirects safely (no info leak)
+- Cross-user click drill-down blocked
+- Team filter scopes list query
+- Invalid email → 422; missing team → 404
+
+**Total passing tests across the iter59 work**: 42 (12 outreach + 3 recruiter lens + 24 roster import + 3 public dossier demographics).
+
 ### Recruiter Lens — Shareable Filtered Team URLs (iter59b — Feb 2026)
 
 User asked: build the "Recruiter Lens" — auto-applied scout filters with shareable filtered URLs (e.g. "Class of 2027 forwards"), so college recruiters can land directly on the players that match their needs.

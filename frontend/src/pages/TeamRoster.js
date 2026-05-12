@@ -7,6 +7,8 @@ import RosterImportModal from './components/RosterImportModal';
 import PlayerFormModal, { ageFromBirthYear } from '../components/PlayerFormModal';
 import { useScrollIntoViewOnOpen } from '../hooks/useScrollIntoViewOnOpen';
 import { classOfLabel } from '../utils/playerDemographics';
+import RecruiterOutreachModal from './components/RecruiterOutreachModal';
+import SentLensLinksPanel from './components/SentLensLinksPanel';
 
 const TeamRoster = () => {
   const { teamId } = useParams();
@@ -31,6 +33,9 @@ const TeamRoster = () => {
   const [filterGrade, setFilterGrade] = useState('');
   // iter59: Recruiter Lens — copy feedback for "Share this view" button
   const [lensCopied, setLensCopied] = useState(false);
+  // iter59b: Recruiter Outreach — tracked email modal + panel refresh bump
+  const [outreachOpen, setOutreachOpen] = useState(false);
+  const [lensListRefreshKey, setLensListRefreshKey] = useState(0);
 
   // iter57: auto-scroll the inline Add Player form into view when the user
   // clicks the "Add Player" button — fixes the "where did it go?" UX bug
@@ -235,6 +240,18 @@ const TeamRoster = () => {
     return `${window.location.origin}/shared-team/${team.share_token}?${params.toString()}`;
   }, [team?.share_token, filterBirthYear, filterGrade]);
 
+  // iter59b: filter payload for the outreach modal. Backend expects an object
+  // shaped the same way as the URL params, just before URL-encoding.
+  const outreachFilters = useMemo(() => {
+    const out = {};
+    if (filterBirthYear) out.birth_year = filterBirthYear;
+    if (filterGrade) {
+      const co = classOfLabel(filterGrade);
+      if (co) out.class_of = co.replace('Class of ', '');
+    }
+    return out;
+  }, [filterBirthYear, filterGrade]);
+
   const handleCopyLens = async () => {
     if (!recruiterLensUrl) return;
     try { await navigator.clipboard.writeText(recruiterLensUrl); }
@@ -353,6 +370,10 @@ const TeamRoster = () => {
           />
         )}
 
+        {/* iter59b: Recruiter Outreach panel — only renders when the coach has
+            actually sent at least one tracked email for this team. */}
+        <SentLensLinksPanel teamId={teamId} refreshKey={lensListRefreshKey} />
+
         {/* iter59: roster filters — show only when there's at least one filterable
             attribute on the roster, so an empty roster doesn't render empty UI. */}
         {players.length > 0 && (filterOptions.birthYears.length > 0 || filterOptions.grades.length > 0) && (
@@ -384,18 +405,25 @@ const TeamRoster = () => {
               Showing <span className="text-white font-bold">{filteredPlayers.length}</span> of {players.length}
             </span>
             {(filterBirthYear || filterGrade) && team?.share_token && (
-              <button data-testid="share-recruiter-lens-btn" onClick={handleCopyLens}
-                title="Copy a recruiter-ready link that shows only these filtered players"
-                className="inline-flex items-center gap-1.5 text-[10px] font-bold tracking-wider uppercase text-[#10B981] hover:text-white border border-[#10B981]/40 hover:border-white/40 px-2.5 py-1 transition-colors">
-                {lensCopied ? <><Check size={11} weight="bold" /> Copied</> : <><Funnel size={11} weight="fill" /> Share this view</>}
-              </button>
+              <>
+                <button data-testid="share-recruiter-lens-btn" onClick={handleCopyLens}
+                  title="Copy a recruiter-ready link that shows only these filtered players"
+                  className="inline-flex items-center gap-1.5 text-[10px] font-bold tracking-wider uppercase text-[#10B981] hover:text-white border border-[#10B981]/40 hover:border-white/40 px-2.5 py-1 transition-colors">
+                  {lensCopied ? <><Check size={11} weight="bold" /> Copied</> : <><Funnel size={11} weight="fill" /> Share this view</>}
+                </button>
+                <button data-testid="email-recruiter-btn" onClick={() => setOutreachOpen(true)}
+                  title="Email this filtered view to a recruiter and track when they open it"
+                  className="inline-flex items-center gap-1.5 text-[10px] font-bold tracking-wider uppercase bg-[#10B981] hover:bg-[#0EA975] text-white px-2.5 py-1 transition-colors">
+                  Email Recruiter
+                </button>
+              </>
             )}
             {(filterBirthYear || filterGrade) && !team?.share_token && (
-              <span data-testid="lens-needs-share-hint"
-                title="Enable Public Team Page (top-right Share button) to share a filtered view"
-                className="text-[10px] tracking-wider uppercase text-[#666] px-2 py-1 italic">
-                Enable Share to send filtered link
-              </span>
+              <button data-testid="email-recruiter-btn-fresh" onClick={() => setOutreachOpen(true)}
+                title="We'll auto-enable team sharing and email the filtered view to a recruiter"
+                className="inline-flex items-center gap-1.5 text-[10px] font-bold tracking-wider uppercase bg-[#10B981] hover:bg-[#0EA975] text-white px-2.5 py-1 transition-colors">
+                Email Recruiter
+              </button>
             )}
             {(filterBirthYear || filterGrade) && (
               <button data-testid="clear-filters-btn" onClick={clearFilters}
@@ -656,6 +684,21 @@ const TeamRoster = () => {
           }}
         />
       )}
+
+      {/* iter59b: Recruiter Outreach — tracked email send */}
+      <RecruiterOutreachModal
+        open={outreachOpen}
+        teamId={teamId}
+        teamName={team?.name || 'Team'}
+        filters={outreachFilters}
+        onClose={() => setOutreachOpen(false)}
+        onSent={() => {
+          // Backend may have auto-enabled team share — re-fetch so the
+          // green "Share this view" button appears for next time.
+          fetchTeam();
+          setLensListRefreshKey((k) => k + 1);
+        }}
+      />
     </div>
   );
 };
