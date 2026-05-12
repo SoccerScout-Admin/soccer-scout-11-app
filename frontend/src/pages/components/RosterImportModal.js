@@ -108,13 +108,16 @@ const RosterImportModal = ({ teamId, teamName, onClose, onImported }) => {
               <div className="bg-[#0A0A0A] border border-white/10 p-5">
                 <p className="text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">CSV Format</p>
                 <p className="text-sm text-[#CFCFCF] mb-3">
-                  Your file should have a header row with at least a <span className="text-white font-mono bg-[#1F1F1F] px-1.5 py-0.5">name</span> column.
-                  Optional: <span className="text-white font-mono bg-[#1F1F1F] px-1.5 py-0.5">number</span> and <span className="text-white font-mono bg-[#1F1F1F] px-1.5 py-0.5">position</span>.
+                  Header row required. Only <span className="text-white font-mono bg-[#1F1F1F] px-1.5 py-0.5">name</span> is mandatory.
+                  Optional: <span className="text-white font-mono bg-[#1F1F1F] px-1.5 py-0.5">number</span>,{' '}
+                  <span className="text-white font-mono bg-[#1F1F1F] px-1.5 py-0.5">position</span>,{' '}
+                  <span className="text-white font-mono bg-[#1F1F1F] px-1.5 py-0.5">birth_year</span>,{' '}
+                  <span className="text-white font-mono bg-[#1F1F1F] px-1.5 py-0.5">current_grade</span>.
                 </p>
-                <pre className="bg-[#1F1F1F] text-xs text-[#A3A3A3] p-3 overflow-x-auto font-mono leading-relaxed">{`name,number,position
-Jane Doe,9,ST
-Maria Lopez,4,CB
-Sam Lee,10,CM`}</pre>
+                <pre className="bg-[#1F1F1F] text-xs text-[#A3A3A3] p-3 overflow-x-auto font-mono leading-relaxed">{`name,number,position,birth_year,current_grade
+Jane Doe,9,ST,2008,11th (Junior)
+Maria Lopez,4,CB,2007,12th (Senior)
+Sam Lee,10,CM,2009,10th (Sophomore)`}</pre>
                 <a href={`${API}/players/import-template.csv`} download
                   data-testid="download-template-btn"
                   className="inline-flex items-center gap-1.5 mt-3 text-xs text-[#10B981] hover:text-[#0EA975] font-bold uppercase tracking-wider">

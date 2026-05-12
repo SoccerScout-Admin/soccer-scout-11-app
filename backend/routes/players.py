@@ -235,6 +235,9 @@ _HEADER_ALIASES = {
     "name": {"name", "player", "player name", "full name", "fullname", "athlete"},
     "number": {"number", "no", "no.", "#", "jersey", "jersey number", "shirt", "shirt no"},
     "position": {"position", "pos", "pos.", "primary position"},
+    # iter58: roster demographics for HS/club/college rosters
+    "birth_year": {"birth year", "birthyear", "year of birth", "yob", "born", "birth"},
+    "current_grade": {"grade", "current grade", "class", "year", "school year", "level"},
 }
 
 
@@ -244,7 +247,7 @@ def _normalize_header(h: str) -> str:
 
 def _resolve_columns(fieldnames: list[str]) -> dict[str, Optional[str]]:
     """Map our canonical fields → the actual CSV header that was used."""
-    resolved: dict[str, Optional[str]] = {"name": None, "number": None, "position": None}
+    resolved: dict[str, Optional[str]] = {k: None for k in _HEADER_ALIASES}
     for canonical, aliases in _HEADER_ALIASES.items():
         for actual in fieldnames or []:
             if _normalize_header(actual) in aliases:
@@ -259,13 +262,17 @@ async def download_roster_template():
 
     Coaches can download this, fill it in Excel/Google Sheets, save as CSV,
     and upload back. Public — no auth needed because it's a static template.
+
+    iter58: birth_year and current_grade columns added. Both are optional —
+    leaving them blank still imports the row. Existing 3-column rosters that
+    omit them keep working unchanged.
     """
     from fastapi.responses import Response
     body = (
-        "name,number,position\n"
-        "Jane Doe,9,ST\n"
-        "Maria Lopez,4,CB\n"
-        "Sam Lee,10,CM\n"
+        "name,number,position,birth_year,current_grade\n"
+        "Jane Doe,9,ST,2008,11th (Junior)\n"
+        "Maria Lopez,4,CB,2007,12th (Senior)\n"
+        "Sam Lee,10,CM,2009,10th (Sophomore)\n"
     )
     return Response(
         content=body,
@@ -356,11 +363,46 @@ async def import_team_roster(
         if columns["position"]:
             position = (row.get(columns["position"]) or "").strip() or None
 
+        # iter58 — birth_year is optional. Be lenient: accept '2008', '08',
+        # '2008-05-12' (extract year), or empty.
+        birth_year: Optional[int] = None
+        if columns["birth_year"]:
+            raw_by = (row.get(columns["birth_year"]) or "").strip()
+            if raw_by:
+                # If the user wrote a full date, grab the first 4-digit run
+                import re as _re
+                m = _re.search(r"\d{4}", raw_by)
+                if m:
+                    try:
+                        candidate = int(m.group())
+                        # Sanity: only accept plausible roster ages (5–30 years old)
+                        current_year = datetime.now(timezone.utc).year
+                        if current_year - 30 <= candidate <= current_year - 5:
+                            birth_year = candidate
+                        else:
+                            errors.append({
+                                "row": idx,
+                                "reason": f"Birth year '{raw_by}' out of range for {raw_name} — imported with no birth year.",
+                            })
+                    except ValueError:
+                        pass
+                elif raw_by:
+                    errors.append({
+                        "row": idx,
+                        "reason": f"Could not parse birth year '{raw_by}' for {raw_name} — imported with no birth year.",
+                    })
+
+        current_grade: Optional[str] = None
+        if columns["current_grade"]:
+            current_grade = (row.get(columns["current_grade"]) or "").strip() or None
+
         parsed.append({
             "row": idx,
             "name": raw_name,
             "number": num_value,
             "position": position,
+            "birth_year": birth_year,
+            "current_grade": current_grade,
         })
 
     if dry_run:
@@ -397,6 +439,8 @@ async def import_team_roster(
             number=item["number"],
             position=item["position"],
             team=team["name"],
+            birth_year=item.get("birth_year"),
+            current_grade=item.get("current_grade"),
         )
         docs.append(player.model_dump())
     if docs:

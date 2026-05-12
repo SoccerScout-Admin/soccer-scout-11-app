@@ -2,6 +2,36 @@
 
 ## What's Been Implemented
 
+### CSV Roster Import — Birth Year + Grade Support (iter58 — Feb 2026)
+
+User asked: "extend the CSV importer to accept birth_year + current_grade, plus add a downloadable CSV roster template."
+
+**Template download** (`GET /api/players/import-template.csv`): now ships all 5 columns with realistic example rows:
+```
+name,number,position,birth_year,current_grade
+Jane Doe,9,ST,2008,11th (Junior)
+Maria Lopez,4,CB,2007,12th (Senior)
+Sam Lee,10,CM,2009,10th (Sophomore)
+```
+
+**Import parser** (`routes/players.py`):
+- Added `birth_year` + `current_grade` to `_HEADER_ALIASES`. The importer now matches:
+  - `birth_year` ← "birth year", "birthyear", "year of birth", "yob", "born", "birth"
+  - `current_grade` ← "grade", "current grade", "class", "year", "school year", "level"
+- Birth year parser is lenient — accepts plain year (`2008`), full date (`2007-03-15` → extracts year), and empty. Out-of-range values (under 5 or over 30 years old) are caught with a friendly error AND the player is still imported with grade preserved.
+- Existing 3-column rosters (name/number/position only) continue to import unchanged — fully backwards compatible.
+
+**Frontend** (`RosterImportModal.js`):
+- CSV format help block now lists all 5 supported columns.
+- Updated inline example to show demographics.
+- Download template button unchanged — it already pointed at the same endpoint, which now returns the richer template.
+
+**Verified end-to-end** with a 5-row CSV containing mixed shorthand headers (`Player Name, #, Pos, Year of Birth, Grade`), a date-formatted birth year, an empty birth year, and an out-of-range birth year:
+- All 5 players imported
+- Date `2007-03-15` correctly resolved to 2007
+- Empty birth_year and out-of-range 1985 both handled gracefully with friendly error message + grade preserved
+- Mongo verification confirms canonical schema population
+
 ### Player Roster: Edit + Demographics + Auto-Scroll (iter57 — Feb 2026)
 
 User asked for three features plus the pre-commit hook from iter56's improvement suggestion.
