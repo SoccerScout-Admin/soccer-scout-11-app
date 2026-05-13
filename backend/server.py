@@ -452,7 +452,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter58"
+BUILD_VERSION = "iter62"
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",
@@ -489,6 +489,27 @@ SHIPPED_FEATURES = [
     "auto-scroll-on-form-open",
     "radon-precommit-hook",
     "csv-roster-import-demographics",
+    # iter59 — Recruiter Lens family
+    "shareable-filtered-team-urls",
+    "recruiter-outreach-tracked-emails",
+    "hot-lead-auto-followup",
+    "recruiter-lens-og-cards",
+    # iter60 — production deploy polish
+    "disk-pressure-threshold-95pct",
+    "dashboard-empty-state-welcome",
+    "dashboard-promo-cards-hidden-when-empty",
+    # iter61 — roster-first match creation
+    "create-match-roster-step",
+    "import-existing-team-roster",
+    "match-roster-csv-paste",
+    "awaiting-roster-gate-and-banner",
+    "match-roster-status-endpoint",
+    "run-anyway-override",
+    # iter62 — ffmpeg failure clarity
+    "ffmpeg-error-classification",
+    "ffmpeg-oom-detection",
+    "ffmpeg-timeout-detection",
+    "stderr-tail-not-head",
 ]
 
 def _get_build_sha() -> str:
