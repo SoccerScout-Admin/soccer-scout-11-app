@@ -33,7 +33,7 @@
 TOKEN="<your-token>"
 MATCH_ID="<your-match-id>"
 
-curl "https://video-scout-11.preview.emergentagent.com/api/debug/match/$MATCH_ID" \
+curl "https://scout-lens.preview.emergentagent.com/api/debug/match/$MATCH_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -128,18 +128,18 @@ Test endpoints manually:
 
 ```bash
 # 1. Login
-TOKEN=$(curl -s -X POST "https://video-scout-11.preview.emergentagent.com/api/auth/login" \
+TOKEN=$(curl -s -X POST "https://scout-lens.preview.emergentagent.com/api/auth/login" \
   -H "Content-Type: application/json" \
   -d '{"email":"your@email.com","password":"yourpassword"}' | \
   python3 -c "import sys, json; print(json.load(sys.stdin).get('token', ''))")
 
 # 2. Get matches
-curl -s "https://video-scout-11.preview.emergentagent.com/api/matches" \
+curl -s "https://scout-lens.preview.emergentagent.com/api/matches" \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
 # 3. Copy a match ID from above, then test init
 MATCH_ID="<paste-match-id-here>"
-curl -s -X POST "https://video-scout-11.preview.emergentagent.com/api/videos/upload/init" \
+curl -s -X POST "https://scout-lens.preview.emergentagent.com/api/videos/upload/init" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"match_id\":\"$MATCH_ID\",\"filename\":\"test.mp4\",\"file_size\":1000000000,\"content_type\":\"video/mp4\"}" | \

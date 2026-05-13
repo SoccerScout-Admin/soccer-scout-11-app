@@ -9,7 +9,7 @@ _BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://video-scout-11.preview.emergentagent.com').rstrip('/')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://scout-lens.preview.emergentagent.com').rstrip('/')
 
 TEST_EMAIL = os.environ.get('TEST_EMAIL', 'testcoach@demo.com')
 TEST_PASSWORD = os.environ.get('TEST_PASSWORD', 'password123')

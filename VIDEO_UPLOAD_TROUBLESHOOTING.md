@@ -75,19 +75,19 @@
 ### Via Command Line (Debug):
 ```bash
 # 1. Login and get token
-TOKEN=$(curl -s -X POST "https://video-scout-11.preview.emergentagent.com/api/auth/login" \
+TOKEN=$(curl -s -X POST "https://scout-lens.preview.emergentagent.com/api/auth/login" \
   -H "Content-Type: application/json" \
   -d '{"email":"testcoach@demo.com","password":"password123"}' | \
   python3 -c "import sys, json; print(json.load(sys.stdin).get('token', ''))")
 
 # 2. Get match ID
-MATCHES=$(curl -s "https://video-scout-11.preview.emergentagent.com/api/matches" \
+MATCHES=$(curl -s "https://scout-lens.preview.emergentagent.com/api/matches" \
   -H "Authorization: Bearer $TOKEN")
 echo "$MATCHES"
 
 # 3. Upload test video
 MATCH_ID="<your-match-id>"
-curl -X POST "https://video-scout-11.preview.emergentagent.com/api/videos/upload?match_id=$MATCH_ID" \
+curl -X POST "https://scout-lens.preview.emergentagent.com/api/videos/upload?match_id=$MATCH_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -F "file=@/path/to/your/video.mp4"
 ```
@@ -117,20 +117,20 @@ tail -f /var/log/supervisor/backend.out.log
 ### 3. Check Authentication
 ```bash
 # Verify token is valid
-TOKEN=$(curl -s -X POST "https://video-scout-11.preview.emergentagent.com/api/auth/login" \
+TOKEN=$(curl -s -X POST "https://scout-lens.preview.emergentagent.com/api/auth/login" \
   -H "Content-Type: application/json" \
   -d '{"email":"your-email","password":"your-password"}' | \
   python3 -c "import sys, json; print(json.load(sys.stdin).get('token', ''))")
 
 # Test auth
-curl "https://video-scout-11.preview.emergentagent.com/api/auth/me" \
+curl "https://scout-lens.preview.emergentagent.com/api/auth/me" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 4. Check Match Exists
 ```bash
 # List your matches
-curl "https://video-scout-11.preview.emergentagent.com/api/matches" \
+curl "https://scout-lens.preview.emergentagent.com/api/matches" \
   -H "Authorization: Bearer $TOKEN"
 ```
 

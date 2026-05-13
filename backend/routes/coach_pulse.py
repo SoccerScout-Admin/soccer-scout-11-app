@@ -80,7 +80,7 @@ async def _build_email_for(user: dict, network: dict, network_ready: bool) -> tu
     sub = await _get_or_create_subscription(user["id"])
     week_start = _week_start()
     personal = await _personal_stats(user["id"], week_start)
-    base = PUBLIC_BASE_URL.rstrip("/") or "https://video-scout-11.preview.emergentagent.com"
+    base = PUBLIC_BASE_URL.rstrip("/") or "https://scout-lens.preview.emergentagent.com"
     unsubscribe_url = f"{base}/api/coach-pulse/unsubscribe/{sub['unsubscribe_token']}"
     subject, html = render_coach_pulse_email(
         coach_name=user.get("name", "Coach"),

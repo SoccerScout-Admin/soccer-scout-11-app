@@ -3,7 +3,7 @@ import os
 import requests
 import pytest
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://video-scout-11.preview.emergentagent.com').rstrip('/')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://scout-lens.preview.emergentagent.com').rstrip('/')
 EXISTING_SHARE_TOKEN = os.environ.get('TEST_SHARE_TOKEN', '0c1c5e1a-b80')
 
 

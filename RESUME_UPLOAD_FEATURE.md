@@ -289,7 +289,7 @@ db.chunked_uploads.updateMany(
 **Check 2: Upload session exists**
 ```bash
 # Check database for existing session
-curl https://video-scout-11.preview.emergentagent.com/api/videos/upload/status/{upload_id} \
+curl https://scout-lens.preview.emergentagent.com/api/videos/upload/status/{upload_id} \
   -H "Authorization: Bearer {token}"
 ```
 

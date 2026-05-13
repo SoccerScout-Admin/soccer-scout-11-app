@@ -25,8 +25,8 @@ The Soccer Scout application has passed all critical deployment health checks an
 - **CPU:** Normal load
 
 ### ✅ Network & Connectivity
-- **Frontend URL:** https://video-scout-11.preview.emergentagent.com ✓ HTTP 200
-- **Backend API:** https://video-scout-11.preview.emergentagent.com/api ✓ Operational
+- **Frontend URL:** https://scout-lens.preview.emergentagent.com ✓ HTTP 200
+- **Backend API:** https://scout-lens.preview.emergentagent.com/api ✓ Operational
 - **Database:** MongoDB connection successful ✓
 
 ### ✅ API Endpoints Verification

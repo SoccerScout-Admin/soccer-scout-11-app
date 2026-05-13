@@ -204,7 +204,7 @@ rm -rf /tmp/video_uploads/*
 **Step 1: Fresh Start**
 ```
 1. Open NEW incognito browser window
-2. Go to: https://video-scout-11.preview.emergentagent.com
+2. Go to: https://scout-lens.preview.emergentagent.com
 3. Login with: testcoach@demo.com / password123
 ```
 
