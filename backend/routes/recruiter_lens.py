@@ -75,10 +75,16 @@ class CreateLensLinkBody(BaseModel):
 
 
 def _build_target_url(team_share_token: str, filters: LensFilters) -> str:
-    """The final public URL the tracking token redirects to."""
+    """The final public URL the tracking token redirects to.
+
+    iter59e: this is the URL coaches see in the modal's success state — the
+    OG-aware path, so it unfurls richly when re-pasted into Slack/iMessage.
+    The recipient's *tracked* redirect from /api/lens-track still goes
+    straight to /shared-team/... for speed (no extra hop).
+    """
     qs = urlencode(filters.to_query_dict())
     base = _public_base()
-    path = f"/shared-team/{team_share_token}"
+    path = f"/api/og/team/{team_share_token}/lens"
     if qs:
         path += f"?{qs}"
     return f"{base}{path}" if base else path

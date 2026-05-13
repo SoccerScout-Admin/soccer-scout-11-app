@@ -261,8 +261,16 @@ def render_team_card(
     player_count: int = 0,
     club_logo_bytes: Optional[bytes] = None,
     player_avatars: Optional[List[bytes]] = None,
+    lens_label: Optional[str] = None,
+    top_label: str = "PUBLIC TEAM PAGE",
 ) -> bytes:
-    """Render the full OG card and return PNG bytes."""
+    """Render the full OG card and return PNG bytes.
+
+    iter59e: `lens_label` — when set (e.g. "Class of 2027 · Forwards"),
+    renders a green pill chip in the top-right area to signal this is a
+    *filtered* recruiter view. `top_label` lets us swap the eyebrow text
+    ("RECRUITER LENS" vs default "PUBLIC TEAM PAGE").
+    """
     img = Image.new("RGB", (W, H), BG_BOTTOM)
     _gradient_bg(img)
     draw = ImageDraw.Draw(img)
@@ -270,9 +278,10 @@ def render_team_card(
     # Subtle blue accent bar on far-left
     draw.rectangle([(0, 0), (8, H)], fill=ACCENT)
 
-    # Top label "PUBLIC TEAM PAGE"
+    # Top label (eyebrow)
     label_font = _load_font(FONT_BOLD, 22)
-    draw.text((64, 56), "PUBLIC TEAM PAGE", font=label_font, fill=ACCENT)
+    label_color = (16, 185, 129) if lens_label else ACCENT  # green when lens'd
+    draw.text((64, 56), top_label, font=label_font, fill=label_color)
 
     # Right-side club crest
     crest_box = 260
@@ -304,6 +313,33 @@ def render_team_card(
     sub_y = name_bbox[3] + 18
     sub_font = _load_font(FONT_REG, 32)
     draw.text((64, sub_y), sub_line, font=sub_font, fill=SUBTLE)
+
+    # iter59e: Lens filter pill — rendered below the sub-line on the left,
+    # so recruiters see "Class of 2027 · Forwards" baked into the unfurl.
+    if lens_label:
+        sub2_bbox = draw.textbbox((64, sub_y), sub_line, font=sub_font)
+        pill_y = sub2_bbox[3] + 16
+        pill_font = _load_font(FONT_BOLD, 26)
+        pill_text = lens_label.upper()
+        pad_x = 18
+        pad_y = 10
+        pill_bbox = draw.textbbox((0, 0), pill_text, font=pill_font)
+        pill_w = (pill_bbox[2] - pill_bbox[0]) + pad_x * 2
+        pill_h = (pill_bbox[3] - pill_bbox[1]) + pad_y * 2
+        # Translucent green block + bright green border
+        pill_bg = Image.new("RGBA", (pill_w, pill_h), (16, 185, 129, 40))
+        img.paste(pill_bg, (64, pill_y), pill_bg)
+        draw.rectangle(
+            [(64, pill_y), (64 + pill_w, pill_y + pill_h)],
+            outline=(16, 185, 129),
+            width=2,
+        )
+        draw.text(
+            (64 + pad_x, pill_y + pad_y - pill_bbox[1]),
+            pill_text,
+            font=pill_font,
+            fill=(16, 185, 129),
+        )
 
     # Player avatar row (bottom)
     if player_avatars:

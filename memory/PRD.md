@@ -2,6 +2,40 @@
 
 ## What's Been Implemented
 
+### Recruiter Lens OG Cards — Branded Slack/iMessage Unfurls (iter59e — Feb 2026)
+
+User asked: build OG image cards for filtered Lens URLs so recruiters see "12 Forwards · Class of 2027 · Lakeshore FC" in Slack/iMessage previews instead of a raw URL.
+
+**Backend** — two new endpoints in `routes/teams.py`:
+- `GET /api/og/team/{share_token}/lens?birth_year=&class_of=&position=` — server-rendered HTML page with og:title, og:description ("3 of 5 players match Class of 2027 · Forwards"), og:image pointing at the matching PNG endpoint, and a JS redirect to `/shared-team/{token}?{filters}` for real browsers.
+- `GET /api/og/team/{share_token}/lens-image.png?...` — 1200x630 PNG generated via the (now extended) `render_team_card`.
+
+**Card renderer** (`services/og_card.py::render_team_card`):
+- Added optional `lens_label: str` parameter — when set, renders a green pill chip below the sub-line with the filter summary baked in ("CLASS OF 2027 · FORWARDS").
+- Added optional `top_label: str` — swaps the eyebrow ("RECRUITER LENS" in green vs "PUBLIC TEAM PAGE" in blue).
+- Lens cards skip the avatar row entirely — the filter summary owns that visual real estate.
+
+**Filter-intersection counting** (`_count_matching_players`):
+- Translates `class_of=2027` back to the matching `current_grade` strings via the offset reverse-map (e.g. 2027 - school_year_end → 1 year out → `["11th (Junior)", "College Junior"]`).
+- Combined with `birth_year` (int) + `position` (string) — query is a single `count_documents` call.
+
+**TeamRoster wiring** (`pages/TeamRoster.js`):
+- The "Share this view" button now copies `/api/og/team/{token}/lens?{filters}` (the OG-aware path), not the raw SPA URL. Browsers still land on `/shared-team/...` via JS redirect; crawlers see the rich preview.
+- Recruiter outreach modal's success-state `target_url` field also shows the OG-aware path now, so coaches who re-paste it from the modal get unfurls too.
+
+**Tests** (`test_og_lens_unfurl.py`, NEW — 8 tests):
+- 404 for invalid share tokens (HTML + PNG endpoints)
+- og:title + og:description + og:image meta tags include filter summary + correct image URL with same query params
+- SPA redirect target preserves filter params
+- "Full Squad" rendered when no filters provided
+- Match-count accuracy: `class_of=2027 + position=Forward` correctly returns 3-of-5 on the fixture roster (excluding the Junior Mid and Soph FW that fail one criterion each)
+- `birth_year=2008` alone returns 4-of-5 (3 FWs + 1 Mid)
+- PNG endpoint returns valid PNG bytes (>5KB, correct magic header, content-type `image/png`)
+
+**Visual verification**: rendered a sample lens PNG and analyzed it — confirmed green "RECRUITER LENS" eyebrow, team name in big bold type, green pill badge "CLASS OF 2027 · FORWARDS", player count, club crest on the right, and brand logo in the bottom corner. All elements correct.
+
+**Test totals across iter59 family**: 54 passing — 8 OG lens + 16 outreach + 3 lens + 24 roster import + 3 public dossier demographics.
+
 ### Hot Lead Auto-Followup — Engagement Milestones (iter59d — Feb 2026)
 
 User asked: when a recipient opens a tracked lens link 3+ times in 48 hours, fire an in-app/email notification to the coach so passive interest signals turn into active conversation starters.

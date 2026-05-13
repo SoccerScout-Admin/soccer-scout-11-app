@@ -227,7 +227,10 @@ const TeamRoster = () => {
   const clearFilters = () => { setFilterBirthYear(''); setFilterGrade(''); };
 
   // iter59: Recruiter Lens — build a shareable URL that bakes in the current
-  // filter state. Returns null if the team isn't publicly shared yet.
+  // filter state. iter59e: now points at the OG-aware path so the unfurl
+  // preview shows the filtered chip ("Class of 2027 · Forwards") baked into
+  // the og:image — instead of a generic team unfurl. Browsers auto-redirect
+  // to the SPA route; crawlers (Slack/iMessage/WhatsApp) see the rich card.
   const recruiterLensUrl = useMemo(() => {
     if (!team?.share_token) return null;
     if (!filterBirthYear && !filterGrade) return null;
@@ -237,7 +240,7 @@ const TeamRoster = () => {
       const co = classOfLabel(filterGrade);
       if (co) params.set('class_of', co.replace('Class of ', ''));
     }
-    return `${window.location.origin}/shared-team/${team.share_token}?${params.toString()}`;
+    return `${window.location.origin}/api/og/team/${team.share_token}/lens?${params.toString()}`;
   }, [team?.share_token, filterBirthYear, filterGrade]);
 
   // iter59b: filter payload for the outreach modal. Backend expects an object
