@@ -44,7 +44,28 @@ const VideoAnalysis = () => {
     processingStatus, serverRestarted,
     isProcessing, isProcessed, processingFailed,
     reprocess: handleReprocess,
+    fetchNow: refetchProcessingStatus,
   } = useVideoProcessing(videoId, onAnalysesRefresh, onMarkersRefresh);
+
+  // iter61: AI is paused when no roster exists. Derived from the same poll loop.
+  const isAwaitingRoster = processingStatus?.processing_status === 'awaiting_roster';
+  const rosterCount = players?.length || 0;
+
+  const handleRunAnyway = useCallback(async () => {
+    try {
+      await axios.post(`${API}/videos/${videoId}/start-analysis`, {}, { headers: getAuthHeader() });
+      // Re-poll immediately so the banner transitions to the regular processing
+      // banner without waiting for the next 8s tick.
+      await refetchProcessingStatus?.();
+    } catch (err) {
+      console.error('Failed to start analysis:', err);
+      alert(err.response?.data?.detail || 'Failed to start analysis');
+    }
+  }, [videoId, refetchProcessingStatus]);
+
+  const handleAddRoster = useCallback(() => {
+    if (match?.id) navigate(`/match/${match.id}`);
+  }, [match, navigate]);
 
   const [activeTab, setActiveTab] = useState('overview');
   const [analyzing, setAnalyzing] = useState(false);
@@ -327,12 +348,16 @@ const VideoAnalysis = () => {
         isProcessing={isProcessing}
         isProcessed={isProcessed}
         processingFailed={processingFailed}
+        isAwaitingRoster={isAwaitingRoster}
+        rosterCount={rosterCount}
         processingStatus={processingStatus}
         serverRestarted={serverRestarted}
         processingLabel={processingLabel}
         onBack={() => navigate('/')}
         onDownloadHighlights={handleDownloadHighlights}
         onReprocess={handleReprocess}
+        onAddRoster={handleAddRoster}
+        onRunAnyway={handleRunAnyway}
       />
 
       <main className="max-w-[1400px] mx-auto px-6 py-6">

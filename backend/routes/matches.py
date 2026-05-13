@@ -172,6 +172,109 @@ async def list_deleted_videos(
     ).sort("deleted_at", -1).to_list(20)
 
 
+class ImportTeamRosterRequest(BaseModel):
+    team_id: str
+
+
+@router.post("/matches/{match_id}/import-team-roster")
+async def import_team_roster_to_match(
+    match_id: str,
+    body: ImportTeamRosterRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Copy every player on `team_id` into this match's roster.
+
+    Creates fresh player documents with `match_id={match_id}` and
+    `team_ids=[team_id]`. The original team roster is untouched — we duplicate
+    rather than mutate so the team can be re-used across multiple matches in a
+    season without entanglement.
+
+    No-op safe: if some of these players have already been imported (same
+    name+number+team_id combo), they're skipped. Returns counts so the UI can
+    show "imported 14 of 18 players (4 skipped — already on this match)".
+
+    Wired into the Create Match → Roster step UX. See user feedback 2026-05-13
+    where coaches said "I should be able to pull my existing team roster into
+    a match instead of building it from scratch every game."
+    """
+    user_id = current_user["id"]
+
+    match = await db.matches.find_one({"id": match_id, "user_id": user_id}, {"_id": 0, "id": 1})
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    team = await db.teams.find_one({"id": body.team_id, "user_id": user_id}, {"_id": 0, "id": 1, "name": 1})
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    source_players = await db.players.find(
+        {"team_ids": body.team_id, "user_id": user_id},
+        {"_id": 0, "profile_pic_path": 0, "share_token": 0, "id": 0, "created_at": 0, "match_id": 0},
+    ).to_list(200)
+
+    if not source_players:
+        return {"imported": 0, "skipped": 0, "team_name": team["name"]}
+
+    # Build a quick lookup of players already on this match (by name+number
+    # which is the usual natural key) so re-runs are idempotent.
+    existing = await db.players.find(
+        {"match_id": match_id, "user_id": user_id},
+        {"_id": 0, "name": 1, "number": 1},
+    ).to_list(200)
+    existing_keys = {(p.get("name", "").strip().lower(), p.get("number")) for p in existing}
+
+    imported = 0
+    skipped = 0
+    new_docs = []
+    for sp in source_players:
+        # Only consider players who are PURE team members (no match_id) — skip
+        # match-bound copies that may have been imported elsewhere. This keeps
+        # the source roster clean of fan-out duplicates.
+        if sp.get("match_id"):
+            continue
+        key = (sp.get("name", "").strip().lower(), sp.get("number"))
+        if key in existing_keys:
+            skipped += 1
+            continue
+        sp["id"] = str(uuid.uuid4())
+        sp["user_id"] = user_id
+        sp["match_id"] = match_id
+        # Match-bound copies are snapshots — they do NOT carry team_ids back.
+        # The team roster stays authoritative; the match roster is a frozen
+        # point-in-time picture for tactical attribution. If the team adds a
+        # player tomorrow, today's match roster doesn't grow retroactively.
+        sp["team_ids"] = []
+        sp["created_at"] = datetime.now(timezone.utc).isoformat()
+        new_docs.append(sp)
+        imported += 1
+
+    if new_docs:
+        await db.players.insert_many(new_docs)
+
+    return {"imported": imported, "skipped": skipped, "team_name": team["name"]}
+
+
+@router.get("/matches/{match_id}/roster-status")
+async def get_match_roster_status(
+    match_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Lightweight check used by the upload flow + video page banner to decide
+    whether AI analysis should auto-start or wait for the coach to add a
+    roster first. Single count query — kept separate from `/players/match/{id}`
+    so polling is cheap."""
+    match = await db.matches.find_one(
+        {"id": match_id, "user_id": current_user["id"]}, {"_id": 0, "id": 1}
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+    count = await db.players.count_documents(
+        {"match_id": match_id, "user_id": current_user["id"]}
+    )
+    return {"player_count": count, "has_roster": count > 0}
+
+
+
+
 class ManualKeyEvent(BaseModel):
     type: str  # 'goal', 'shot', 'save', 'foul', 'card', 'sub', 'note'
     minute: int = 0

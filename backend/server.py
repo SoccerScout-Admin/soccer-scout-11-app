@@ -944,15 +944,31 @@ async def finalize_chunked_upload(upload_id: str, total_chunks: int, current_use
 
     logger.info(f"Upload finalized: video {upload['video_id']}, {total_size/(1024*1024*1024):.2f}GB, {actual_chunks} chunks")
 
-    # Auto-start processing (Hudl/Veo-like)
-    await db.videos.update_one(
-        {"id": upload["video_id"]},
-        {"$set": {"processing_status": "queued", "processing_started_at": datetime.now(timezone.utc).isoformat()}}
-    )
-    asyncio.create_task(run_auto_processing(upload["video_id"], upload["user_id"]))
-    logger.info(f"Auto-processing queued for video {upload['video_id']}")
+    # Auto-start processing only when a roster is already attached. Coaches
+    # repeatedly flagged that AI runs without player context produce vague
+    # attributions ("midfielder #7" rather than "Reyes #7") — so iter61 gates
+    # the queue on roster presence. The video page shows an "Awaiting roster"
+    # banner with both "Add roster" and "Run anyway" CTAs.
+    roster_count = await db.players.count_documents({
+        "match_id": upload["match_id"], "user_id": upload["user_id"]
+    })
+    if roster_count > 0:
+        await db.videos.update_one(
+            {"id": upload["video_id"]},
+            {"$set": {"processing_status": "queued", "processing_started_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        asyncio.create_task(run_auto_processing(upload["video_id"], upload["user_id"]))
+        logger.info(f"Auto-processing queued for video {upload['video_id']} (roster={roster_count} players)")
+        processing_state = "queued"
+    else:
+        await db.videos.update_one(
+            {"id": upload["video_id"]},
+            {"$set": {"processing_status": "awaiting_roster", "processing_progress": 0}}
+        )
+        logger.info(f"Video {upload['video_id']} parked in awaiting_roster — coach must add players or click Run Anyway")
+        processing_state = "awaiting_roster"
 
-    return {"status": "completed", "video_id": upload["video_id"], "size": total_size, "processing": "queued"}
+    return {"status": "completed", "video_id": upload["video_id"], "size": total_size, "processing": processing_state}
 
 # ===== Video Serving (streaming with Range support) =====
 
@@ -1291,6 +1307,47 @@ async def reprocess_video(video_id: str, current_user: dict = Depends(get_curren
     )
     asyncio.create_task(run_auto_processing(video_id, current_user["id"], only_types=remaining))
     return {"status": "reprocessing_started", "types_to_process": remaining, "already_completed": list(completed)}
+
+@api_router.post("/videos/{video_id}/start-analysis")
+async def start_analysis(video_id: str, current_user: dict = Depends(get_current_user)):
+    """Kick off AI analysis for a video that was uploaded but parked in
+    `awaiting_roster`. Used by:
+      - the "Roster added — start now" CTA (after the coach adds players)
+      - the "Run anyway" override (coach explicitly doesn't want roster context)
+
+    Idempotent: if the video is already processing/queued/completed, returns
+    a hint and does nothing. Otherwise re-enters the normal processing path
+    so all four analysis types run from scratch."""
+    video = await db.videos.find_one(
+        {"id": video_id, "user_id": current_user["id"], "is_deleted": False},
+        {"_id": 0, "processing_status": 1, "match_id": 1},
+    )
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    current = video.get("processing_status")
+    if current in {"queued", "processing"}:
+        return {"status": "already_processing", "processing_status": current}
+    if current == "completed":
+        return {"status": "already_complete", "processing_status": current}
+
+    roster_count = await db.players.count_documents({
+        "match_id": video["match_id"], "user_id": current_user["id"]
+    })
+    await db.videos.update_one(
+        {"id": video_id},
+        {"$set": {
+            "processing_status": "queued",
+            "processing_progress": 0,
+            "processing_error": None,
+            "processing_started_at": datetime.now(timezone.utc).isoformat(),
+        }}
+    )
+    asyncio.create_task(run_auto_processing(video_id, current_user["id"]))
+    logger.info(f"Manual start_analysis: video {video_id} kicked off (roster={roster_count} players)")
+    return {"status": "started", "roster_count": roster_count}
+
+
 
 @api_router.post("/analysis/generate")
 async def generate_analysis(input: AnalysisRequest, current_user: dict = Depends(get_current_user)):

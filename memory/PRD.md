@@ -1,6 +1,50 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Roster-First Match Creation (iter61 — Feb 2026)
+
+User reported after their first production upload: "Instead of automatically starting to process the video, the roster should be uploaded so that the analysis can be accurate. When creating a match, user should be able to import their existing team roster to the match folder, rather than uploading or creating new every time." This addresses a real AI quality gap — without roster context, tactical notes reference "midfielder #7" instead of "Reyes #7".
+
+**Backend** (`routes/matches.py`):
+- `POST /api/matches/{match_id}/import-team-roster` — body `{team_id}`. Copies every player from `team_id` to the match as a fresh snapshot. Idempotent: re-runs skip players already on the match (matched by name+number tuple).
+- `GET /api/matches/{match_id}/roster-status` — `{player_count, has_roster}`. Lightweight count query used by the upload flow + video page banner.
+
+**Backend** (`server.py`):
+- `POST /api/videos/{video_id}/start-analysis` — manual kick-off for the "Run anyway" override and post-roster-add restart. Idempotent: returns `already_processing` / `already_complete` if appropriate.
+- `finalize_chunked_upload` now gates auto-processing on roster presence. If the match has zero players, video status is set to `awaiting_roster` (not `queued`) and `run_auto_processing` is NOT started. The video page surfaces an "Awaiting roster" banner with both "Add roster" and "Run anyway" CTAs.
+
+**Snapshot semantics** (important design decision): match-imported player records carry ONLY `match_id` — they intentionally do NOT carry `team_ids` back-references to the source team. Reasons:
+- Team roster page (`/teams/{id}/players`) stays clean (no fan-out duplicates after the same team is imported into multiple matches).
+- Match roster is a frozen point-in-time picture — if the team adds/drops players later, past match rosters are unaffected. This matters for season-trend analytics.
+
+**Frontend** (`pages/components/CreateMatchModal.js` — rewritten as 2-step modal):
+- Step 1 (Match details): unchanged form (home/away/date/competition).
+- Step 2 (Roster): three modes — "Existing Team" (dropdown of coach's teams + 1-click import), "Paste CSV" (header-row CSV via `/players/import-csv`), "Skip for now" (with explainer about the `awaiting_roster` banner).
+- Step indicator at top + back/forward navigation. Loads teams via `/api/teams` on modal open.
+
+**Frontend** (`pages/components/VideoAnalysisHeader.js`):
+- NEW `<awaiting-roster-banner>` — yellow banner shown when `processing_status === 'awaiting_roster'`. Two CTAs: "Add Roster" (navigates to `/match/{id}`) and "Run Anyway" (calls `POST /start-analysis`). Re-polls immediately after Run Anyway so the banner transitions to the regular blue processing banner without an 8-second delay.
+
+**Frontend** (`pages/VideoAnalysis.js` + `hooks/useVideoProcessing.js`):
+- Exposed `fetchNow` from `useVideoProcessing` for immediate re-poll after manual start.
+- Added `isAwaitingRoster` / `rosterCount` derived state + `handleRunAnyway` / `handleAddRoster` callbacks wired into the header.
+
+**Tests** (`tests/test_match_roster_first.py`, NEW — 8 tests, all passing):
+- Roster status returns empty for fresh match
+- Roster status 404 for unknown match
+- Import copies all 3 players + roster status flips to has_roster=true
+- Re-import is idempotent (2nd call: imported=0, skipped=2)
+- Match copies do NOT pollute team roster (team_ids back-reference intentionally cleared)
+- 404s on bogus team/match/video IDs
+
+**Earlier in same session — deployment-related polish (still part of iter60/61 family)**:
+- Disk-pressure circuit breaker threshold raised 80% → 95% (eliminates false-positive "Heavy server load" banner on the production container which baselines at 83% from OS/binaries even with 0 user videos)
+- Dashboard hides promo cards (CoachPulse / GameOfWeek / CoachNetwork CTA / MyReelStats) when user has zero matches; replaced "0 matches" empty state with friendly "Welcome to SoccerScout11 — Create Your First Match" CTA
+- `.gitignore` cleanup so Emergent deploy pipeline picks up `.env` files
+- `VAPID_CONTACT_EMAIL` updated from placeholder `admin@soccer-scout.app` → `bb@soccerscout11.com`
+
+
+
 ## Production Post-Deploy Polish — Disk Banner False Positive + Empty Dashboard (iter60 — Feb 2026)
 
 User went live at https://soccerscout11.com and immediately reported two surfaces felt premature/wrong on a brand-new account:

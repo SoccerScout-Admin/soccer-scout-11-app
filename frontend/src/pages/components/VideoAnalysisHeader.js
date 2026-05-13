@@ -8,12 +8,16 @@ const VideoAnalysisHeader = ({
   isProcessing,
   isProcessed,
   processingFailed,
+  isAwaitingRoster,
+  rosterCount,
   processingStatus,
   serverRestarted,
   processingLabel,
   onBack,
   onDownloadHighlights,
   onReprocess,
+  onAddRoster,
+  onRunAnyway,
 }) => (
   <>
     <header className="sticky top-0 z-50 bg-[#0A0A0A]/95 backdrop-blur-sm border-b border-white/5 px-6 py-3">
@@ -122,6 +126,44 @@ const VideoAnalysisHeader = ({
             className="px-4 py-2 rounded-full bg-[#EF4444]/10 text-[#EF4444] text-xs font-medium hover:bg-[#EF4444]/20 transition-colors">
             {processingStatus.completed_types?.length > 0 ? 'Resume Failed' : 'Retry Processing'}
           </button>
+        </div>
+      </div>
+    )}
+
+    {isAwaitingRoster && (
+      <div data-testid="awaiting-roster-banner" className="bg-gradient-to-r from-[#2A1A05] to-[#0A0A0A] border-b border-[#FBBF24]/30 px-6 py-4">
+        <div className="max-w-[1400px] mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-[#FBBF24]/15 border border-[#FBBF24]/40 flex items-center justify-center flex-shrink-0">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FBBF24" strokeWidth="2.5">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-white">
+                Video uploaded — waiting on roster before AI analysis runs
+              </p>
+              <p className="text-xs text-[#A3A3A3] mt-0.5">
+                {rosterCount === 0
+                  ? 'Add players first for accurate tactical attribution, or run AI without roster context.'
+                  : `${rosterCount} player${rosterCount === 1 ? '' : 's'} added — ready when you are.`}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              data-testid="awaiting-roster-add-btn"
+              onClick={onAddRoster}
+              className="px-4 py-2 bg-[#FBBF24] hover:bg-[#e5a91e] text-black text-xs font-bold tracking-wider uppercase transition-colors">
+              {rosterCount === 0 ? 'Add Roster' : 'Edit Roster'}
+            </button>
+            <button
+              data-testid="awaiting-roster-run-anyway-btn"
+              onClick={onRunAnyway}
+              className="px-4 py-2 border border-white/15 text-white hover:bg-white/5 text-xs font-bold tracking-wider uppercase transition-colors">
+              {rosterCount > 0 ? 'Start Analysis' : 'Run Anyway'}
+            </button>
+          </div>
         </div>
       </div>
     )}

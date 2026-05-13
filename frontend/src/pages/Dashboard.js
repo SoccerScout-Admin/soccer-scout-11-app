@@ -77,15 +77,20 @@ const Dashboard = () => {
 
   // ===== Modal coordination handlers (page-local UI concerns) =====
 
-  const handleCreateMatch = async (e) => {
+  const handleCreateMatch = async (e, opts = {}) => {
     e.preventDefault();
     setLoading(true);
     try {
-      await m.createMatch(formData);
-      setShowCreateModal(false);
-      setFormData({ team_home: '', team_away: '', date: '', competition: '' });
-    } catch (err) { console.error('Failed to create match:', err); }
-    finally { setLoading(false); }
+      const created = await m.createMatch(formData);
+      if (!opts.keepOpen) {
+        setShowCreateModal(false);
+        setFormData({ team_home: '', team_away: '', date: '', competition: '' });
+      }
+      return created;  // CreateMatchModal needs match.id to advance to the Roster step
+    } catch (err) {
+      console.error('Failed to create match:', err);
+      return null;
+    } finally { setLoading(false); }
   };
 
   const handleCreateFolder = async (e) => {
@@ -294,7 +299,11 @@ const Dashboard = () => {
         </main>
       </div>
 
-      <CreateMatchModal open={showCreateModal} onClose={() => setShowCreateModal(false)}
+      <CreateMatchModal open={showCreateModal}
+        onClose={() => {
+          setShowCreateModal(false);
+          setFormData({ team_home: '', team_away: '', date: '', competition: '' });
+        }}
         onSubmit={handleCreateMatch} formData={formData} setFormData={setFormData} loading={loading} />
 
       <FolderFormModal open={showFolderModal}

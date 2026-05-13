@@ -72,8 +72,9 @@ export const useMatches = (selectedFolderId) => {
   const createMatch = useCallback(async (formData) => {
     const payload = { ...formData };
     if (selectedFolderId && selectedFolderId !== '__none__') payload.folder_id = selectedFolderId;
-    await axios.post(`${API}/matches`, payload, { headers: getAuthHeader() });
+    const res = await axios.post(`${API}/matches`, payload, { headers: getAuthHeader() });
     await fetchMatches();
+    return res.data;  // {id, team_home, team_away, ...} — caller needs match.id for the roster import step
   }, [selectedFolderId, fetchMatches]);
 
   const moveMatch = useCallback(async (matchId, folderId) => {
