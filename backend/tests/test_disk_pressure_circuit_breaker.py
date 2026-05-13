@@ -1,8 +1,10 @@
 """
-Tests for the disk-pressure circuit breaker (iter51).
+Tests for the disk-pressure circuit breaker (iter51, updated iter60).
 
 The breaker has two triggers:
-  1. Used % >= 80%
+  1. Used % >= 95% (was 80% — raised after a false-positive on production
+     where the container's baseline OS/binaries push usage to 83% even with
+     0 user videos, but 73 GB were still free).
   2. Free bytes - incoming bytes < 2 GB reserve
 
 Both must raise HTTPException(503) with a clear Retry-After header.
@@ -31,9 +33,18 @@ def test_healthy_disk_does_not_block():
         _check_disk_pressure(incoming_bytes=10 * 1024 ** 3)
 
 
+def test_production_baseline_does_not_block():
+    """Regression: 83% used + 73 GB free is the live production scenario after
+    deploy. With the old 80% threshold this falsely tripped the banner; with
+    the new 95% threshold it must pass through."""
+    with patch("shutil.disk_usage", return_value=_mock_disk(total_gb=440, used_gb=365)):
+        # ~83% used, ~75GB free — should NOT raise
+        _check_disk_pressure(incoming_bytes=0)
+
+
 def test_blocks_at_threshold():
-    """Used % >= 80% triggers the breaker regardless of incoming size."""
-    with patch("shutil.disk_usage", return_value=_mock_disk(total_gb=100, used_gb=80)):
+    """Used % >= 95% triggers the breaker regardless of incoming size."""
+    with patch("shutil.disk_usage", return_value=_mock_disk(total_gb=100, used_gb=95)):
         with pytest.raises(HTTPException) as exc:
             _check_disk_pressure(incoming_bytes=0)
         assert exc.value.status_code == 503
@@ -59,15 +70,15 @@ def test_allows_when_incoming_leaves_reserve():
 
 
 def test_blocks_at_exact_threshold_boundary():
-    """80.0% should block (>=), not just 80.1%+."""
-    with patch("shutil.disk_usage", return_value=_mock_disk(total_gb=100, used_gb=80)):
+    """95.0% should block (>=), not just 95.1%+."""
+    with patch("shutil.disk_usage", return_value=_mock_disk(total_gb=100, used_gb=95)):
         with pytest.raises(HTTPException):
             _check_disk_pressure(incoming_bytes=0)
 
 
 def test_just_under_threshold_passes():
-    """79.9% with healthy free space → pass."""
-    with patch("shutil.disk_usage", return_value=_mock_disk(total_gb=100, used_gb=79.5)):
+    """94.5% with healthy free space → pass."""
+    with patch("shutil.disk_usage", return_value=_mock_disk(total_gb=100, used_gb=94.5)):
         _check_disk_pressure(incoming_bytes=0)
 
 

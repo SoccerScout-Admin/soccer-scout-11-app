@@ -646,7 +646,7 @@ async def stream_shared_video(share_token: str, video_id: str, request: Request)
 # the pod. Returns HTTP 503 with a Retry-After hint so the frontend can surface
 # a clear "system is full, try again in a few minutes" message instead of the
 # upload silently hanging then erroring partway through.
-DISK_FULL_THRESHOLD_PCT = 80
+DISK_FULL_THRESHOLD_PCT = 95
 DISK_FULL_RESERVE_BYTES = 2 * 1024 ** 3  # also block if <2GB free regardless of pct
 
 
@@ -654,13 +654,15 @@ def _check_disk_pressure(incoming_bytes: int = 0):
     """Raise HTTPException(503) if the chunk storage volume is under pressure.
 
     Two triggers:
-      1) Used % >= DISK_FULL_THRESHOLD_PCT (default 80%)
+      1) Used % >= DISK_FULL_THRESHOLD_PCT (default 95%)
       2) Free bytes after this upload would drop below DISK_FULL_RESERVE_BYTES (2GB)
 
-    The 2GB headroom keeps room for AI processing temp files (raw assembly +
-    compressed proxy) on the chunks we already have on disk. Without it a
-    single user could upload right up to 99% and then crash the pod on the
-    first AI run."""
+    The 2GB absolute floor is the real safeguard — it's what protects the pod
+    from eviction. The percentage gate is intentionally high (95%) because in
+    Kubernetes the chunk dir shares a volume with system files / package caches
+    / node_modules etc, so baseline usage routinely sits at 70-85% even with
+    zero user videos. Triggering on raw percentage caused a false-positive
+    "Heavy server load" banner on production with 73GB still free."""
     try:
         import shutil as _shutil
         total, used, free = _shutil.disk_usage(CHUNK_STORAGE_DIR)

@@ -170,6 +170,13 @@ const Dashboard = () => {
     return 'Match Library';
   })();
 
+  // First-run experience — coaches with zero matches across the whole library
+  // shouldn't see promo cards (Reel Stats, Game of the Week, Coach Pulse,
+  // Coach Network CTA) that have nothing to render against. They surface
+  // automatically once the first match is created. See user feedback on
+  // production deploy 2026-05-13.
+  const hasAnyMatches = m.matches.length > 0;
+
   return (
     <div className="min-h-screen bg-[#0A0A0A]">
       <DashboardHeader user={user} unreadMentions={unreadMentions} unreadMessages={unreadMessages}
@@ -219,21 +226,25 @@ const Dashboard = () => {
           {!m.selectionMode && (
             <>
               <QuickActionsRow onCreate={() => setShowCreateModal(true)} />
-              <MyReelStatsCard />
-              <GameOfTheWeekBanner />
-              <CoachPulseCard />
-              <button data-testid="coach-network-cta-card" onClick={() => navigate('/coach-network')}
-                className="w-full mb-6 group flex items-center gap-4 bg-gradient-to-r from-[#1B0F2E] via-[#0F1A2E] to-[#0A0A0A] border border-[#A855F7]/30 hover:border-[#A855F7]/60 hover:from-[#2A1547] transition-all px-5 py-4 text-left">
-                <div className="w-12 h-12 bg-[#A855F7]/15 border border-[#A855F7]/30 flex items-center justify-center flex-shrink-0">
-                  <Globe size={24} weight="bold" className="text-[#A855F7]" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[10px] font-bold tracking-[0.3em] uppercase text-[#A855F7] mb-1">Coach Network</div>
-                  <div className="text-base font-bold text-white truncate">See how your coaching stacks up — anonymized</div>
-                  <div className="text-xs text-[#A3A3A3] mt-0.5 truncate">Platform benchmarks · player position trends · recruiter-level distribution</div>
-                </div>
-                <CaretRight size={20} className="text-[#A855F7] group-hover:translate-x-1 transition-transform flex-shrink-0" />
-              </button>
+              {hasAnyMatches && (
+                <>
+                  <MyReelStatsCard />
+                  <GameOfTheWeekBanner />
+                  <CoachPulseCard />
+                  <button data-testid="coach-network-cta-card" onClick={() => navigate('/coach-network')}
+                    className="w-full mb-6 group flex items-center gap-4 bg-gradient-to-r from-[#1B0F2E] via-[#0F1A2E] to-[#0A0A0A] border border-[#A855F7]/30 hover:border-[#A855F7]/60 hover:from-[#2A1547] transition-all px-5 py-4 text-left">
+                    <div className="w-12 h-12 bg-[#A855F7]/15 border border-[#A855F7]/30 flex items-center justify-center flex-shrink-0">
+                      <Globe size={24} weight="bold" className="text-[#A855F7]" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] font-bold tracking-[0.3em] uppercase text-[#A855F7] mb-1">Coach Network</div>
+                      <div className="text-base font-bold text-white truncate">See how your coaching stacks up — anonymized</div>
+                      <div className="text-xs text-[#A3A3A3] mt-0.5 truncate">Platform benchmarks · player position trends · recruiter-level distribution</div>
+                    </div>
+                    <CaretRight size={20} className="text-[#A855F7] group-hover:translate-x-1 transition-transform flex-shrink-0" />
+                  </button>
+                </>
+              )}
             </>
           )}
 
@@ -243,10 +254,29 @@ const Dashboard = () => {
           )}
 
           {m.displayMatches.length === 0 ? (
-            <div className="text-center py-20">
+            <div className="text-center py-20" data-testid="match-library-empty-state">
               <VideoCamera size={80} className="text-[#A3A3A3] mx-auto mb-4" />
-              <p className="text-xl text-[#A3A3A3] mb-2">No matches here</p>
-              <p className="text-sm text-[#A3A3A3]">Create a match or move one into this folder</p>
+              {!hasAnyMatches ? (
+                <>
+                  <p className="text-2xl text-white font-bold mb-2" style={{ fontFamily: 'Bebas Neue' }}>
+                    Welcome to SoccerScout11
+                  </p>
+                  <p className="text-sm text-[#A3A3A3] max-w-md mx-auto mb-6">
+                    Upload your first match film and let the AI break down the game — clips, timeline markers, and a shareable recap all generated automatically.
+                  </p>
+                  <button
+                    data-testid="empty-state-create-match-btn"
+                    onClick={() => setShowCreateModal(true)}
+                    className="bg-[#007AFF] hover:bg-[#005bb5] text-white px-6 py-3 font-bold tracking-wider uppercase text-xs transition-colors inline-flex items-center gap-2">
+                    <Plus size={16} weight="bold" /> Create Your First Match
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p className="text-xl text-[#A3A3A3] mb-2">No matches here</p>
+                  <p className="text-sm text-[#A3A3A3]">Create a match or move one into this folder</p>
+                </>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

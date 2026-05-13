@@ -1,5 +1,34 @@
 # Soccer Scout - Product Requirements Document
 
+
+## Production Post-Deploy Polish — Disk Banner False Positive + Empty Dashboard (iter60 — Feb 2026)
+
+User went live at https://soccerscout11.com and immediately reported two surfaces felt premature/wrong on a brand-new account:
+
+**Issue 1 — "Heavy server load – new uploads paused" banner showing at 83% used / 73.76 GB free (zero uploads).**
+The container's chunk-storage volume sits on a filesystem shared with OS / package caches / node_modules. Baseline usage routinely sits at 70-85% even with zero user videos, so the old `pct >= 80%` trigger fired immediately on a healthy disk with 73+ GB still free.
+
+Fix (`backend/server.py`):
+- Raised `DISK_FULL_THRESHOLD_PCT` from 80 → 95. The 2 GB absolute-free floor (`DISK_FULL_RESERVE_BYTES`) is the real safeguard — it's what protects the pod from eviction. Percentage is a coarse signal; absolute free space is what actually matters for accepting a new upload.
+- 503 trigger now: `pct >= 95%` OR `free < 2 GB`. With production at 83%/73GB → no longer blocks. With 96%/1.5GB → still blocks.
+- Same logic surfaces through `/api/health` → `disk.uploads_blocked` which the frontend `DiskPressureBanner` polls every 60s.
+
+Tests (`backend/tests/test_disk_pressure_circuit_breaker.py`):
+- Updated all threshold assertions from 80 → 95.
+- NEW regression test `test_production_baseline_does_not_block` — exact production scenario (~83% used, ~75 GB free) must pass through. 8/8 pass.
+
+**Issue 2 — Premature promo cards on a 0-match dashboard.**
+A first-time coach landed on the dashboard and saw COACH PULSE / GAME OF THE WEEK / COACH NETWORK / MY REEL STATS cards before they'd uploaded a single match — felt confusing.
+
+Fix (`frontend/src/pages/Dashboard.js`):
+- New `hasAnyMatches = m.matches.length > 0` gate.
+- `MyReelStatsCard`, `GameOfTheWeekBanner`, `CoachPulseCard`, and the Coach Network CTA card are now hidden until the user has at least one match.
+- `QuickActionsRow` (NEW VIDEO UPLOAD + CREATE GAME) stays — it's the primary first-action CTA.
+- Empty state when `!hasAnyMatches`: replaces the generic "No matches here" with a friendly "Welcome to SoccerScout11" copy + "Create Your First Match" CTA button (`data-testid="empty-state-create-match-btn"`). Folder-level empty state (user has matches but the selected folder is empty) keeps the original copy.
+
+**Earlier in same session — deployment blocker workaround**: `.gitignore` was duplicating `.env`/`.env.*`/`*.env` ignore patterns. Removed both blocks (lines 127-130 and 139-143) so Kubernetes deployment pipeline can pick up env files. User then successfully deployed to production (soccerscout11.com).
+
+
 ## What's Been Implemented
 
 ### Recruiter Lens OG Cards — Branded Slack/iMessage Unfurls (iter59e — Feb 2026)
