@@ -108,12 +108,12 @@ const VideoAnalysisHeader = ({
 
     {processingFailed && (
       <div data-testid="processing-failed-banner" className="bg-[#1A0C0C] border-b border-[#6E1E1E]/30 px-6 py-4">
-        <div className="max-w-[1400px] mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
-            <div>
-              <p className="text-sm text-[#EF4444]">Processing encountered an issue</p>
-              <p className="text-xs text-[#888] mt-0.5">
+        <div className="max-w-[1400px] mx-auto flex flex-col sm:flex-row sm:items-start sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3 min-w-0">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2" className="flex-shrink-0 mt-0.5"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
+            <div className="min-w-0">
+              <p className="text-sm text-[#EF4444] font-medium">Processing encountered an issue</p>
+              <p className="text-xs text-[#CFCFCF] mt-1 leading-relaxed break-words">
                 {processingStatus.processing_error && (processingStatus.processing_error.toLowerCase().includes('budget') || processingStatus.processing_error.toLowerCase().includes('quota') || processingStatus.processing_error.toLowerCase().includes('balance'))
                   ? 'AI budget limit reached. Add balance in Profile > Universal Key to continue.'
                   : processingStatus.completed_types?.length > 0
@@ -123,7 +123,7 @@ const VideoAnalysisHeader = ({
             </div>
           </div>
           <button data-testid="retry-processing-btn" onClick={onReprocess}
-            className="px-4 py-2 rounded-full bg-[#EF4444]/10 text-[#EF4444] text-xs font-medium hover:bg-[#EF4444]/20 transition-colors">
+            className="flex-shrink-0 px-4 py-2 rounded-full bg-[#EF4444]/10 text-[#EF4444] text-xs font-medium hover:bg-[#EF4444]/20 transition-colors">
             {processingStatus.completed_types?.length > 0 ? 'Resume Failed' : 'Retry Processing'}
           </button>
         </div>

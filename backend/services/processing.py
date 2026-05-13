@@ -281,10 +281,19 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
         ]
 
         logger.info(f"Compressing video to {'240p/8fps' if video_size_gb > 2 else '360p/12fps'} (trim={trim_start}-{trim_end}, src={video_size_gb:.1f}GB)")
-        result = await run_in_threadpool(
-            subprocess.run, ffmpeg_cmd,
-            capture_output=True, text=True, timeout=1800,
-        )
+        try:
+            result = await run_in_threadpool(
+                subprocess.run, ffmpeg_cmd,
+                capture_output=True, text=True, timeout=1800,
+            )
+        except subprocess.TimeoutExpired:
+            # 30-min hard cap hit — file is too long for this preset on this pod.
+            # Surface a clear "trim or compress further" hint rather than the
+            # default "Command [...] timed out" dump that buried the cause.
+            raise Exception(
+                f"ffmpeg timed out after 30 min on a {video_size_gb:.1f}GB source. "
+                "Try trimming the match (only the first/second half), or compress further (CQ 28 / 720p in HandBrake)."
+            )
 
         if os.path.exists(raw_path):
             os.unlink(raw_path)
@@ -295,13 +304,32 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
             logger.info(f"Created {clip_size/(1024*1024):.1f}MB compressed video for AI")
             return clip_path
 
-        stderr = result.stderr[-500:] if result.stderr else ""
-        if "moov atom not found" in stderr:
-            raise Exception("Video data incomplete — moov atom missing. Re-upload needed.")
-        if "Invalid data found" in stderr:
-            raise Exception("Not a valid video format. Re-upload a valid video file.")
+        # Classify common ffmpeg failures so the UI can show actionable copy
+        # instead of dumping the raw command (which the truncation pre-iter62
+        # cut off mid-arg, hiding the real cause). stderr tail >> stderr head
+        # because ffmpeg writes the failure reason near the bottom.
+        stderr = result.stderr[-1000:] if result.stderr else ""
+        stderr_lower = stderr.lower()
+
+        if "moov atom not found" in stderr_lower:
+            raise Exception("Video file is incomplete (moov atom missing). Please re-upload — the chunked transfer didn't finalize cleanly.")
+        if "invalid data found" in stderr_lower:
+            raise Exception("File doesn't look like a valid video. Please re-export as MP4 (H.264) and upload again.")
+        if result.returncode in (-9, 137) or "killed" in stderr_lower:
+            # SIGKILL — almost always pod OOM during libx264 encode. Even with
+            # ultrafast preset, 2-hour 1080p+ source can exceed pod memory.
+            raise Exception(
+                f"Video processing ran out of memory on a {video_size_gb:.1f}GB source. "
+                "Compress further (HandBrake → Fast 720p30 / CQ 28) or split the match film in half and upload each half as a separate match."
+            )
+        if "no space left on device" in stderr_lower:
+            raise Exception("Server disk is full. Please retry in a few minutes — auto-cleanup will free space.")
+
+        # Fallback — show the stderr TAIL so the actual error reason is visible,
+        # not the (useless) ffmpeg command head.
+        tail = stderr.strip().split("\n")[-1] if stderr.strip() else f"exit code {result.returncode}"
         logger.error(f"ffmpeg compress failed: rc={result.returncode}, stderr={stderr}")
-        raise Exception("Failed to compress video for analysis")
+        raise Exception(f"ffmpeg failed: {tail[:200]}")
 
     except Exception:
         for p in [raw_path, clip_path]:
@@ -505,10 +533,16 @@ async def run_auto_processing(
         try:
             tmp_path = await prepare_video_sample(video)
         except Exception as e:
-            logger.error(f"Auto-processing: failed to prepare video sample: {e}")
+            # The new prepare_video_sample raises user-facing exceptions with
+            # actionable copy ("compress further", "trim the match", etc).
+            # Pass them through unchanged instead of burying them under another
+            # "Failed to prepare video: " prefix + 200-char truncation that
+            # hid the real cause on production iter62.
+            msg = str(e).strip() or "Video preparation failed"
+            logger.error(f"Auto-processing: failed to prepare video sample: {msg}")
             await db.videos.update_one(
                 {"id": video_id},
-                {"$set": {"processing_status": "failed", "processing_error": f"Failed to prepare video: {str(e)[:200]}"}},
+                {"$set": {"processing_status": "failed", "processing_error": msg[:500]}},
             )
             return
 
