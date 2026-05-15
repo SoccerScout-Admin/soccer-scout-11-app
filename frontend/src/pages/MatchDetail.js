@@ -9,6 +9,7 @@ import DeletedVideosDrawer from './components/DeletedVideosDrawer';
 import ConfirmReuploadModal from './components/ConfirmReuploadModal';
 import RosterSection from './components/RosterSection';
 import ProcessingProgressBar from './components/ProcessingProgressBar';
+import HighlightReelsPanel from './components/HighlightReelsPanel';
 import { requestPushPermission, showLocalNotification } from '../utils/push';
 
 const MatchDetail = () => {
