@@ -250,86 +250,122 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
             del data
 
         video_size_gb = os.path.getsize(raw_path) / (1024 * 1024 * 1024)
+
+        # Build a tiered list of (scale, fps, crf, timeout_s, label) presets.
+        # Tier 0 is the "ideal" quality for the file size; later tiers trade
+        # quality for memory/time to survive constrained pods. The auto-retry
+        # loop only escalates on transient failures (OOM, timeout) — NOT on
+        # deterministic ones like moov-atom-missing or invalid-data, where
+        # retrying with smaller settings won't change the outcome.
         if video_size_gb > 2:
-            scale_filter = "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2"
-            fps = "5"
-            crf = "40"
+            tiers = [
+                ("scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2", "5", "40", 1800, "180p/5fps/crf40"),
+                ("scale=240:135:force_original_aspect_ratio=decrease,pad=240:135:(ow-iw)/2:(oh-ih)/2", "3", "45", 900,  "135p/3fps/crf45 [retry-1]"),
+            ]
         else:
-            scale_filter = "scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2"
-            fps = "12"
-            crf = "35"
+            tiers = [
+                ("scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2", "12", "35", 1800, "360p/12fps/crf35"),
+                ("scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2", "6",  "42", 900,  "180p/6fps/crf42 [retry-1]"),
+            ]
 
-        ffmpeg_cmd = ["ffmpeg", "-y"]
-        if trim_start is not None and trim_start > 0:
-            ffmpeg_cmd += ["-ss", str(int(trim_start))]
-        ffmpeg_cmd += ["-i", raw_path]
-        if trim_end is not None and trim_end > 0:
-            duration = trim_end - (trim_start or 0)
-            ffmpeg_cmd += ["-t", str(int(duration))]
+        last_error_msg = None
+        for tier_idx, (scale_filter, fps, crf, tier_timeout, label) in enumerate(tiers):
+            ffmpeg_cmd = ["ffmpeg", "-y"]
+            if trim_start is not None and trim_start > 0:
+                ffmpeg_cmd += ["-ss", str(int(trim_start))]
+            ffmpeg_cmd += ["-i", raw_path]
+            if trim_end is not None and trim_end > 0:
+                duration = trim_end - (trim_start or 0)
+                ffmpeg_cmd += ["-t", str(int(duration))]
 
-        ffmpeg_cmd += [
-            "-vf", scale_filter,
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", crf,
-            "-r", fps,
-            "-c:a", "aac",
-            "-b:a", "32k",
-            "-ac", "1",
-            "-movflags", "+faststart",
-            clip_path,
-        ]
+            ffmpeg_cmd += [
+                "-vf", scale_filter,
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", crf,
+                "-r", fps,
+                "-c:a", "aac",
+                "-b:a", "32k",
+                "-ac", "1",
+                "-movflags", "+faststart",
+                clip_path,
+            ]
 
-        logger.info(f"Compressing video to {'240p/8fps' if video_size_gb > 2 else '360p/12fps'} (trim={trim_start}-{trim_end}, src={video_size_gb:.1f}GB)")
-        try:
-            result = await run_in_threadpool(
-                subprocess.run, ffmpeg_cmd,
-                capture_output=True, text=True, timeout=1800,
-            )
-        except subprocess.TimeoutExpired:
-            # 30-min hard cap hit — file is too long for this preset on this pod.
-            # Surface a clear "trim or compress further" hint rather than the
-            # default "Command [...] timed out" dump that buried the cause.
-            raise Exception(
-                f"ffmpeg timed out after 30 min on a {video_size_gb:.1f}GB source. "
-                "Try trimming the match (only the first/second half), or compress further (CQ 28 / 720p in HandBrake)."
-            )
+            logger.info(f"Compressing video tier {tier_idx} ({label}) trim={trim_start}-{trim_end}, src={video_size_gb:.1f}GB")
+            try:
+                result = await run_in_threadpool(
+                    subprocess.run, ffmpeg_cmd,
+                    capture_output=True, text=True, timeout=tier_timeout,
+                )
+            except subprocess.TimeoutExpired:
+                # Timeout is transient enough to warrant a retry at smaller
+                # scale. If we're already on the last tier, escalate to user.
+                last_error_msg = (
+                    f"ffmpeg timed out after {tier_timeout // 60} min on a {video_size_gb:.1f}GB source. "
+                    "Try trimming the match (only the first/second half), or compress further (CQ 28 / 720p in HandBrake)."
+                )
+                logger.warning(f"Tier {tier_idx} ({label}) timed out — escalating to next tier if available")
+                # Clean partial output before retrying
+                if os.path.exists(clip_path):
+                    try:
+                        os.unlink(clip_path)
+                    except Exception:
+                        pass
+                continue
 
+            # Success?
+            if result.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
+                clip_size = os.path.getsize(clip_path)
+                if tier_idx > 0:
+                    logger.warning(f"Tier {tier_idx} ({label}) succeeded after earlier tier failures — using degraded preset")
+                logger.info(f"Created {clip_size/(1024*1024):.1f}MB compressed video for AI ({label})")
+                # Free the raw video before returning
+                if os.path.exists(raw_path):
+                    try:
+                        os.unlink(raw_path)
+                    except Exception:
+                        pass
+                return clip_path
+
+            # Failed — classify so we know whether to retry or bail.
+            stderr = result.stderr[-1000:] if result.stderr else ""
+            stderr_lower = stderr.lower()
+
+            # Deterministic failures: do NOT retry — smaller scale won't help.
+            if "moov atom not found" in stderr_lower:
+                raise Exception("Video file is incomplete (moov atom missing). Please re-upload — the chunked transfer didn't finalize cleanly.")
+            if "invalid data found" in stderr_lower:
+                raise Exception("File doesn't look like a valid video. Please re-export as MP4 (H.264) and upload again.")
+            if "no space left on device" in stderr_lower:
+                raise Exception("Server disk is full. Please retry in a few minutes — auto-cleanup will free space.")
+
+            # Transient failures: retry at smaller scale.
+            if result.returncode in (-9, 137) or "killed" in stderr_lower:
+                last_error_msg = (
+                    f"Video processing ran out of memory on a {video_size_gb:.1f}GB source. "
+                    "Compress further (HandBrake → Fast 720p30 / CQ 28) or split the match film in half and upload each half as a separate match."
+                )
+                logger.warning(f"Tier {tier_idx} ({label}) OOM/killed — escalating to next tier if available")
+                if os.path.exists(clip_path):
+                    try:
+                        os.unlink(clip_path)
+                    except Exception:
+                        pass
+                continue
+
+            # Unknown failure — bail with stderr tail so the cause is visible.
+            tail = stderr.strip().split("\n")[-1] if stderr.strip() else f"exit code {result.returncode}"
+            logger.error(f"ffmpeg compress failed (tier {tier_idx} {label}): rc={result.returncode}, stderr={stderr}")
+            raise Exception(f"ffmpeg failed: {tail[:200]}")
+
+        # All tiers exhausted — surface the last classified message (already
+        # set to a coach-friendly string by the OOM/timeout branches above).
         if os.path.exists(raw_path):
-            os.unlink(raw_path)
-            logger.info("Deleted raw video file")
-
-        if result.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
-            clip_size = os.path.getsize(clip_path)
-            logger.info(f"Created {clip_size/(1024*1024):.1f}MB compressed video for AI")
-            return clip_path
-
-        # Classify common ffmpeg failures so the UI can show actionable copy
-        # instead of dumping the raw command (which the truncation pre-iter62
-        # cut off mid-arg, hiding the real cause). stderr tail >> stderr head
-        # because ffmpeg writes the failure reason near the bottom.
-        stderr = result.stderr[-1000:] if result.stderr else ""
-        stderr_lower = stderr.lower()
-
-        if "moov atom not found" in stderr_lower:
-            raise Exception("Video file is incomplete (moov atom missing). Please re-upload — the chunked transfer didn't finalize cleanly.")
-        if "invalid data found" in stderr_lower:
-            raise Exception("File doesn't look like a valid video. Please re-export as MP4 (H.264) and upload again.")
-        if result.returncode in (-9, 137) or "killed" in stderr_lower:
-            # SIGKILL — almost always pod OOM during libx264 encode. Even with
-            # ultrafast preset, 2-hour 1080p+ source can exceed pod memory.
-            raise Exception(
-                f"Video processing ran out of memory on a {video_size_gb:.1f}GB source. "
-                "Compress further (HandBrake → Fast 720p30 / CQ 28) or split the match film in half and upload each half as a separate match."
-            )
-        if "no space left on device" in stderr_lower:
-            raise Exception("Server disk is full. Please retry in a few minutes — auto-cleanup will free space.")
-
-        # Fallback — show the stderr TAIL so the actual error reason is visible,
-        # not the (useless) ffmpeg command head.
-        tail = stderr.strip().split("\n")[-1] if stderr.strip() else f"exit code {result.returncode}"
-        logger.error(f"ffmpeg compress failed: rc={result.returncode}, stderr={stderr}")
-        raise Exception(f"ffmpeg failed: {tail[:200]}")
+            try:
+                os.unlink(raw_path)
+            except Exception:
+                pass
+        raise Exception(last_error_msg or "Video processing failed at every scaling tier. Please trim or compress further.")
 
     except Exception:
         for p in [raw_path, clip_path]:

@@ -1,6 +1,37 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Blank-Screen Fix + FFmpeg Auto-Retry + JSX-no-undef Regression Test (iter63 — Feb 2026)
+
+User reported on production after iter62 deploy: "I just get a blank screen when I click on games that have videos uploaded." Reproduced in preview via Playwright — found the root cause and another lurking bug of the same class.
+
+**Root cause #1** — `MatchDetail.js` used `<HighlightReelsPanel />` (line 389) but never imported the component. Mounted only when `match.video_id` was truthy (so it slept for any rosterless/videoless match), then React threw `ReferenceError: HighlightReelsPanel is not defined` and the error boundary unmounted the whole page → blank screen. Fix: one-line import statement.
+
+**Root cause #2** (caught by the regression lint config below) — `useClipCollection` hook returned `collectionCopied` getter but NOT `setCollectionCopied` setter, yet `VideoAnalysis.js` line 472 called `setCollectionCopied(false)` inside the Share-Reel handler. Same crash class waiting to fire. Fix: added the setter to the hook's return + VideoAnalysis destructure.
+
+**Regression test infrastructure** (`frontend/eslint.config.mjs` + `backend/tests/test_frontend_no_undefined_references.py`):
+- Minimal ESLint **flat config** (ESLint 9.x) rooted at `frontend/eslint.config.mjs` with strict rules: `react/jsx-no-undef`, `no-undef`. The CRA dev server's lint didn't catch the original bug because it only runs incrementally; this config runs over the entire `src/` tree.
+- Plugins: `eslint-plugin-react`, `eslint-plugin-react-hooks` (already in node_modules).
+- Pytest `test_frontend_no_undefined_references.py` shells out to `npx eslint src/` and asserts zero errors. Verified the test correctly FAILS when the original bug is re-introduced and passes after fix. Will catch any future "missing import in JSX" or "typo'd setter name" before it reaches users.
+
+**FFmpeg Auto-Retry** (`services/processing.py::prepare_video_sample`):
+- Refactored from single-shot to a **tiered retry loop**. Files >2 GB: 180p/5fps/crf40 → 135p/3fps/crf45. Files ≤2 GB: 360p/12fps/crf35 → 180p/6fps/crf42. Second tier uses 15-min timeout (vs 30 min for tier 0) since smaller scale should finish faster.
+- **Transient failures auto-retry**: SIGKILL (rc -9/137, "killed" in stderr) and `TimeoutExpired`. Smaller scale uses less memory and finishes faster on the retry.
+- **Deterministic failures do NOT retry**: moov atom missing, invalid data, no space left on device. Smaller scale can't fix a corrupt input file, and retrying wastes pod time. Caller gets the actionable message immediately.
+- Chunk reassembly is preserved across tier attempts — only the ffmpeg encode runs again, not the (very expensive) raw-video assembly from chunks.
+
+**Tests added** (`tests/test_ffmpeg_error_classification.py` — 11 total now, all passing):
+- `test_oom_recovers_after_retry_with_aggressive_scaling` — tier 0 SIGKILL, tier 1 success → returns clip path
+- `test_timeout_recovers_after_retry` — tier 0 TimeoutExpired, tier 1 success
+- `test_moov_failure_does_not_retry` — subprocess.run called exactly once
+- `test_invalid_data_does_not_retry` — same protection
+- `test_unknown_error_does_not_retry` — conservative bail on unclassified failures
+- `test_both_tiers_oom_raises_actionable_message` — exhausted retries surface "compress further or split" hint
+
+**Test totals**: 29/29 passing across ffmpeg classification + roster-first + disk pressure + frontend-no-undef suites.
+
+
+
 ## Roster-First Match Creation (iter61 — Feb 2026)
 
 User reported after their first production upload: "Instead of automatically starting to process the video, the roster should be uploaded so that the analysis can be accurate. When creating a match, user should be able to import their existing team roster to the match folder, rather than uploading or creating new every time." This addresses a real AI quality gap — without roster context, tactical notes reference "midfielder #7" instead of "Reyes #7".

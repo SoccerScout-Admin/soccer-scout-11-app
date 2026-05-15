@@ -452,7 +452,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter62"
+BUILD_VERSION = "iter63"
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",
@@ -510,6 +510,13 @@ SHIPPED_FEATURES = [
     "ffmpeg-oom-detection",
     "ffmpeg-timeout-detection",
     "stderr-tail-not-head",
+    # iter63 — blank-screen fix + ffmpeg auto-retry + jsx-no-undef regression test
+    "match-detail-missing-import-fix",
+    "use-clip-collection-setter-fix",
+    "eslint-strict-jsx-no-undef-config",
+    "frontend-undefined-references-regression-test",
+    "ffmpeg-auto-retry-aggressive-scaling",
+    "ffmpeg-deterministic-failure-no-retry",
 ]
 
 def _get_build_sha() -> str:

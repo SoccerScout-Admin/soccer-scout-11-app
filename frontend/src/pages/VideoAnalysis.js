@@ -190,7 +190,7 @@ const VideoAnalysis = () => {
     collectionModalOpen, setCollectionModalOpen,
     collectionTitle, setCollectionTitle,
     collectionDescription, setCollectionDescription,
-    creatingCollection, collectionCopied,
+    creatingCollection, collectionCopied, setCollectionCopied,
     collectionUrl, handleCreateCollection, copyCollectionUrl,
   } = useClipCollection(selectedClips, mentionedCoaches);
 

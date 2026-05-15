@@ -70,7 +70,10 @@ def test_timeout_message_is_actionable(monkeypatch, tmp_path):
 
     msg = str(exc_info.value).lower()
     assert "timed out" in msg
-    assert "30 min" in msg or "30-min" in msg
+    # The final message comes from the LAST tier — with iter63 auto-retry,
+    # both tiers were tried, both timed out, and the message reflects the
+    # smaller retry tier's timeout (15 min). Either 30 min or 15 min counts.
+    assert "min" in msg
     # Must give the coach a path forward — not just "error".
     assert any(hint in msg for hint in ["trim", "compress", "handbrake", "720p", "cq 28"])
 
@@ -153,3 +156,136 @@ def test_unclassified_error_shows_stderr_tail_not_command(monkeypatch, tmp_path)
     # Make sure we're not just leaking the command argv as before.
     assert "-vf" not in msg
     assert "libx264" not in msg
+
+
+
+# ---------- iter63: auto-retry behavior ----------
+
+def test_oom_recovers_after_retry_with_aggressive_scaling(monkeypatch, tmp_path):
+    """First tier OOMs (SIGKILL), second tier succeeds. prepare_video_sample
+    must NOT raise — it should return the clip_path from the retry. This is
+    the happy path that turns a previously-fatal OOM into a degraded-quality
+    success the user never has to notice."""
+    from services import processing as svc
+    _wire_fake_filesystem(monkeypatch, svc, tmp_path, fake_size_gb=1.5)
+
+    calls = {"n": 0}
+    sigkill = MagicMock(returncode=-9, stderr="Killed\n")
+    success = MagicMock(returncode=0, stderr="")
+
+    def fake_run(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return sigkill
+        clip = args[0][-1]
+        with open(clip, "wb") as f:
+            f.write(b"\x00" * 2048)
+        return success
+    monkeypatch.setattr(svc.subprocess, "run", fake_run)
+
+    result = run_async(svc.prepare_video_sample(_fake_video()))
+    assert result is not None
+    assert calls["n"] == 2, "Should have tried tier 0 (OOM) then tier 1 (success)"
+
+
+def test_timeout_recovers_after_retry(monkeypatch, tmp_path):
+    """Same as OOM-recovery but for the TimeoutExpired path."""
+    from services import processing as svc
+    _wire_fake_filesystem(monkeypatch, svc, tmp_path, fake_size_gb=1.5)
+
+    calls = {"n": 0}
+    success = MagicMock(returncode=0, stderr="")
+
+    def fake_run(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise subprocess.TimeoutExpired(cmd=args[0], timeout=1800)
+        clip = args[0][-1]
+        with open(clip, "wb") as f:
+            f.write(b"\x00" * 2048)
+        return success
+    monkeypatch.setattr(svc.subprocess, "run", fake_run)
+
+    result = run_async(svc.prepare_video_sample(_fake_video()))
+    assert result is not None
+    assert calls["n"] == 2
+
+
+def test_moov_failure_does_not_retry(monkeypatch, tmp_path):
+    """Deterministic failures (moov atom missing, invalid data) must NOT
+    retry — smaller scaling can't fix a corrupt input file, and retrying
+    just wastes pod time. Verify subprocess.run is called exactly once."""
+    from services import processing as svc
+    _wire_fake_filesystem(monkeypatch, svc, tmp_path, fake_size_gb=1.0)
+
+    calls = {"n": 0}
+
+    def fake_run(*args, **kwargs):
+        calls["n"] += 1
+        return MagicMock(returncode=1, stderr="moov atom not found\n")
+    monkeypatch.setattr(svc.subprocess, "run", fake_run)
+
+    with pytest.raises(Exception):
+        run_async(svc.prepare_video_sample(_fake_video()))
+
+    assert calls["n"] == 1, "Deterministic failures should not auto-retry"
+
+
+def test_invalid_data_does_not_retry(monkeypatch, tmp_path):
+    """Same protection for the 'invalid data found' case."""
+    from services import processing as svc
+    _wire_fake_filesystem(monkeypatch, svc, tmp_path, fake_size_gb=1.0)
+
+    calls = {"n": 0}
+
+    def fake_run(*args, **kwargs):
+        calls["n"] += 1
+        return MagicMock(returncode=1, stderr="Invalid data found when processing input\n")
+    monkeypatch.setattr(svc.subprocess, "run", fake_run)
+
+    with pytest.raises(Exception):
+        run_async(svc.prepare_video_sample(_fake_video()))
+
+    assert calls["n"] == 1
+
+
+def test_unknown_error_does_not_retry(monkeypatch, tmp_path):
+    """Unclassified errors are conservative — bail immediately rather than
+    retrying blindly with smaller scaling. The error message still helpfully
+    shows the stderr tail."""
+    from services import processing as svc
+    _wire_fake_filesystem(monkeypatch, svc, tmp_path, fake_size_gb=1.0)
+
+    calls = {"n": 0}
+
+    def fake_run(*args, **kwargs):
+        calls["n"] += 1
+        return MagicMock(returncode=1, stderr="Unknown encoder error\nSome other thing\n")
+    monkeypatch.setattr(svc.subprocess, "run", fake_run)
+
+    with pytest.raises(Exception):
+        run_async(svc.prepare_video_sample(_fake_video()))
+
+    assert calls["n"] == 1
+
+
+def test_both_tiers_oom_raises_actionable_message(monkeypatch, tmp_path):
+    """If even the smallest tier OOMs, the user gets a clear "compress
+    further or split" hint — not a buried command dump."""
+    from services import processing as svc
+    _wire_fake_filesystem(monkeypatch, svc, tmp_path, fake_size_gb=2.5)
+
+    calls = {"n": 0}
+
+    def fake_run(*args, **kwargs):
+        calls["n"] += 1
+        return MagicMock(returncode=137, stderr="Killed\n")
+    monkeypatch.setattr(svc.subprocess, "run", fake_run)
+
+    with pytest.raises(Exception) as exc_info:
+        run_async(svc.prepare_video_sample(_fake_video()))
+
+    assert calls["n"] == 2, "Both tiers should be attempted before bailing"
+    msg = str(exc_info.value).lower()
+    assert any(hint in msg for hint in ["compress", "split", "memory"])
+

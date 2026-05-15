@@ -126,7 +126,7 @@ export const useClipCollection = (selectedClips, mentionedCoaches) => {
     collectionModalOpen, setCollectionModalOpen,
     collectionTitle, setCollectionTitle,
     collectionDescription, setCollectionDescription,
-    creatingCollection, collectionCopied,
+    creatingCollection, collectionCopied, setCollectionCopied,
     collectionUrl, handleCreateCollection, copyCollectionUrl,
   };
 };
