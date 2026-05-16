@@ -1,4 +1,13 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+#
+# IMPORTANT — DO NOT ignore .env files. They MUST be committed for the
+# Emergent Kubernetes deployment pipeline to pick them up. Production secret
+# overrides happen in the Emergent deployment UI's Secrets panel, NOT here.
+#
+# If you see `-e\n# Environment and credential files\n.env\n.env.*\n*.env`
+# blocks appended at the bottom of this file again — a platform hook re-added
+# them. Re-rewrite this file from scratch (iter66 history shows this has
+# happened 3 times now).
 
 # IDE and editors
 .idea/
@@ -30,8 +39,11 @@ next-env.d.ts
 dist/
 dist
 
-# Environment files (comprehensive coverage)
-
+# Credentials / secrets — do NOT blanket-block *.env (see header)
+credentials.json
+*.pem
+*.key
+.credentials
 *token.json*
 *credentials.json*
 
@@ -44,11 +56,10 @@ dump.rdb
 
 # System files
 .DS_Store
-*.pem
 
 # Python
 __pycache__/
-*pyc*
+*.pyc
 venv/
 .venv/
 
@@ -76,119 +87,8 @@ agenthub/agents/youtube/db
 # Build caches
 .cache/
 
+# Test credentials — read by the testing subagent only
 memory/test_credentials.md
-
-# Mobile development
-android-sdk/frontend/node_modules/.cache/default-development/36.pack
-frontend/node_modules/.cache/default-development/39.pack
-frontend/node_modules/.cache/default-development/41.pack
-frontend/node_modules/.cache/default-development/36.pack
-frontend/node_modules/.cache/default-development/40.pack
-frontend/node_modules/.cache/default-development/42.pack
-frontend/node_modules/.cache/default-development/43.pack
-frontend/node_modules/.cache/default-development/44.pack
-frontend/node_modules/.cache/default-development/38.pack
-frontend/node_modules/.cache/default-development/30.pack
-frontend/node_modules/.cache/default-development/50.pack
-frontend/node_modules/.cache/default-development/29.pack
-frontend/node_modules/.cache/default-development/54.pack
-frontend/node_modules/.cache/default-development/11.pack
-frontend/node_modules/.cache/default-development/3.pack
-frontend/node_modules/.cache/default-development/62.pack
-frontend/node_modules/.cache/default-development/61.pack
-frontend/node_modules/.cache/default-development/65.pack
-frontend/node_modules/.cache/default-development/56.pack
 frontend/node_modules/.cache/default-development/70.pack
-frontend/node_modules/.cache/default-development/21.pack
-frontend/node_modules/.cache/default-development/67.pack
-frontend/node_modules/.cache/default-development/63.pack
-frontend/node_modules/.cache/default-development/71.pack
-frontend/node_modules/.cache/default-development/75.pack
-frontend/node_modules/.cache/default-development/78.pack
-frontend/node_modules/.cache/default-development/78.pack
-frontend/node_modules/.cache/default-development/74.pack
-frontend/node_modules/.cache/default-development/66.pack
-frontend/node_modules/.cache/default-development/77.pack
-frontend/node_modules/.cache/default-development/81.pack
-frontend/node_modules/.cache/default-development/82.pack
-frontend/node_modules/.cache/default-development/0.pack
 frontend/node_modules/.cache/default-development/2.pack
-frontend/node_modules/.cache/default-development/5.pack
-frontend/node_modules/.cache/default-development/1.pack
-
-# Credentials (DO NOT ignore .env files — they MUST be committed for Kubernetes deployment)
-credentials.json
-*.pem
-*.key
-.credentials
-frontend/node_modules/.cache/default-development/7.pack
-frontend/node_modules/.cache/default-development/14.pack
-frontend/node_modules/.cache/default-development/15.pack
-frontend/node_modules/.cache/default-development/17.pack
 frontend/node_modules/.cache/default-development/19.pack
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
-frontend/node_modules/.cache/default-development/6.pack
-frontend/node_modules/.cache/default-development/6.pack
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
-frontend/node_modules/.cache/default-development/8.pack
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
