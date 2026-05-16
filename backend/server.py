@@ -452,7 +452,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter66"
+BUILD_VERSION = "iter67"
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",

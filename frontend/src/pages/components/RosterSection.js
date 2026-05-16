@@ -1,4 +1,40 @@
-import { Users, Plus, Trash, FileText } from '@phosphor-icons/react';
+import { Users, Plus, Trash, FileText, UsersThree } from '@phosphor-icons/react';
+
+const ImportTeamForm = ({ teams, selectedTeamId, setSelectedTeamId, importing, onSubmit, onCancel }) => (
+  <div className="bg-[#0A0A0A] border border-white/10 p-6 mb-6" data-testid="import-team-form">
+    <h4 className="text-sm font-bold uppercase tracking-wider text-white mb-3">Import Existing Team Roster</h4>
+    <p className="text-xs text-[#A3A3A3] mb-4">
+      Pull every player from one of your saved teams into this match. Duplicates (same name + number) are skipped automatically.
+    </p>
+    <form onSubmit={onSubmit} className="space-y-3">
+      <div>
+        <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">Saved Team</label>
+        <select
+          data-testid="import-team-select"
+          value={selectedTeamId}
+          onChange={(e) => setSelectedTeamId(e.target.value)}
+          className="w-full bg-[#141414] border border-white/10 text-white px-4 py-2 focus:border-[#007AFF] focus:outline-none text-sm"
+          required
+        >
+          <option value="">Select a team...</option>
+          {teams.map(t => (
+            <option key={t.id} value={t.id}>{t.name}{t.season ? ` — ${t.season}` : ''}</option>
+          ))}
+        </select>
+      </div>
+      <div className="flex gap-3">
+        <button data-testid="cancel-import-team-btn" type="button" onClick={onCancel}
+          className="px-4 py-2 border border-white/10 text-white text-xs font-bold tracking-wider uppercase hover:bg-[#1F1F1F] transition-colors">
+          Cancel
+        </button>
+        <button data-testid="submit-import-team-btn" type="submit" disabled={!selectedTeamId || importing}
+          className="px-6 py-2 bg-[#007AFF] hover:bg-[#005bb5] text-white text-xs font-bold tracking-wider uppercase transition-colors disabled:opacity-50">
+          {importing ? 'Importing…' : 'Import Roster'}
+        </button>
+      </div>
+    </form>
+  </div>
+);
 
 const CsvImportForm = ({ match, csvData, setCsvData, csvTeam, setCsvTeam, onFileChange, onSubmit, onCancel }) => (
   <div className="bg-[#0A0A0A] border border-white/10 p-6 mb-6">
@@ -140,9 +176,11 @@ const RosterSection = ({
   match, players, teams, playerGroups,
   showAddPlayer, setShowAddPlayer,
   showCsvImport, setShowCsvImport,
+  showImportTeam, setShowImportTeam,
   playerForm, setPlayerForm,
   csvData, setCsvData, csvTeam, setCsvTeam,
-  onAddPlayer, onCsvImport, onFileChange, onDeletePlayer,
+  selectedTeamId, setSelectedTeamId, importingTeam,
+  onAddPlayer, onCsvImport, onFileChange, onDeletePlayer, onImportTeam,
 }) => (
   <div className="bg-[#141414] border border-white/10 p-8" data-testid="roster-section">
     <div className="flex items-center justify-between mb-6">
@@ -151,7 +189,13 @@ const RosterSection = ({
         <h3 className="text-2xl font-bold" style={{ fontFamily: 'Bebas Neue' }}>Player Roster</h3>
         <span className="text-xs text-[#A3A3A3] bg-white/5 px-2 py-1">{players.length} players</span>
       </div>
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap">
+        {teams.length > 0 && (
+          <button data-testid="import-team-btn" onClick={() => setShowImportTeam(!showImportTeam)}
+            className="flex items-center gap-2 px-4 py-2 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors text-xs font-bold tracking-wider uppercase">
+            <UsersThree size={16} /> Import Existing Team
+          </button>
+        )}
         <button data-testid="import-csv-btn" onClick={() => setShowCsvImport(!showCsvImport)}
           className="flex items-center gap-2 px-4 py-2 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors text-xs font-bold tracking-wider uppercase">
           <FileText size={16} /> CSV Import
@@ -162,6 +206,15 @@ const RosterSection = ({
         </button>
       </div>
     </div>
+
+    {showImportTeam && teams.length > 0 && (
+      <ImportTeamForm
+        teams={teams}
+        selectedTeamId={selectedTeamId} setSelectedTeamId={setSelectedTeamId}
+        importing={importingTeam}
+        onSubmit={onImportTeam}
+        onCancel={() => setShowImportTeam(false)} />
+    )}
 
     {showCsvImport && (
       <CsvImportForm match={match}

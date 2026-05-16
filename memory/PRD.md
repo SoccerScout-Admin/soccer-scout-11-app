@@ -1,6 +1,24 @@
 # Soccer Scout - Product Requirements Document
 
 
+## "Import Existing Team" UI Wire-Up (iter67 — May 2026)
+
+User reported: "Attach an existing team to an already uploaded game. There is no option to SELECT TEAM. Only Create player or import CSV." Bug spans **preview + production**.
+
+**Root cause**: Backend `POST /api/matches/{match_id}/import-team-roster` (added in iter61) has full test coverage and works end-to-end, but the `RosterSection` component on the `MatchDetail` page only surfaced two action buttons — "CSV Import" and "Add Player". The third button to attach an existing saved team's roster was never wired into the UI. Coaches with saved team rosters were forced to re-type / re-CSV-paste their lineup on every new match.
+
+**Fix shipped**:
+- Added `ImportTeamForm` sub-component to `pages/components/RosterSection.js` (new "SAVED TEAM" dropdown listing every team the coach owns).
+- New `IMPORT EXISTING TEAM` button in the roster header, conditionally rendered only when `teams.length > 0` so coaches without saved teams don't see a dead-end button.
+- Wired new state (`showImportTeam`, `selectedTeamId`, `importingTeam`) and `handleImportTeam` handler in `MatchDetail.js`. Posts to existing `/api/matches/{match_id}/import-team-roster` then refreshes the player list and toasts an alert like "Imported 14 players from Lakeshore FC 2007 B Premier (3 skipped — already on this match)."
+- `data-testid`s for full automatability: `import-team-btn`, `import-team-form`, `import-team-select`, `submit-import-team-btn`, `cancel-import-team-btn`.
+
+**Verified live**: Logged in as testcoach@demo.com → opened a match → confirmed the new "IMPORT EXISTING TEAM" button renders alongside CSV Import + Add Player → clicking it opens the form → "SAVED TEAM" dropdown is populated with both saved teams (`Lakeshore FC 2007 B Premier — 2025/26`, `Lakeshore FC 2007 B Premier — 2026/27`).
+
+BUILD_VERSION → **iter67**, feature_count 74.
+
+
+
 ## Code-Review Complexity Refactors (iter66 — Feb 2026)
 
 User submitted a code-quality report. Audited each finding before touching code:

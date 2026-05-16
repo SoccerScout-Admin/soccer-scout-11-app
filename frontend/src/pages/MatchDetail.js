@@ -20,6 +20,9 @@ const MatchDetail = () => {
   const [teams, setTeams] = useState([]);
   const [showAddPlayer, setShowAddPlayer] = useState(false);
   const [showCsvImport, setShowCsvImport] = useState(false);
+  const [showImportTeam, setShowImportTeam] = useState(false);
+  const [selectedTeamId, setSelectedTeamId] = useState('');
+  const [importingTeam, setImportingTeam] = useState(false);
   const [playerForm, setPlayerForm] = useState({ name: '', number: '', position: '', team: '', team_id: '' });
   const [csvData, setCsvData] = useState('');
   const [csvTeam, setCsvTeam] = useState('');
@@ -169,6 +172,30 @@ const MatchDetail = () => {
     } catch (err) {
       console.error('CSV import failed:', err);
       alert('CSV import failed: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  const handleImportTeam = async (e) => {
+    e.preventDefault();
+    if (!selectedTeamId) return;
+    setImportingTeam(true);
+    try {
+      const res = await axios.post(
+        `${API}/matches/${matchId}/import-team-roster`,
+        { team_id: selectedTeamId },
+        { headers: getAuthHeader() }
+      );
+      const { imported, skipped, team_name } = res.data;
+      setSelectedTeamId('');
+      setShowImportTeam(false);
+      await fetchPlayers();
+      const skippedNote = skipped > 0 ? ` (${skipped} skipped — already on this match)` : '';
+      alert(`Imported ${imported} player${imported === 1 ? '' : 's'} from ${team_name}${skippedNote}.`);
+    } catch (err) {
+      console.error('Team roster import failed:', err);
+      alert('Team roster import failed: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setImportingTeam(false);
     }
   };
 
@@ -399,11 +426,15 @@ const MatchDetail = () => {
           match={match} players={players} teams={teams} playerGroups={playerGroups}
           showAddPlayer={showAddPlayer} setShowAddPlayer={setShowAddPlayer}
           showCsvImport={showCsvImport} setShowCsvImport={setShowCsvImport}
+          showImportTeam={showImportTeam} setShowImportTeam={setShowImportTeam}
           playerForm={playerForm} setPlayerForm={setPlayerForm}
           csvData={csvData} setCsvData={setCsvData}
           csvTeam={csvTeam} setCsvTeam={setCsvTeam}
+          selectedTeamId={selectedTeamId} setSelectedTeamId={setSelectedTeamId}
+          importingTeam={importingTeam}
           onAddPlayer={handleAddPlayer} onCsvImport={handleCsvImport}
-          onFileChange={handleFileUpload} onDeletePlayer={handleDeletePlayer} />
+          onFileChange={handleFileUpload} onDeletePlayer={handleDeletePlayer}
+          onImportTeam={handleImportTeam} />
       </main>
     </div>
   );
