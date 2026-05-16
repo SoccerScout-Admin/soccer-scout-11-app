@@ -1,6 +1,62 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Quick-Attach Pill + Compression-Help Email (iter69 — May 2026)
+
+Two complementary triage features shipped together: one for coaches (faster roster setup), one for admins (closed-loop support on failed uploads).
+
+### Feature 1: ⚡ Quick-Attach Last Used Team
+
+The "Import Existing Team" dropdown from iter67 was great for coaches with many saved teams, but redundant for the most common case: a coach running through a season with one core team, opening match after match. Now the most-recently-used team appears as a one-click amber/gold pill in the roster header.
+
+**Backend**:
+- Existing `POST /api/matches/{match_id}/import-team-roster` now also writes `users.last_imported_team_id` + `last_imported_team_at`. Critically, the pointer update happens BEFORE the "no players to import" early-return — the coach's intent ("this is my active team") is what matters, not the row count.
+- New `GET /api/me/last-imported-team` returns `{team_id, team_name, team_season, last_used_at}` or all-nulls. Self-healing: if the team was deleted, it `$unset`s the stale pointer so we stop re-checking.
+
+**Frontend** (`pages/components/RosterSection.js`):
+- New `quick-attach-team-btn` rendered only when (a) the coach has a last-used team, (b) the current match is empty, (c) the dropdown form is closed. Avoids double entry points.
+- Distinctive amber/gold gradient styling (`from-[#FBBF24]/15 to-[#F59E0B]/15`) with a `Lightning` icon — visually separates the shortcut from the canonical buttons next to it.
+- Calls the same import endpoint as the dropdown flow → refreshes both the player list and the last-team pointer.
+
+**Verified live**: pill renders as `⚡ QUICK ATTACH LAKESHORE FC 2007 B PREMIER` on an empty match for testcoach. One click → 6 players imported.
+
+### Feature 2: 📧 "Email fix" — closed-loop support on failed uploads
+
+The iter68 Top Failed Videos panel surfaces a `2.5 GB / all_tiers_exhausted` failure in production. The coach who uploaded it doesn't know what to do next. Instead of a triage row that just stares back, the admin can now click one button and Resend them HandBrake compression instructions with the exact "Fast 720p30 / CQ 28" settings.
+
+**Backend** (`routes/admin.py`):
+- New `POST /api/admin/processing-events/email-compression-help` body `{video_id}`.
+- Looks up the `final_failure` event, the source video, and the coach; sends a dark-themed HTML email (matches the rest of the Soccer Scout transactional emails) via the existing `send_or_queue` helper from `email_queue.py` (gets retry + quota deferral for free).
+- De-duped via the new `compression_help_sent` collection — same `video_id` returns `status: "already_sent"` with the prior timestamp instead of double-spamming the coach.
+- Graceful failure: no email on record → `status: "skipped"` with a reason, not a 500. Front-end shows the reason as a toast.
+
+**Backend** (`_enrich_failed_event` in `routes/admin.py`):
+- Top Failed Videos rows now include `compression_email_sent_at` so the UI can render "✓ Sent" instead of the "Email fix" button for handled rows.
+
+**Frontend** (`pages/AdminProcessingEvents.js`):
+- New "HELP" column in the Top Failed Videos table.
+- "Email fix" button (`email-fix-btn-{video_id}`) per row in the same amber/gold tone as the Quick Attach pill — visually paired as "operator-shortcut" controls.
+- Disabled when there's no coach email (with tooltip explaining why).
+- After a successful send, refreshes the panel — the row flips to a "✓ SENT" badge (green) with hover-tooltip showing the send timestamp.
+
+**Verified live**: 2 Email Fix buttons render on real preview-env failures (the 2.5 GB OOM + the moov_missing one tied to Test Coach). De-dup test confirmed: pre-seeded `compression_help_sent` row triggers `status: "already_sent"` on the next click.
+
+**8 pytest cases shipped** (`test_quick_attach_and_compression_email.py`):
+1. `test_last_imported_team_returns_null_when_never_used`
+2. `test_import_team_roster_updates_last_team_pointer`
+3. `test_last_imported_team_self_heals_when_team_deleted`
+4. `test_compression_email_requires_admin`
+5. `test_compression_email_skips_when_no_email`
+6. `test_compression_email_404_when_no_failure_event`
+7. `test_compression_email_dedupes_repeat_clicks`
+8. `test_top_failed_surfaces_compression_sent_flag`
+
+All passing alongside the existing 48 tests in the touched suites.
+
+BUILD_VERSION → **iter69**, feature_count 76.
+
+
+
 ## Top-5 Largest Failed Videos Triage Panel (iter68 — May 2026)
 
 Quick-triage panel added to the Admin Processing Events Dashboard (P2 from the iter67 backlog). Surfaces the biggest failures first because they're the highest-leverage to investigate: either pushing against the pod-memory ceiling (justifies a bump) or hitting an upload-size UX gap (justifies clearer warnings).

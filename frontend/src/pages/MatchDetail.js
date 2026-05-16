@@ -23,6 +23,7 @@ const MatchDetail = () => {
   const [showImportTeam, setShowImportTeam] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState('');
   const [importingTeam, setImportingTeam] = useState(false);
+  const [lastTeam, setLastTeam] = useState(null);
   const [playerForm, setPlayerForm] = useState({ name: '', number: '', position: '', team: '', team_id: '' });
   const [csvData, setCsvData] = useState('');
   const [csvTeam, setCsvTeam] = useState('');
@@ -84,11 +85,19 @@ const MatchDetail = () => {
     } catch (err) { console.error('Failed to fetch teams:', err); }
   }, []);
 
+  const fetchLastTeam = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API}/me/last-imported-team`, { headers: getAuthHeader() });
+      setLastTeam(res.data?.team_id ? res.data : null);
+    } catch (err) { /* non-critical — pill just won't show */ }
+  }, []);
+
   useEffect(() => {
     fetchMatch();
     fetchPlayers();
     fetchTeams();
-  }, [fetchMatch, fetchPlayers, fetchTeams]);
+    fetchLastTeam();
+  }, [fetchMatch, fetchPlayers, fetchTeams, fetchLastTeam]);
 
   useEffect(() => {
     if (!match?.video_id) { setVideoMeta(null); return; }
@@ -178,17 +187,23 @@ const MatchDetail = () => {
   const handleImportTeam = async (e) => {
     e.preventDefault();
     if (!selectedTeamId) return;
+    await runImportTeam(selectedTeamId);
+  };
+
+  const runImportTeam = async (teamId) => {
+    if (!teamId) return;
     setImportingTeam(true);
     try {
       const res = await axios.post(
         `${API}/matches/${matchId}/import-team-roster`,
-        { team_id: selectedTeamId },
+        { team_id: teamId },
         { headers: getAuthHeader() }
       );
       const { imported, skipped, team_name } = res.data;
       setSelectedTeamId('');
       setShowImportTeam(false);
       await fetchPlayers();
+      await fetchLastTeam();
       const skippedNote = skipped > 0 ? ` (${skipped} skipped — already on this match)` : '';
       alert(`Imported ${imported} player${imported === 1 ? '' : 's'} from ${team_name}${skippedNote}.`);
     } catch (err) {
@@ -197,6 +212,11 @@ const MatchDetail = () => {
     } finally {
       setImportingTeam(false);
     }
+  };
+
+  const handleQuickAttach = async () => {
+    if (!lastTeam?.team_id) return;
+    await runImportTeam(lastTeam.team_id);
   };
 
   const handleFileUpload = (e) => {
@@ -432,9 +452,10 @@ const MatchDetail = () => {
           csvTeam={csvTeam} setCsvTeam={setCsvTeam}
           selectedTeamId={selectedTeamId} setSelectedTeamId={setSelectedTeamId}
           importingTeam={importingTeam}
+          lastTeam={lastTeam}
           onAddPlayer={handleAddPlayer} onCsvImport={handleCsvImport}
           onFileChange={handleFileUpload} onDeletePlayer={handleDeletePlayer}
-          onImportTeam={handleImportTeam} />
+          onImportTeam={handleImportTeam} onQuickAttach={handleQuickAttach} />
       </main>
     </div>
   );

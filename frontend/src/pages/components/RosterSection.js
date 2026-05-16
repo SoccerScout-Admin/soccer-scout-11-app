@@ -1,4 +1,4 @@
-import { Users, Plus, Trash, FileText, UsersThree } from '@phosphor-icons/react';
+import { Users, Plus, Trash, FileText, UsersThree, Lightning } from '@phosphor-icons/react';
 
 const ImportTeamForm = ({ teams, selectedTeamId, setSelectedTeamId, importing, onSubmit, onCancel }) => (
   <div className="bg-[#0A0A0A] border border-white/10 p-6 mb-6" data-testid="import-team-form">
@@ -180,8 +180,16 @@ const RosterSection = ({
   playerForm, setPlayerForm,
   csvData, setCsvData, csvTeam, setCsvTeam,
   selectedTeamId, setSelectedTeamId, importingTeam,
-  onAddPlayer, onCsvImport, onFileChange, onDeletePlayer, onImportTeam,
-}) => (
+  lastTeam,
+  onAddPlayer, onCsvImport, onFileChange, onDeletePlayer, onImportTeam, onQuickAttach,
+}) => {
+  // Only surface the "Quick attach" pill when:
+  //  - the coach has a last-used team that still exists
+  //  - the current match is empty (the pill is a shortcut for the "fresh
+  //    match, same team" workflow — not a re-import button)
+  //  - the dropdown form is closed (don't double up the entry points)
+  const showQuickPill = !!lastTeam?.team_id && players.length === 0 && !showImportTeam;
+  return (
   <div className="bg-[#141414] border border-white/10 p-8" data-testid="roster-section">
     <div className="flex items-center justify-between mb-6">
       <div className="flex items-center gap-3">
@@ -190,6 +198,18 @@ const RosterSection = ({
         <span className="text-xs text-[#A3A3A3] bg-white/5 px-2 py-1">{players.length} players</span>
       </div>
       <div className="flex gap-2 flex-wrap">
+        {showQuickPill && (
+          <button data-testid="quick-attach-team-btn" onClick={onQuickAttach} disabled={importingTeam}
+            title={`Attach ${lastTeam.team_name}'s full roster (last team you used)`}
+            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#FBBF24]/15 to-[#F59E0B]/15 border border-[#FBBF24]/40 text-[#FBBF24] hover:from-[#FBBF24]/25 hover:to-[#F59E0B]/25 transition-colors text-xs font-bold tracking-wider uppercase disabled:opacity-50">
+            <Lightning size={14} weight="fill" />
+            {importingTeam ? 'Attaching…' : (
+              <span>
+                Quick attach <span className="text-white">{lastTeam.team_name}</span>
+              </span>
+            )}
+          </button>
+        )}
         {teams.length > 0 && (
           <button data-testid="import-team-btn" onClick={() => setShowImportTeam(!showImportTeam)}
             className="flex items-center gap-2 px-4 py-2 border border-white/10 text-[#A3A3A3] hover:text-white hover:bg-[#1F1F1F] transition-colors text-xs font-bold tracking-wider uppercase">
@@ -244,6 +264,7 @@ const RosterSection = ({
       </div>
     )}
   </div>
-);
+  );
+};
 
 export default RosterSection;

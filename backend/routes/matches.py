@@ -212,6 +212,18 @@ async def import_team_roster_to_match(
         {"_id": 0, "profile_pic_path": 0, "share_token": 0, "id": 0, "created_at": 0, "match_id": 0},
     ).to_list(200)
 
+    # Remember the most-recently-attached team for the "Quick attach" pill on
+    # the next match. We update this even if 0 players were imported — the
+    # coach's intent ("this is my active team") is what matters, not the row
+    # count. Updating BEFORE the early-return below ensures it always lands.
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {
+            "last_imported_team_id": body.team_id,
+            "last_imported_team_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+
     if not source_players:
         return {"imported": 0, "skipped": 0, "team_name": team["name"]}
 
@@ -252,6 +264,44 @@ async def import_team_roster_to_match(
         await db.players.insert_many(new_docs)
 
     return {"imported": imported, "skipped": skipped, "team_name": team["name"]}
+
+
+@router.get("/me/last-imported-team")
+async def get_my_last_imported_team(
+    current_user: dict = Depends(get_current_user),
+):
+    """Return the team this coach most recently attached to a match, if any
+    and if it still exists. Used by the "⚡ Quick attach" pill in the roster
+    header — saves the dropdown click for coaches running through a season
+    with one core team.
+
+    Returns `{team_id: null, team_name: null}` (200, not 404) when there is
+    no last-used team or the team has been deleted since. Front-end then
+    hides the pill instead of erroring."""
+    user_id = current_user["id"]
+    user = await db.users.find_one(
+        {"id": user_id},
+        {"_id": 0, "last_imported_team_id": 1, "last_imported_team_at": 1},
+    ) or {}
+    last_id = user.get("last_imported_team_id")
+    if not last_id:
+        return {"team_id": None, "team_name": None, "last_used_at": None}
+    team = await db.teams.find_one(
+        {"id": last_id, "user_id": user_id},
+        {"_id": 0, "id": 1, "name": 1, "season": 1},
+    )
+    if not team:
+        # Team was deleted — clear the pointer so we stop checking each call.
+        await db.users.update_one(
+            {"id": user_id}, {"$unset": {"last_imported_team_id": "", "last_imported_team_at": ""}},
+        )
+        return {"team_id": None, "team_name": None, "last_used_at": None}
+    return {
+        "team_id": team["id"],
+        "team_name": team["name"],
+        "team_season": team.get("season"),
+        "last_used_at": user.get("last_imported_team_at"),
+    }
 
 
 @router.get("/matches/{match_id}/roster-status")

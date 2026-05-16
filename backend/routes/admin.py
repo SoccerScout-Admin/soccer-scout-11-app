@@ -419,6 +419,14 @@ async def _enrich_failed_event(ev: dict) -> dict:
     if match and (match.get("team_home") or match.get("team_away")):
         match_label = f"{match.get('team_home') or '—'} vs {match.get('team_away') or '—'}"
 
+    # Surface whether we've already emailed this coach about this specific
+    # failed video — admins will see a "Sent ✓" badge in the UI instead of
+    # accidentally double-emailing a user who's already mid-fix.
+    sent_record = await db.compression_help_sent.find_one(
+        {"video_id": ev["video_id"]},
+        {"_id": 0, "sent_at": 1, "to_email": 1},
+    )
+
     return {
         "video_id": ev["video_id"],
         "filename": video.get("filename") or "(deleted)",
@@ -434,6 +442,7 @@ async def _enrich_failed_event(ev: dict) -> dict:
         "match_date": match.get("date") if match else None,
         "coach_email": coach.get("email") if coach else None,
         "coach_name": coach.get("name") if coach else None,
+        "compression_email_sent_at": sent_record.get("sent_at") if sent_record else None,
     }
 
 
@@ -480,6 +489,142 @@ async def processing_events_top_failed(
 
     enriched = [await _enrich_failed_event(ev) for ev in top]
     return {"window_hours": hours, "count": len(enriched), "videos": enriched}
+
+
+class CompressionHelpRequest(BaseModel):
+    video_id: str
+
+
+def _compression_help_html(coach_name: Optional[str], filename: str, size_gb: Optional[float], failure_mode: str) -> str:
+    """HTML body for the compression-help email. Keep it short, friendly, and
+    actionable — the goal is to convert "video failed" into "video succeeded
+    in their next attempt" with as little friction as possible.
+
+    Style mirrors existing Soccer Scout transactional emails (dark header,
+    light card body, single primary instruction)."""
+    greeting = f"Hi {coach_name}," if coach_name else "Hi there,"
+    size_label = f"{size_gb} GB" if size_gb is not None else "your last upload"
+    return f"""\
+<!DOCTYPE html>
+<html><body style="margin:0;padding:0;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#0A0A0A;color:#E5E5E5;">
+  <div style="max-width:560px;margin:0 auto;padding:24px;">
+    <div style="background:#141414;border:1px solid #2A2A2A;border-radius:8px;overflow:hidden;">
+      <div style="background:#007AFF;padding:20px 24px;">
+        <div style="color:#fff;font-size:11px;letter-spacing:0.2em;text-transform:uppercase;font-weight:700;">Soccer Scout · Upload Support</div>
+        <div style="color:#fff;font-size:20px;font-weight:700;margin-top:6px;">Your upload didn't quite make it through</div>
+      </div>
+      <div style="padding:24px;color:#E5E5E5;line-height:1.55;font-size:14px;">
+        <p>{greeting}</p>
+        <p>Your match film <strong style="color:#fff;">{filename}</strong> ({size_label}) hit a processing failure ({failure_mode}) — even after our auto-retry at a lower resolution. That's a sign the source file is just too heavy for our encoding pod to chew through.</p>
+        <p style="margin-top:18px;font-weight:700;color:#fff;">Quickest fix: re-compress with HandBrake (free) and try again</p>
+        <ol style="padding-left:18px;margin:8px 0;">
+          <li>Download <a href="https://handbrake.fr/downloads.php" style="color:#7DD3FC;">HandBrake</a> for Mac / Windows / Linux</li>
+          <li>Open your match film in it</li>
+          <li>Pick the preset: <strong style="color:#FBBF24;">Fast 720p30</strong></li>
+          <li>Under "Video", set <strong style="color:#FBBF24;">Constant Quality (CQ) = 28</strong></li>
+          <li>Save the new file and re-upload to the same match (the original is already deleted — nothing to clean up)</li>
+        </ol>
+        <p style="margin-top:18px;">This should get the file under ~1.5 GB without any visible quality loss for tactical analysis. AI analysis runs at 360p anyway, so you're not losing anything we'd actually use.</p>
+        <p style="margin-top:18px;color:#A3A3A3;font-size:13px;">If that still doesn't work, reply to this email and I'll personally take a look. — Soccer Scout team</p>
+      </div>
+    </div>
+    <p style="font-size:11px;color:#666;text-align:center;margin-top:16px;">You're receiving this because a Soccer Scout admin manually flagged your upload for follow-up help. We don't send this automatically.</p>
+  </div>
+</body></html>"""
+
+
+@router.post("/admin/processing-events/email-compression-help")
+async def email_compression_help(
+    body: CompressionHelpRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Send a Resend email to the coach whose video hit `final_failure`, with
+    HandBrake compression instructions tailored to the iter63 retry-tier
+    error message ("Fast 720p30 / CQ 28").
+
+    De-duped by `(video_id)` in `compression_help_sent` — clicking the same
+    row twice will NOT re-email the coach (you'll get a 200 with
+    `status: "already_sent"`). The admin can see the prior send timestamp in
+    the Top Failed Videos panel.
+
+    Failure handling: if Resend is unavailable or the coach has no email on
+    record, returns a 200 with `status: "skipped"` and a `reason` field. The
+    admin sees the reason in the toast — no exception thrown."""
+    _require_admin(current_user)
+
+    # Find the failure event for context
+    ev = await db.processing_events.find_one(
+        {"video_id": body.video_id, "event_type": "final_failure"},
+        {"_id": 0},
+    )
+    if not ev:
+        raise HTTPException(status_code=404, detail="No final_failure event for that video")
+
+    # De-dup check
+    prior = await db.compression_help_sent.find_one(
+        {"video_id": body.video_id}, {"_id": 0, "sent_at": 1, "to_email": 1},
+    )
+    if prior:
+        return {
+            "status": "already_sent",
+            "sent_at": prior.get("sent_at"),
+            "to_email": prior.get("to_email"),
+        }
+
+    video = await db.videos.find_one(
+        {"id": body.video_id},
+        {"_id": 0, "filename": 1, "user_id": 1},
+    ) or {}
+    uid = video.get("user_id") or ev.get("user_id")
+    if not uid:
+        return {"status": "skipped", "reason": "no user_id on video or event"}
+
+    coach = await db.users.find_one(
+        {"id": uid}, {"_id": 0, "email": 1, "name": 1},
+    )
+    if not coach or not coach.get("email"):
+        return {"status": "skipped", "reason": "coach has no email on record"}
+
+    filename = video.get("filename") or "your match film"
+    html = _compression_help_html(
+        coach_name=coach.get("name"),
+        filename=filename,
+        size_gb=ev.get("source_size_gb"),
+        failure_mode=ev.get("failure_mode") or "unknown",
+    )
+    subject = "Your Soccer Scout upload didn't process — quick fix inside"
+
+    from services.email_queue import send_or_queue
+    result = await send_or_queue(
+        to_email=coach["email"],
+        subject=subject,
+        html=html,
+        kind="compression_help",
+        metadata={
+            "video_id": body.video_id,
+            "failure_mode": ev.get("failure_mode"),
+            "size_gb": ev.get("source_size_gb"),
+            "sent_by_admin_id": current_user["id"],
+        },
+    )
+
+    if result.get("status") in ("sent", "quota_deferred"):
+        await db.compression_help_sent.insert_one({
+            "id": f"ch-{body.video_id}",
+            "video_id": body.video_id,
+            "to_email": coach["email"],
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "sent_by_admin_id": current_user["id"],
+            "delivery_status": result.get("status"),
+            "email_id": result.get("email_id"),
+            "queue_id": result.get("queue_id"),
+        })
+        return {
+            "status": result.get("status"),
+            "to_email": coach["email"],
+            "email_id": result.get("email_id"),
+        }
+    return {"status": "skipped", "reason": result.get("error") or "send failed"}
 
 
 @router.post("/admin/processing-alerts/check")

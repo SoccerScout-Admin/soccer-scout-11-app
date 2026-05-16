@@ -65,6 +65,7 @@ const AdminProcessingEvents = () => {
   const [loading, setLoading] = useState(true);
   const [alertResult, setAlertResult] = useState(null);
   const [alertBusy, setAlertBusy] = useState(false);
+  const [emailingVideoId, setEmailingVideoId] = useState(null);
 
   const fetchAll = useCallback(async (selectedDays, hoursForTop) => {
     setLoading(true);
@@ -94,6 +95,38 @@ const AdminProcessingEvents = () => {
     } catch (err) {
       setAlertResult({ action: 'error', error: err.response?.data?.detail || err.message });
     } finally { setAlertBusy(false); }
+  };
+
+  const handleEmailFix = async (videoId, coachEmail) => {
+    if (!coachEmail) {
+      alert("This row has no coach email on record — nothing to send to.");
+      return;
+    }
+    const ok = window.confirm(
+      `Send compression-fix instructions to ${coachEmail}?\n\nThis will trigger one Resend email with HandBrake settings. It's safe to click — repeat clicks on the same row are de-duped server-side.`
+    );
+    if (!ok) return;
+    setEmailingVideoId(videoId);
+    try {
+      const r = await axios.post(
+        `${API}/admin/processing-events/email-compression-help`,
+        { video_id: videoId },
+        { headers: getAuthHeader() }
+      );
+      if (r.data.status === "sent" || r.data.status === "quota_deferred") {
+        alert(`Email ${r.data.status === "sent" ? "sent" : "queued"} to ${r.data.to_email || coachEmail}.`);
+      } else if (r.data.status === "already_sent") {
+        alert(`Already sent to ${r.data.to_email} at ${new Date(r.data.sent_at).toLocaleString()}. Skipped.`);
+      } else {
+        alert(`Skipped: ${r.data.reason || "unknown"}`);
+      }
+      // Refresh to surface the new sent_at timestamp
+      await fetchAll(days, topFailedHours);
+    } catch (err) {
+      alert("Failed to send: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setEmailingVideoId(null);
+    }
   };
 
   const failureModeRows = stats?.by_failure_mode
@@ -193,6 +226,7 @@ const AdminProcessingEvents = () => {
                         <th className="text-left p-2">Coach</th>
                         <th className="text-left p-2">Match</th>
                         <th className="text-left p-2">Failed at</th>
+                        <th className="text-left p-2">Help</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -237,12 +271,32 @@ const AdminProcessingEvents = () => {
                           <td className="p-2 text-[#A3A3A3] whitespace-nowrap">
                             {v.failed_at ? new Date(v.failed_at).toLocaleString() : '—'}
                           </td>
+                          <td className="p-2">
+                            {v.compression_email_sent_at ? (
+                              <span data-testid={`compression-email-sent-${v.video_id}`}
+                                title={`Sent ${new Date(v.compression_email_sent_at).toLocaleString()}`}
+                                className="inline-flex items-center gap-1 text-[10px] text-[#22C55E] font-bold tracking-wider uppercase">
+                                ✓ Sent
+                              </span>
+                            ) : (
+                              <button
+                                data-testid={`email-fix-btn-${v.video_id}`}
+                                onClick={() => handleEmailFix(v.video_id, v.coach_email)}
+                                disabled={!v.coach_email || emailingVideoId === v.video_id}
+                                title={v.coach_email
+                                  ? "Send the coach HandBrake compression instructions"
+                                  : "No coach email on record"}
+                                className="inline-flex items-center gap-1 px-2 py-1 border border-[#FBBF24]/40 bg-[#FBBF24]/10 text-[#FBBF24] hover:bg-[#FBBF24]/20 text-[10px] font-bold tracking-wider uppercase transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                                {emailingVideoId === v.video_id ? 'Sending…' : 'Email fix'}
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                   <p className="text-[10px] text-[#666] mt-3 px-2">
-                    Sorted by source size DESC. Biggest failures point at OOM ceiling or upload-limit UX gaps.
+                    Sorted by source size DESC. Biggest failures point at OOM ceiling or upload-limit UX gaps. "Email fix" sends one Resend email with HandBrake 720p30/CQ28 instructions — de-duped per video.
                   </p>
                 </div>
               )}
