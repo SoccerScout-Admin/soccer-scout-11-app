@@ -67,6 +67,28 @@ const VideoAnalysis = () => {
     if (match?.id) navigate(`/match/${match.id}`);
   }, [match, navigate]);
 
+  // "Delete & re-upload" CTA from the integrity-error banner. We delete the
+  // current video so the match's upload panel comes back, then route the user
+  // to the match page where they can drop in a fresh file. Clips/markers
+  // already attached to OTHER (non-deleted) videos in this match stay.
+  const handleDeleteAndReupload = useCallback(async () => {
+    const ok = window.confirm(
+      "Delete this incomplete video and return to the match page to upload a fresh one?\n\n"
+      + "The match, roster, and any clips you've already created stay intact. Only the broken video file is removed."
+    );
+    if (!ok) return;
+    try {
+      await axios.delete(`${API}/videos/${videoId}`, { headers: getAuthHeader() });
+      if (match?.id) {
+        navigate(`/match/${match.id}`);
+      } else {
+        navigate('/dashboard');
+      }
+    } catch (err) {
+      alert('Failed to delete video: ' + (err.response?.data?.detail || err.message));
+    }
+  }, [videoId, match, navigate]);
+
   const [activeTab, setActiveTab] = useState('overview');
   const [analyzing, setAnalyzing] = useState(false);
   const [annotationMode, setAnnotationMode] = useState(null);
@@ -361,7 +383,10 @@ const VideoAnalysis = () => {
       />
 
       <main className="max-w-[1400px] mx-auto px-6 py-6">
-        <DataIntegrityBanner videoMetadata={videoMetadata} />
+        <DataIntegrityBanner
+          videoMetadata={videoMetadata}
+          processingStatus={processingStatus}
+          onReupload={handleDeleteAndReupload} />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left: Video + Controls */}

@@ -452,7 +452,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter69"
+BUILD_VERSION = "iter70"
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",
@@ -2231,7 +2231,8 @@ async def resume_interrupted_processing():
     try:
         stuck_videos = await db.videos.find(
             {"processing_status": {"$in": ["processing", "queued"]}},
-            {"_id": 0, "id": 1, "user_id": 1}
+            {"_id": 0, "id": 1, "user_id": 1, "is_chunked": 1, "total_chunks": 1,
+             "chunk_paths": 1, "chunk_backends": 1, "file_size_bytes": 1}
         ).to_list(100)
 
         if not stuck_videos:
@@ -2243,6 +2244,46 @@ async def resume_interrupted_processing():
         for video in stuck_videos:
             video_id = video["id"]
             user_id = video["user_id"]
+
+            # Skip videos with incomplete chunk data — re-queueing them is
+            # futile (every retry will hit the same fail-fast guard in
+            # run_auto_processing). Mark them failed once with a clear
+            # actionable error so the user sees the "re-upload required"
+            # state instead of an infinite 0% spinner across restarts.
+            if video.get("is_chunked"):
+                chunk_paths = video.get("chunk_paths", {})
+                chunk_backends = video.get("chunk_backends", {})
+                total = video.get("total_chunks", len(chunk_paths))
+                available = 0
+                for i in range(total):
+                    path = chunk_paths.get(str(i))
+                    if not path:
+                        continue
+                    backend = chunk_backends.get(str(i), "storage")
+                    if backend == "filesystem" and not os.path.exists(path):
+                        continue
+                    available += 1
+                if total > 0 and available < total:
+                    pct = round((available / total) * 100, 1)
+                    msg = (
+                        f"Upload incomplete ({available} of {total} chunks, {pct}%). "
+                        "Re-upload required — AI analysis can't run on a partial file."
+                    )
+                    logger.warning(
+                        f"Skipping resume for {video_id}: integrity={available}/{total} "
+                        f"({pct}%). Marking failed."
+                    )
+                    await db.videos.update_one(
+                        {"id": video_id},
+                        {"$set": {
+                            "processing_status": "failed",
+                            "processing_error": msg,
+                            "processing_progress": 0,
+                            "processing_current": None,
+                            "processing_completed_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                    )
+                    continue
 
             # Check which types are already completed
             completed = set()

@@ -1,6 +1,46 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Partial-Upload Fail-Fast Guard (iter70 — May 2026)
+
+Real production bug 2026-05-16 (video `48823490-f162-...`, 9.67 GB, 980/991 chunks = 99%) sat at 0% forever showing "Server restarted — processing resumed automatically. Preparing video for AI analysis." Root cause: the upload itself was incomplete (11 chunks missing), but the system kept resuming and re-queueing — every pod restart hit the same incomplete-data wall. ffmpeg either silently produced a broken sample or got OOM-killed on the partial 9.67 GB source.
+
+iter70 closes the loop with three guards:
+
+### (a) Fail-fast guard in `services/processing.py::run_auto_processing`
+- New `_check_chunk_integrity(video)` helper mirrors the same logic used by `/api/videos/{id}/metadata` — counts chunk paths actually present on disk vs. `total_chunks`.
+- BEFORE the ffmpeg call, if integrity != "full", we mark the video `failed` with `processing_error: "Upload incomplete (980 of 991 chunks, 99.0%). Re-upload required — AI analysis can't run on a partial file."` and log a `final_failure / failure_mode=incomplete_upload` processing event for the admin dashboard.
+- Result: no more silent OOM-loops, no more hung 0% UI.
+
+### (b) Resume-skip in `server.py::resume_interrupted_processing`
+- On every pod restart, before re-queueing stuck `queued`/`processing` videos, run the same integrity check.
+- Partial-integrity videos are marked `failed` with the same actionable error — once — instead of being re-queued forever across restarts.
+- Net: a partial upload now fails fast on the FIRST restart instead of spinning forever.
+
+### (c) Frontend escalation: red "RE-UPLOAD REQUIRED" callout in `DataIntegrityBanner`
+- Existing amber "Partial video data" banner kept for the "playback may end early but AI can still run on what's here" case.
+- Escalated to a **red `RE-UPLOAD REQUIRED` callout** with a one-click "DELETE & RE-UPLOAD" CTA when ANY of:
+  - `data_integrity == "unavailable"`
+  - `processing_status == "failed"` (regardless of why)
+  - `processing_error` contains "upload incomplete"
+  - Stuck-at-zero for >120s in `queued`/`processing` (catches the prior "infinite 0% spinner" case from this session's prod bug)
+- The CTA calls `DELETE /api/videos/{id}` then navigates back to the match page where the upload UI is ready for a fresh file. Match, roster, and existing clips stay intact.
+
+### Tests
+- New `test_partial_upload_failfast.py` with 5 cases:
+  - 3 unit tests on `_check_chunk_integrity` (full / partial / unavailable)
+  - 1 integration test: incomplete chunked video → run_auto_processing → marked `failed` with correct error string
+  - 1 integration test: incomplete chunked video → resume_interrupted_processing → marked `failed`, NOT re-queued
+- Integration tests run in subprocess so Motor's loop-bound `db` object doesn't leak across sibling test files.
+- Full regression: 38/38 tests pass across touched suites (`test_partial_upload_failfast.py`, `test_processing_events.py`, `test_processing_events_top_failed.py`, `test_processing_alerts.py`, `test_quick_attach_and_compression_email.py`, `test_ffmpeg_error_classification.py`).
+
+### Immediate production workaround
+The fix is in preview only — the stuck video on production (`soccerscout11.com/video/48823490-f162-4f7c-a771-6a84188fde4d`) will remain stuck until either (a) the user deletes it and re-uploads, or (b) iter70 is deployed and the next pod restart marks it failed cleanly via the new resume-skip guard.
+
+BUILD_VERSION → **iter70**, feature_count 77.
+
+
+
 ## Quick-Attach Pill + Compression-Help Email (iter69 — May 2026)
 
 Two complementary triage features shipped together: one for coaches (faster roster setup), one for admins (closed-loop support on failed uploads).

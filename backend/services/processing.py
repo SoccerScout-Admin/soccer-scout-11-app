@@ -602,6 +602,37 @@ async def prepare_video_segments_720p(video: dict) -> tuple:
         raise
 
 
+async def _check_chunk_integrity(video: dict) -> tuple[str, int, int]:
+    """Return (integrity, available, total) for a chunked video. Mirrors the
+    logic in routes/videos.py::get_video_metadata so the UI banner and the
+    processing fail-fast guard agree on what counts as "incomplete".
+
+    Returns ("full", N, N) for non-chunked videos (we trust that single-shot
+    uploads either fully landed or never created a video document at all).
+    """
+    if not video.get("is_chunked"):
+        return ("full", 0, 0)
+    chunk_paths = video.get("chunk_paths", {})
+    chunk_backends = video.get("chunk_backends", {})
+    total = video.get("total_chunks", len(chunk_paths))
+    available = 0
+    for i in range(total):
+        path = chunk_paths.get(str(i))
+        if not path:
+            continue
+        backend = chunk_backends.get(str(i), "storage")
+        if backend == "filesystem" and not os.path.exists(path):
+            continue
+        available += 1
+    if total == 0:
+        return ("full", 0, 0)
+    if available == total:
+        return ("full", available, total)
+    if available > 0:
+        return ("partial", available, total)
+    return ("unavailable", available, total)
+
+
 async def run_auto_processing(
     video_id: str,
     user_id: str,
@@ -629,6 +660,43 @@ async def run_auto_processing(
         video = await db.videos.find_one({"id": video_id}, {"_id": 0})
         if not video:
             logger.error(f"Auto-processing: video {video_id} not found")
+            return
+
+        # Fail-fast on incomplete uploads. Without this, prepare_video_sample
+        # would either silently produce a broken sample or get OOM-killed
+        # mid-pass on a 9 GB+ source — and the user would just see the
+        # processing-status banner sit at 0% forever (real production bug
+        # 2026-05-16, video 48823490, 980/991 chunks).
+        integrity, available, total = await _check_chunk_integrity(video)
+        if integrity != "full":
+            pct = round((available / total) * 100, 1) if total else 0
+            msg = (
+                f"Upload incomplete ({available} of {total} chunks, {pct}%). "
+                "Re-upload required — AI analysis can't run on a partial file."
+            )
+            logger.error(f"Auto-processing: refusing to process {video_id}: {msg}")
+            await db.videos.update_one(
+                {"id": video_id},
+                {"$set": {
+                    "processing_status": "failed",
+                    "processing_error": msg,
+                    "processing_progress": 0,
+                    "processing_current": None,
+                    "processing_completed_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            try:
+                await _log_event(
+                    video_id=video_id,
+                    user_id=user_id,
+                    event_type="final_failure",
+                    failure_mode="incomplete_upload",
+                    source_size_gb=(video.get("file_size_bytes") or 0) / (1024 ** 3) or None,
+                    error_message=msg,
+                )
+            except Exception:
+                # Instrumentation must never break the pipeline it instruments
+                pass
             return
 
         match = await db.matches.find_one({"id": video["match_id"]}, {"_id": 0})
