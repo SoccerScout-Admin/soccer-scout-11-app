@@ -15,10 +15,12 @@ import uuid
 import os
 import tempfile
 import subprocess
+import time
 from datetime import datetime, timezone
 from starlette.concurrency import run_in_threadpool
 from db import db, CHUNK_SIZE
 from services.storage import read_chunk_data, get_object_sync
+from services.processing_events import log_event as _log_event
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +271,8 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
             ]
 
         last_error_msg = None
+        video_id_for_log = video.get("id", "unknown")
+        user_id_for_log = video.get("user_id", "unknown")
         for tier_idx, (scale_filter, fps, crf, tier_timeout, label) in enumerate(tiers):
             ffmpeg_cmd = ["ffmpeg", "-y"]
             if trim_start is not None and trim_start > 0:
@@ -292,6 +296,12 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
             ]
 
             logger.info(f"Compressing video tier {tier_idx} ({label}) trim={trim_start}-{trim_end}, src={video_size_gb:.1f}GB")
+            tier_started = time.time()
+            await _log_event(
+                video_id=video_id_for_log, user_id=user_id_for_log,
+                event_type="tier_attempt", tier_idx=tier_idx, tier_label=label,
+                source_size_gb=video_size_gb,
+            )
             try:
                 result = await run_in_threadpool(
                     subprocess.run, ffmpeg_cmd,
@@ -300,11 +310,18 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
             except subprocess.TimeoutExpired:
                 # Timeout is transient enough to warrant a retry at smaller
                 # scale. If we're already on the last tier, escalate to user.
+                tier_duration = time.time() - tier_started
                 last_error_msg = (
                     f"ffmpeg timed out after {tier_timeout // 60} min on a {video_size_gb:.1f}GB source. "
                     "Try trimming the match (only the first/second half), or compress further (CQ 28 / 720p in HandBrake)."
                 )
                 logger.warning(f"Tier {tier_idx} ({label}) timed out — escalating to next tier if available")
+                await _log_event(
+                    video_id=video_id_for_log, user_id=user_id_for_log,
+                    event_type="tier_failed", tier_idx=tier_idx, tier_label=label,
+                    failure_mode="timeout", duration_seconds=tier_duration,
+                    source_size_gb=video_size_gb, error_message=last_error_msg,
+                )
                 # Clean partial output before retrying
                 if os.path.exists(clip_path):
                     try:
@@ -316,9 +333,21 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
             # Success?
             if result.returncode == 0 and os.path.exists(clip_path) and os.path.getsize(clip_path) > 1000:
                 clip_size = os.path.getsize(clip_path)
+                tier_duration = time.time() - tier_started
                 if tier_idx > 0:
                     logger.warning(f"Tier {tier_idx} ({label}) succeeded after earlier tier failures — using degraded preset")
                 logger.info(f"Created {clip_size/(1024*1024):.1f}MB compressed video for AI ({label})")
+                await _log_event(
+                    video_id=video_id_for_log, user_id=user_id_for_log,
+                    event_type="tier_succeeded", tier_idx=tier_idx, tier_label=label,
+                    source_size_gb=video_size_gb, output_size_mb=clip_size / (1024 * 1024),
+                    duration_seconds=tier_duration,
+                )
+                await _log_event(
+                    video_id=video_id_for_log, user_id=user_id_for_log,
+                    event_type="final_success", tier_idx=tier_idx, tier_label=label,
+                    source_size_gb=video_size_gb, output_size_mb=clip_size / (1024 * 1024),
+                )
                 # Free the raw video before returning
                 if os.path.exists(raw_path):
                     try:
@@ -330,14 +359,36 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
             # Failed — classify so we know whether to retry or bail.
             stderr = result.stderr[-1000:] if result.stderr else ""
             stderr_lower = stderr.lower()
+            tier_duration = time.time() - tier_started
 
             # Deterministic failures: do NOT retry — smaller scale won't help.
             if "moov atom not found" in stderr_lower:
-                raise Exception("Video file is incomplete (moov atom missing). Please re-upload — the chunked transfer didn't finalize cleanly.")
+                msg = "Video file is incomplete (moov atom missing). Please re-upload — the chunked transfer didn't finalize cleanly."
+                await _log_event(
+                    video_id=video_id_for_log, user_id=user_id_for_log,
+                    event_type="final_failure", tier_idx=tier_idx, tier_label=label,
+                    failure_mode="moov_missing", duration_seconds=tier_duration,
+                    source_size_gb=video_size_gb, error_message=msg,
+                )
+                raise Exception(msg)
             if "invalid data found" in stderr_lower:
-                raise Exception("File doesn't look like a valid video. Please re-export as MP4 (H.264) and upload again.")
+                msg = "File doesn't look like a valid video. Please re-export as MP4 (H.264) and upload again."
+                await _log_event(
+                    video_id=video_id_for_log, user_id=user_id_for_log,
+                    event_type="final_failure", tier_idx=tier_idx, tier_label=label,
+                    failure_mode="invalid_data", duration_seconds=tier_duration,
+                    source_size_gb=video_size_gb, error_message=msg,
+                )
+                raise Exception(msg)
             if "no space left on device" in stderr_lower:
-                raise Exception("Server disk is full. Please retry in a few minutes — auto-cleanup will free space.")
+                msg = "Server disk is full. Please retry in a few minutes — auto-cleanup will free space."
+                await _log_event(
+                    video_id=video_id_for_log, user_id=user_id_for_log,
+                    event_type="final_failure", tier_idx=tier_idx, tier_label=label,
+                    failure_mode="no_space", duration_seconds=tier_duration,
+                    source_size_gb=video_size_gb, error_message=msg,
+                )
+                raise Exception(msg)
 
             # Transient failures: retry at smaller scale.
             if result.returncode in (-9, 137) or "killed" in stderr_lower:
@@ -346,6 +397,12 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
                     "Compress further (HandBrake → Fast 720p30 / CQ 28) or split the match film in half and upload each half as a separate match."
                 )
                 logger.warning(f"Tier {tier_idx} ({label}) OOM/killed — escalating to next tier if available")
+                await _log_event(
+                    video_id=video_id_for_log, user_id=user_id_for_log,
+                    event_type="tier_failed", tier_idx=tier_idx, tier_label=label,
+                    failure_mode="oom", duration_seconds=tier_duration,
+                    source_size_gb=video_size_gb, error_message=last_error_msg,
+                )
                 if os.path.exists(clip_path):
                     try:
                         os.unlink(clip_path)
@@ -356,7 +413,14 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
             # Unknown failure — bail with stderr tail so the cause is visible.
             tail = stderr.strip().split("\n")[-1] if stderr.strip() else f"exit code {result.returncode}"
             logger.error(f"ffmpeg compress failed (tier {tier_idx} {label}): rc={result.returncode}, stderr={stderr}")
-            raise Exception(f"ffmpeg failed: {tail[:200]}")
+            msg = f"ffmpeg failed: {tail[:200]}"
+            await _log_event(
+                video_id=video_id_for_log, user_id=user_id_for_log,
+                event_type="final_failure", tier_idx=tier_idx, tier_label=label,
+                failure_mode="unknown", duration_seconds=tier_duration,
+                source_size_gb=video_size_gb, error_message=msg,
+            )
+            raise Exception(msg)
 
         # All tiers exhausted — surface the last classified message (already
         # set to a coach-friendly string by the OOM/timeout branches above).
@@ -365,6 +429,15 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
                 os.unlink(raw_path)
             except Exception:
                 pass
+        # We previously logged tier_failed events; emit one summary final_failure
+        # so dashboards/queries can group by "did this video ever succeed?".
+        await _log_event(
+            video_id=video_id_for_log, user_id=user_id_for_log,
+            event_type="final_failure", tier_idx=len(tiers) - 1,
+            tier_label="all_tiers_exhausted",
+            failure_mode="oom" if last_error_msg and "memory" in last_error_msg.lower() else "timeout",
+            source_size_gb=video_size_gb, error_message=last_error_msg,
+        )
         raise Exception(last_error_msg or "Video processing failed at every scaling tier. Please trim or compress further.")
 
     except Exception:

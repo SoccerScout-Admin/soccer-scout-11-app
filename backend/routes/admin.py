@@ -248,3 +248,105 @@ async def get_game_of_the_week():
         return {"active": False}
     days_remaining = 7 - age_days
     return {"active": True, "days_remaining": days_remaining, **doc}
+
+
+
+@router.get("/admin/processing-events/stats")
+async def processing_events_stats(
+    days: int = 30,
+    current_user: dict = Depends(get_current_user),
+):
+    """Aggregated view of the video-processing pipeline's health.
+
+    Returns counts grouped by event_type + failure_mode + tier, plus a few
+    derived rates that matter operationally:
+      - retry_save_rate: % of tier-0 failures that recovered at tier 1
+      - oom_rate: % of pipeline runs that hit OOM at any tier
+      - final_success_rate: % of started videos that fully succeeded
+
+    Use this to decide whether to bump pod memory limits, change default
+    tier-0 scale settings, or warn users earlier when uploads are too large.
+    """
+    _require_admin(current_user)
+    from datetime import timedelta
+    since = (datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 365)))).isoformat()
+
+    cursor = db.processing_events.find(
+        {"created_at": {"$gte": since}},
+        {"_id": 0},
+    ).sort("created_at", -1).limit(5000)
+    events = await cursor.to_list(5000)
+
+    by_event_type = {}
+    by_failure_mode = {}
+    by_tier = {}
+    tier0_oom_count = 0
+    tier1_success_after_tier0_failure = 0
+    final_success = 0
+    final_failure = 0
+    tier_attempts_per_video = {}  # video_id → max tier_idx seen
+
+    for ev in events:
+        et = ev.get("event_type", "unknown")
+        by_event_type[et] = by_event_type.get(et, 0) + 1
+        if ev.get("failure_mode"):
+            by_failure_mode[ev["failure_mode"]] = by_failure_mode.get(ev["failure_mode"], 0) + 1
+        if ev.get("tier_label"):
+            key = f"tier{ev.get('tier_idx')}: {ev['tier_label']}"
+            by_tier[key] = by_tier.get(key, 0) + 1
+
+        if et == "tier_failed" and ev.get("tier_idx") == 0 and ev.get("failure_mode") == "oom":
+            tier0_oom_count += 1
+        if et == "tier_succeeded" and ev.get("tier_idx", 0) > 0:
+            tier1_success_after_tier0_failure += 1
+        if et == "final_success":
+            final_success += 1
+        if et == "final_failure":
+            final_failure += 1
+
+        vid = ev.get("video_id")
+        if vid and ev.get("tier_idx") is not None:
+            tier_attempts_per_video[vid] = max(tier_attempts_per_video.get(vid, 0), ev["tier_idx"])
+
+    total_finals = final_success + final_failure
+    final_success_rate = round(final_success / total_finals * 100, 1) if total_finals else None
+    retry_save_rate = (
+        round(tier1_success_after_tier0_failure / tier0_oom_count * 100, 1)
+        if tier0_oom_count else None
+    )
+
+    return {
+        "window_days": days,
+        "since": since,
+        "total_events": len(events),
+        "by_event_type": by_event_type,
+        "by_failure_mode": by_failure_mode,
+        "by_tier": by_tier,
+        "summary": {
+            "final_success": final_success,
+            "final_failure": final_failure,
+            "final_success_rate_pct": final_success_rate,
+            "tier0_oom_count": tier0_oom_count,
+            "tier1_recoveries": tier1_success_after_tier0_failure,
+            "retry_save_rate_pct": retry_save_rate,
+            "unique_videos": len(tier_attempts_per_video),
+        },
+    }
+
+
+@router.get("/admin/processing-events/recent")
+async def processing_events_recent(
+    limit: int = 50,
+    event_type: Optional[str] = None,
+    failure_mode: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Recent event tail for debugging. Filter by event_type or failure_mode."""
+    _require_admin(current_user)
+    q: dict = {}
+    if event_type:
+        q["event_type"] = event_type
+    if failure_mode:
+        q["failure_mode"] = failure_mode
+    cursor = db.processing_events.find(q, {"_id": 0}).sort("created_at", -1).limit(max(1, min(limit, 500)))
+    return await cursor.to_list(500)

@@ -1,6 +1,35 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Processing-Events Instrumentation (iter64 — Feb 2026)
+
+User asked for visibility into the iter63 auto-retry: "would be useful to size your pod's memory limits when you scale."
+
+**New collection** `processing_events` — append-only log of every ffmpeg attempt in `prepare_video_sample`. ~250 bytes per event, ~3 events per upload (tier_attempt → tier_failed → tier_succeeded or final_failure). Trivial disk pressure even at scale.
+
+**Logged event types**: `tier_attempt`, `tier_succeeded`, `tier_failed`, `final_success`, `final_failure`.
+**Failure modes tracked**: `oom`, `timeout`, `moov_missing`, `invalid_data`, `no_space`, `unknown`.
+
+**New file** `services/processing_events.py` — single `log_event(...)` async helper. Errors during logging are swallowed (a pipeline-breaking log is worse than a missing log).
+
+**Instrumentation in** `services/processing.py::prepare_video_sample` — each tier attempt + outcome + duration is logged. Final success/failure events let admin queries answer "of N videos attempted, M succeeded".
+
+**Two new admin endpoints** (`routes/admin.py`, both `_require_admin`-gated):
+- `GET /api/admin/processing-events/stats?days=N` — aggregated counts grouped by event_type / failure_mode / tier_label PLUS derived rates:
+  - `final_success_rate_pct` — overall pipeline health
+  - `retry_save_rate_pct` — % of tier-0 OOMs that recovered at tier 1 (justifies keeping the retry tier)
+  - `tier0_oom_count` / `tier1_recoveries` — for sizing pod memory limits
+- `GET /api/admin/processing-events/recent?limit=N&event_type=X&failure_mode=Y` — recent event tail for debugging
+
+**Tests added** (`tests/test_processing_events.py` — 4 tests):
+- Stats endpoint aggregates correctly with seeded fixture events
+- Recent endpoint filters by event_type
+- Both endpoints reject unauthenticated calls (401/403)
+
+**Test totals**: 33/33 passing across all touched suites.
+
+
+
 ## Blank-Screen Fix + FFmpeg Auto-Retry + JSX-no-undef Regression Test (iter63 — Feb 2026)
 
 User reported on production after iter62 deploy: "I just get a blank screen when I click on games that have videos uploaded." Reproduced in preview via Playwright — found the root cause and another lurking bug of the same class.
