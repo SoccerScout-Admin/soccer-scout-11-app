@@ -1,6 +1,36 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Code-Review Complexity Refactors (iter66 — Feb 2026)
+
+User submitted a code-quality report. Audited each finding before touching code:
+
+**Items 1-3 were FALSE POSITIVES** — verified and explained, no changes:
+- "Hardcoded secrets": Each flagged line was either a randomly-generated UUID per test (`token = "vwtk-" + uuid.uuid4().hex[:8]`) or the HTTP standard cookie name "access_token=" (not a credential).
+- "10 undefined variables": Both `pyflakes` and `ruff --select F821,F823,F841` reported zero matches. Tool error.
+- "`is` vs `==` anti-pattern": Every flagged instance was `is None` / `is not None` / `is True` / `is False` — PEP 8-mandated idiomatic Python. Grep for the actual anti-pattern (`is "literal"` or `is integer`) returned zero hits in code (2 false matches in comments). Python compiler raised zero SyntaxWarnings.
+
+**Item 4 — Complexity refactors — LEGITIMATE, all 5 functions fixed:**
+
+| Function | Before | After |
+|---|---|---|
+| `routes/admin.py::processing_events_stats` | CC=15, 79 lines, 17 vars | CC=2, 48 lines (extracted `_bucket_groupings`, `_bucket_outcome_counters`, `_derive_rates`) |
+| `routes/insights.py::generate_match_insights` | CC=19, 122 lines, 19 vars | CC=3, 15 lines (extracted `_load_match_signal`, `_build_insights_prompt`, `_call_gemini_insights`, `_shape_insights_response`, `_format_marker_lines`, `_summarize_clip_types`) |
+| `routes/matches.py::_build_match_recap_prompt` | CC=16 | CC=7 (extracted `_derive_recap_outcome`, `_format_match_event_lines`) |
+| `routes/matches.py::_deterministic_recap` | CC=15 | CC=10 (extracted `_recap_verb`) |
+| `routes/highlight_reels.py::browse_public_reels` | CC=22, 79 lines, 19 vars | CC=6 (extracted `_load_reels_with_context`, `_reel_passes_filter`, `_build_reel_card`, `_reel_context`) |
+| `routes/highlight_reels.py::my_reel_stats` | CC=14, 77 lines | CC=5 (extracted `_reel_counters`, `_aggregate_7d_views`, `_resolve_top_reel`) |
+
+All extracted helpers are pure or single-purpose — improves testability without changing observable behavior. Behavior parity verified by re-running the full touched-files test suite: **122/122 passing** (including 43 highlight_reel tests, 7 finish_match tests, 8 match_roster_first tests, 11 ffmpeg classification tests, 6 processing_alerts tests).
+
+**Bug caught + fixed during refactor**: My initial `browse_public_reels` rewrite accidentally dropped the `@router.get("/highlight-reels/browse")` decorator and attached it to the wrong helper instead, producing a 422 on the public browse endpoint. Caught by `test_browse_response_hides_user_id` failing. Restored decorator → tests green.
+
+**Test isolation fix**: 2 `test_processing_alerts.py` tests failed when running on the shared preview DB because real iter65 dev-time events polluted the 1-hour query window. Fixed by monkey-patching `_compute_last_hour_stats` per test to scope only to the test's sentinel video_id.
+
+BUILD_VERSION → **iter66**, feature_count 73.
+
+
+
 ## Admin Dashboard + Auto-Alert Spike Detector (iter65 — Feb 2026)
 
 User asked for both: admin UI for the iter64 processing-events stats AND auto-alert on failure spikes. Both shipped.

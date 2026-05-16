@@ -360,17 +360,24 @@ class FinishMatchResponse(BaseModel):
     finished_at: str
 
 
-def _build_match_recap_prompt(match: dict) -> str:
-    """Compact, fact-rich prompt the LLM can turn into a 1-paragraph narrative."""
-    mr = match.get("manual_result") or {}
-    home, away = match.get("team_home", "Home"), match.get("team_away", "Away")
-    hs, as_ = mr.get("home_score", 0), mr.get("away_score", 0)
-    outcome = mr.get("outcome") or ("W" if hs > as_ else "L" if hs < as_ else "D")
-    competition = match.get("competition") or "Friendly"
-    notes = (mr.get("notes") or "").strip()
-    events = mr.get("events") or []
+def _derive_recap_outcome(mr: dict) -> str:
+    """Resolve the outcome character (W/L/D) from manual_result. Falls back to
+    score comparison if outcome isn't explicit."""
+    explicit = mr.get("outcome")
+    if explicit:
+        return explicit
+    hs = mr.get("home_score", 0)
+    as_ = mr.get("away_score", 0)
+    if hs > as_:
+        return "W"
+    if hs < as_:
+        return "L"
+    return "D"
 
-    event_lines = []
+
+def _format_match_event_lines(events: list) -> list[str]:
+    """Render the user-recorded events list as compact bullet lines for the prompt."""
+    lines = []
     for e in events:
         minute = e.get("minute") or 0
         team = e.get("team") or "—"
@@ -379,15 +386,29 @@ def _build_match_recap_prompt(match: dict) -> str:
         line = f"  • {minute}' — {team}: {kind}"
         if desc:
             line += f" ({desc})"
-        event_lines.append(line)
+        lines.append(line)
+    return lines
+
+
+def _build_match_recap_prompt(match: dict) -> str:
+    """Compact, fact-rich prompt the LLM can turn into a 1-paragraph narrative."""
+    mr = match.get("manual_result") or {}
+    home, away = match.get("team_home", "Home"), match.get("team_away", "Away")
+    hs, as_ = mr.get("home_score", 0), mr.get("away_score", 0)
+    outcome = _derive_recap_outcome(mr)
+    competition = match.get("competition") or "Friendly"
+    notes = (mr.get("notes") or "").strip()
+    events = mr.get("events") or []
+    event_lines = _format_match_event_lines(events)
+    event_block = "\n".join(event_lines) if event_lines else "  (none recorded)"
+    notes_block = f"\nCoach's notes:\n{notes}" if notes else ""
 
     return (
         f"Match: {home} vs {away}\n"
         f"Final score: {hs}-{as_} ({outcome} for {home})\n"
         f"Competition: {competition}\n"
         f"Date: {match.get('date', 'unknown')}\n"
-        f"Events ({len(events)}):\n" + ("\n".join(event_lines) if event_lines else "  (none recorded)")
-        + (f"\nCoach's notes:\n{notes}" if notes else "")
+        f"Events ({len(events)}):\n{event_block}{notes_block}"
     )
 
 
@@ -426,24 +447,25 @@ async def _generate_match_recap(match: dict) -> Optional[str]:
         return None
 
 
+def _recap_verb(outcome: str) -> str:
+    if outcome == "W":
+        return "took the win"
+    if outcome == "L":
+        return "fell"
+    return "drew"
+
+
 def _deterministic_recap(match: dict) -> str:
     """Plain-English fallback when LLM isn't available or fails."""
     mr = match.get("manual_result") or {}
     home, away = match.get("team_home", "Home"), match.get("team_away", "Away")
     hs, as_ = mr.get("home_score", 0), mr.get("away_score", 0)
-    outcome = mr.get("outcome") or ("W" if hs > as_ else "L" if hs < as_ else "D")
+    outcome = _derive_recap_outcome(mr)
     competition = match.get("competition") or "Friendly"
     events = mr.get("events") or []
     goals = [e for e in events if (e.get("type") or "").lower() == "goal"]
 
-    if outcome == "W":
-        verb = "took the win"
-    elif outcome == "L":
-        verb = "fell"
-    else:
-        verb = "drew"
-
-    intro = f"{home} {verb} {hs}-{as_} against {away} in {competition}."
+    intro = f"{home} {_recap_verb(outcome)} {hs}-{as_} against {away} in {competition}."
     if goals:
         goal_summary = ", ".join(
             f"{g.get('minute', '?')}' {g.get('team', '—')}" for g in goals[:6]

@@ -251,6 +251,73 @@ async def get_game_of_the_week():
 
 
 
+def _bucket_groupings(ev: dict, buckets: dict) -> None:
+    """Increment the grouped-counter dicts (by_event_type, by_failure_mode,
+    by_tier). Pure dict mutation, no derived logic."""
+    et = ev.get("event_type", "unknown")
+    buckets["by_event_type"][et] = buckets["by_event_type"].get(et, 0) + 1
+
+    fm = ev.get("failure_mode")
+    if fm:
+        buckets["by_failure_mode"][fm] = buckets["by_failure_mode"].get(fm, 0) + 1
+
+    tl = ev.get("tier_label")
+    if tl:
+        key = f"tier{ev.get('tier_idx')}: {tl}"
+        buckets["by_tier"][key] = buckets["by_tier"].get(key, 0) + 1
+
+
+def _bucket_outcome_counters(ev: dict, buckets: dict) -> None:
+    """Bump the named outcome counters (tier0_oom, tier1_recoveries, final_*).
+    Mutually exclusive elif chain keeps CC manageable."""
+    et = ev.get("event_type", "unknown")
+    fm = ev.get("failure_mode")
+
+    if et == "tier_failed" and ev.get("tier_idx") == 0 and fm == "oom":
+        buckets["tier0_oom_count"] += 1
+    elif et == "tier_succeeded" and ev.get("tier_idx", 0) > 0:
+        buckets["tier1_recoveries"] += 1
+    elif et == "final_success":
+        buckets["final_success"] += 1
+    elif et == "final_failure":
+        buckets["final_failure"] += 1
+
+    vid = ev.get("video_id")
+    if vid and ev.get("tier_idx") is not None:
+        prior = buckets["tier_attempts_per_video"].get(vid, 0)
+        buckets["tier_attempts_per_video"][vid] = max(prior, ev["tier_idx"])
+
+
+def _bucket_event(ev: dict, buckets: dict) -> None:
+    """Dispatch one event into all of the aggregator buckets.
+
+    Extracted from processing_events_stats() to keep its cyclomatic
+    complexity under the 10-rule limit. Splits further into _groupings
+    and _outcome_counters because the combined branch count was 12 — over
+    the same threshold."""
+    _bucket_groupings(ev, buckets)
+    _bucket_outcome_counters(ev, buckets)
+
+
+def _derive_rates(b: dict) -> dict:
+    """Compute the % rates from the raw counters in `b`. Pure function, no I/O."""
+    total_finals = b["final_success"] + b["final_failure"]
+    final_success_rate = round(b["final_success"] / total_finals * 100, 1) if total_finals else None
+    retry_save_rate = (
+        round(b["tier1_recoveries"] / b["tier0_oom_count"] * 100, 1)
+        if b["tier0_oom_count"] else None
+    )
+    return {
+        "final_success": b["final_success"],
+        "final_failure": b["final_failure"],
+        "final_success_rate_pct": final_success_rate,
+        "tier0_oom_count": b["tier0_oom_count"],
+        "tier1_recoveries": b["tier1_recoveries"],
+        "retry_save_rate_pct": retry_save_rate,
+        "unique_videos": len(b["tier_attempts_per_video"]),
+    }
+
+
 @router.get("/admin/processing-events/stats")
 async def processing_events_stats(
     days: int = 30,
@@ -266,71 +333,40 @@ async def processing_events_stats(
 
     Use this to decide whether to bump pod memory limits, change default
     tier-0 scale settings, or warn users earlier when uploads are too large.
+
+    Refactored iter66 — extracted _bucket_event() and _derive_rates() to
+    keep this function under the 50-line / CC-10 / 15-locals limits.
     """
     _require_admin(current_user)
     from datetime import timedelta
     since = (datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 365)))).isoformat()
 
     cursor = db.processing_events.find(
-        {"created_at": {"$gte": since}},
-        {"_id": 0},
+        {"created_at": {"$gte": since}}, {"_id": 0},
     ).sort("created_at", -1).limit(5000)
     events = await cursor.to_list(5000)
 
-    by_event_type = {}
-    by_failure_mode = {}
-    by_tier = {}
-    tier0_oom_count = 0
-    tier1_success_after_tier0_failure = 0
-    final_success = 0
-    final_failure = 0
-    tier_attempts_per_video = {}  # video_id → max tier_idx seen
-
+    buckets = {
+        "by_event_type": {},
+        "by_failure_mode": {},
+        "by_tier": {},
+        "tier0_oom_count": 0,
+        "tier1_recoveries": 0,
+        "final_success": 0,
+        "final_failure": 0,
+        "tier_attempts_per_video": {},
+    }
     for ev in events:
-        et = ev.get("event_type", "unknown")
-        by_event_type[et] = by_event_type.get(et, 0) + 1
-        if ev.get("failure_mode"):
-            by_failure_mode[ev["failure_mode"]] = by_failure_mode.get(ev["failure_mode"], 0) + 1
-        if ev.get("tier_label"):
-            key = f"tier{ev.get('tier_idx')}: {ev['tier_label']}"
-            by_tier[key] = by_tier.get(key, 0) + 1
-
-        if et == "tier_failed" and ev.get("tier_idx") == 0 and ev.get("failure_mode") == "oom":
-            tier0_oom_count += 1
-        if et == "tier_succeeded" and ev.get("tier_idx", 0) > 0:
-            tier1_success_after_tier0_failure += 1
-        if et == "final_success":
-            final_success += 1
-        if et == "final_failure":
-            final_failure += 1
-
-        vid = ev.get("video_id")
-        if vid and ev.get("tier_idx") is not None:
-            tier_attempts_per_video[vid] = max(tier_attempts_per_video.get(vid, 0), ev["tier_idx"])
-
-    total_finals = final_success + final_failure
-    final_success_rate = round(final_success / total_finals * 100, 1) if total_finals else None
-    retry_save_rate = (
-        round(tier1_success_after_tier0_failure / tier0_oom_count * 100, 1)
-        if tier0_oom_count else None
-    )
+        _bucket_event(ev, buckets)
 
     return {
         "window_days": days,
         "since": since,
         "total_events": len(events),
-        "by_event_type": by_event_type,
-        "by_failure_mode": by_failure_mode,
-        "by_tier": by_tier,
-        "summary": {
-            "final_success": final_success,
-            "final_failure": final_failure,
-            "final_success_rate_pct": final_success_rate,
-            "tier0_oom_count": tier0_oom_count,
-            "tier1_recoveries": tier1_success_after_tier0_failure,
-            "retry_save_rate_pct": retry_save_rate,
-            "unique_videos": len(tier_attempts_per_video),
-        },
+        "by_event_type": buckets["by_event_type"],
+        "by_failure_mode": buckets["by_failure_mode"],
+        "by_tier": buckets["by_tier"],
+        "summary": _derive_rates(buckets),
     }
 
 

@@ -23,6 +23,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -206,6 +207,52 @@ async def trending_reels(limit: int = 12, days: int = 7):
     return {"reels": out[:limit], "window_days": days}
 
 
+def _reel_counters(my_reels: list) -> dict:
+    """Compute the simple per-reel-list counters (totals/ready/shared)."""
+    return {
+        "total_reels": len(my_reels),
+        "ready_reels": sum(1 for r in my_reels if r.get("status") == "ready"),
+        "shared_reels": sum(1 for r in my_reels if r.get("share_token")),
+    }
+
+
+async def _aggregate_7d_views(reel_ids: list[str]) -> tuple[int, list]:
+    """Return (total_7d_views, rows_sorted_desc_by_view_count) for the given
+    set of reel IDs. rows shape: [{_id: reel_id, view_count: int}, ...]"""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    pipeline = [
+        {"$match": {"reel_id": {"$in": reel_ids}, "viewed_at": {"$gt": cutoff}}},
+        {"$group": {"_id": "$reel_id", "view_count": {"$sum": 1}}},
+        {"$sort": {"view_count": -1}},
+    ]
+    rows = await db.highlight_reel_views.aggregate(pipeline).to_list(len(reel_ids) or 1)
+    return sum(r["view_count"] for r in rows), rows
+
+
+async def _resolve_top_reel(rows: list, my_lookup: dict) -> Optional[dict]:
+    """Find the highest-view, still-active (ready + shared) reel and shape it
+    into the dashboard card. Returns None if no eligible reel found."""
+    for row in rows:
+        r = my_lookup.get(row["_id"])
+        if not r or r.get("status") != "ready" or not r.get("share_token"):
+            continue
+        match = await db.matches.find_one(
+            {"id": r["match_id"]},
+            {"_id": 0, "team_home": 1, "team_away": 1},
+        )
+        return {
+            "id": r["id"],
+            "share_token": r["share_token"],
+            "team_home": (match or {}).get("team_home", ""),
+            "team_away": (match or {}).get("team_away", ""),
+            "view_count": row["view_count"],
+            "total_clips": r.get("total_clips", 0),
+            "duration_seconds": r.get("duration_seconds", 0.0),
+        }
+    return None
+
+
 @router.get("/highlight-reels/my-stats")
 async def my_reel_stats(current_user: dict = Depends(get_current_user)):
     """Dashboard card data — the owner's own reel stats.
@@ -215,76 +262,28 @@ async def my_reel_stats(current_user: dict = Depends(get_current_user)):
       - views_7d, views_all_time (across all my reels)
       - top_reel — { id, share_token, team_home, team_away, view_count }
         for the owner's most-viewed reel in the last 7 days, OR None
-    """
-    from datetime import timedelta
-    user_id = current_user["id"]
 
-    # All reels owned by me
+    Refactored iter66 — extracted _reel_counters, _aggregate_7d_views,
+    _resolve_top_reel so this stays under CC=10.
+    """
+    user_id = current_user["id"]
     my_reels = await db.highlight_reels.find(
         {"user_id": user_id},
         {"_id": 0, "id": 1, "status": 1, "share_token": 1, "match_id": 1, "total_clips": 1, "duration_seconds": 1},
     ).to_list(500)
 
-    total_reels = len(my_reels)
-    ready_reels = sum(1 for r in my_reels if r.get("status") == "ready")
-    shared_reels = sum(1 for r in my_reels if r.get("share_token"))
-
+    counters = _reel_counters(my_reels)
     if not my_reels:
-        return {
-            "total_reels": 0, "ready_reels": 0, "shared_reels": 0,
-            "views_7d": 0, "views_all_time": 0, "top_reel": None,
-        }
+        return {**counters, "views_7d": 0, "views_all_time": 0, "top_reel": None}
 
     reel_ids = [r["id"] for r in my_reels]
-
-    # All-time views across my reels
     views_all_time = await db.highlight_reel_views.count_documents(
         {"reel_id": {"$in": reel_ids}},
     )
+    views_7d, rows = await _aggregate_7d_views(reel_ids)
+    top_reel = await _resolve_top_reel(rows, {r["id"]: r for r in my_reels}) if rows else None
 
-    # 7-day windowed views + group to find the top reel
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-    pipeline = [
-        {"$match": {"reel_id": {"$in": reel_ids}, "viewed_at": {"$gt": cutoff}}},
-        {"$group": {"_id": "$reel_id", "view_count": {"$sum": 1}}},
-        {"$sort": {"view_count": -1}},
-    ]
-    rows = await db.highlight_reel_views.aggregate(pipeline).to_list(len(reel_ids))
-    views_7d = sum(r["view_count"] for r in rows)
-
-    top_reel = None
-    if rows:
-        # Pick the top reel that's still active (ready + shared)
-        my_lookup = {r["id"]: r for r in my_reels}
-        for row in rows:
-            r = my_lookup.get(row["_id"])
-            if not r:
-                continue
-            if r.get("status") != "ready" or not r.get("share_token"):
-                continue
-            match = await db.matches.find_one(
-                {"id": r["match_id"]},
-                {"_id": 0, "team_home": 1, "team_away": 1},
-            )
-            top_reel = {
-                "id": r["id"],
-                "share_token": r["share_token"],
-                "team_home": (match or {}).get("team_home", ""),
-                "team_away": (match or {}).get("team_away", ""),
-                "view_count": row["view_count"],
-                "total_clips": r.get("total_clips", 0),
-                "duration_seconds": r.get("duration_seconds", 0.0),
-            }
-            break
-
-    return {
-        "total_reels": total_reels,
-        "ready_reels": ready_reels,
-        "shared_reels": shared_reels,
-        "views_7d": views_7d,
-        "views_all_time": views_all_time,
-        "top_reel": top_reel,
-    }
+    return {**counters, "views_7d": views_7d, "views_all_time": views_all_time, "top_reel": top_reel}
 
 
 @router.post("/admin/highlight-reels/send-weekly-recap")
@@ -296,26 +295,9 @@ async def admin_send_reel_recap(current_user: dict = Depends(get_current_user)):
     return await send_weekly_reel_recap(triggered_by="manual")
 
 
-@router.get("/highlight-reels/browse")
-async def browse_public_reels(
-    q: str = "",
-    competition: str = "",
-    limit: int = 24,
-    offset: int = 0,
-):
-    """Public browse feed of shared highlight reels.
-
-    Only `ready` reels with a `share_token` appear. Filters:
-      - `q` — case-insensitive substring match against team names or coach name
-      - `competition` — exact competition name match (use empty for "All")
-    Pagination: `limit` (1-50) + `offset`.
-    Returns lightweight cards (no filesystem path, no user_id).
-    """
-    limit = max(1, min(50, int(limit)))
-    offset = max(0, int(offset))
-
-    base_query = {"status": "ready", "share_token": {"$ne": None}}
-
+async def _load_reels_with_context(base_query: dict) -> tuple[list, dict, dict]:
+    """Pull ready/shared reels + their matches + their coach users in 3
+    parallel-ish Mongo calls. Returns (reels, matches_by_id, users_by_id)."""
     reels = await db.highlight_reels.find(
         base_query, {"_id": 0},
     ).sort("created_at", -1).to_list(500)
@@ -336,39 +318,90 @@ async def browse_public_reels(
             {"_id": 0, "id": 1, "name": 1},
         ).to_list(len(user_ids) or 1)
     }
+    return reels, matches, users
+
+
+def _reel_passes_filter(comp: str, team_h: str, team_a: str, coach: str,
+                       comp_filter: str, needle: str) -> bool:
+    """Filter predicate for browse — separated so we can unit-test the matching
+    logic without touching Mongo."""
+    if comp_filter and comp != comp_filter:
+        return False
+    if needle:
+        haystack = f"{team_h} {team_a} {coach}".lower()
+        if needle not in haystack:
+            return False
+    return True
+
+
+def _build_reel_card(r: dict, match: dict, owner: dict) -> dict:
+    """Shape one public-feed reel card. No filesystem path, no user_id."""
+    mr = match.get("manual_result") or {}
+    return {
+        "id": r["id"],
+        "share_token": r["share_token"],
+        "team_home": match.get("team_home") or "",
+        "team_away": match.get("team_away") or "",
+        "competition": match.get("competition") or "",
+        "date": match.get("date"),
+        "coach_name": owner.get("name") or "",
+        "total_clips": r.get("total_clips", 0),
+        "duration_seconds": r.get("duration_seconds", 0.0),
+        "created_at": r.get("created_at"),
+        "home_score": mr.get("home_score"),
+        "away_score": mr.get("away_score"),
+    }
+
+
+def _reel_context(r: dict, matches: dict, users: dict) -> tuple[dict, dict, str, str, str, str]:
+    """Return (match, owner, comp, team_h, team_a, coach) for a reel — pre-
+    coercing all the optional fields once instead of doing it inline in the
+    loop (every `or ""` was bumping browse_public_reels' CC)."""
+    match = matches.get(r["match_id"]) or {}
+    owner = users.get(r["user_id"]) or {}
+    return (
+        match, owner,
+        match.get("competition") or "",
+        match.get("team_home") or "",
+        match.get("team_away") or "",
+        owner.get("name") or "",
+    )
+
+
+@router.get("/highlight-reels/browse")
+async def browse_public_reels(
+    q: str = "",
+    competition: str = "",
+    limit: int = 24,
+    offset: int = 0,
+):
+    """Public browse feed of shared highlight reels.
+
+    Only `ready` reels with a `share_token` appear. Filters:
+      - `q` — case-insensitive substring match against team names or coach name
+      - `competition` — exact competition name match (use empty for "All")
+    Pagination: `limit` (1-50) + `offset`.
+    Returns lightweight cards (no filesystem path, no user_id).
+
+    Refactored iter66 — extracted _load_reels_with_context,
+    _reel_passes_filter, _build_reel_card, _reel_context to stay under CC=10.
+    """
+    limit = max(1, min(50, int(limit)))
+    offset = max(0, int(offset))
+
+    reels, matches, users = await _load_reels_with_context(
+        {"status": "ready", "share_token": {"$ne": None}}
+    )
 
     needle = (q or "").strip().lower()
     comp_filter = (competition or "").strip()
 
     out = []
     for r in reels:
-        match = matches.get(r["match_id"]) or {}
-        owner = users.get(r["user_id"]) or {}
-        comp = match.get("competition") or ""
-        team_h = match.get("team_home") or ""
-        team_a = match.get("team_away") or ""
-        coach = owner.get("name") or ""
-        if comp_filter and comp != comp_filter:
+        match, owner, comp, team_h, team_a, coach = _reel_context(r, matches, users)
+        if not _reel_passes_filter(comp, team_h, team_a, coach, comp_filter, needle):
             continue
-        if needle:
-            haystack = f"{team_h} {team_a} {coach}".lower()
-            if needle not in haystack:
-                continue
-        mr = match.get("manual_result") or {}
-        out.append({
-            "id": r["id"],
-            "share_token": r["share_token"],
-            "team_home": team_h,
-            "team_away": team_a,
-            "competition": comp,
-            "date": match.get("date"),
-            "coach_name": coach,
-            "total_clips": r.get("total_clips", 0),
-            "duration_seconds": r.get("duration_seconds", 0.0),
-            "created_at": r.get("created_at"),
-            "home_score": mr.get("home_score"),
-            "away_score": mr.get("away_score"),
-        })
+        out.append(_build_reel_card(r, match, owner))
         if len(out) >= offset + limit:
             break
 

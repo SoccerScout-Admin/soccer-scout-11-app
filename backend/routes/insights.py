@@ -28,16 +28,15 @@ class MatchInsights(BaseModel):
     model: str = "gemini-2.5-flash"
 
 
-@router.post("/matches/{match_id}/insights")
-async def generate_match_insights(
-    match_id: str, current_user: dict = Depends(get_current_user)
-):
-    """Generate (or refresh) AI coaching insights for a match.
+async def _load_match_signal(match_id: str, user_id: str) -> dict:
+    """Pull the match record + timeline markers + clips + roster in parallel
+    Mongo calls. Raises HTTPException(404) if match missing,
+    HTTPException(400) if there's no video / no AI signal yet.
 
-    Cached on the match document — re-call to refresh.
-    """
+    Extracted from generate_match_insights() so that function stays under the
+    CC=10 / 50-line / 15-locals targets."""
     match = await db.matches.find_one(
-        {"id": match_id, "user_id": current_user["id"]}, {"_id": 0}
+        {"id": match_id, "user_id": user_id}, {"_id": 0}
     )
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
@@ -46,19 +45,18 @@ async def generate_match_insights(
             status_code=400, detail="Match has no video — upload one first"
         )
 
-    # Pull all the signal we have for this video
     markers = await db.markers.find(
-        {"video_id": match["video_id"], "user_id": current_user["id"]},
+        {"video_id": match["video_id"], "user_id": user_id},
         {"_id": 0, "time": 1, "type": 1, "description": 1, "team": 1, "importance": 1},
     ).sort("time", 1).to_list(500)
 
     clips = await db.clips.find(
-        {"video_id": match["video_id"], "user_id": current_user["id"]},
+        {"video_id": match["video_id"], "user_id": user_id},
         {"_id": 0, "title": 1, "clip_type": 1, "start_time": 1, "end_time": 1, "player_ids": 1},
     ).to_list(500)
 
     roster = await db.players.find(
-        {"user_id": current_user["id"], "match_id": match_id},
+        {"user_id": user_id, "match_id": match_id},
         {"_id": 0, "id": 1, "name": 1, "number": 1, "position": 1},
     ).to_list(200)
 
@@ -68,30 +66,44 @@ async def generate_match_insights(
             detail="No timeline markers or clips yet — process the video for AI analysis first.",
         )
 
-    if not EMERGENT_KEY:
-        raise HTTPException(status_code=500, detail="LLM key not configured")
+    return {"match": match, "markers": markers, "clips": clips, "roster": roster}
 
-    # Build a condensed input for Gemini (avoid blowing up the prompt)
-    home = match.get("team_home", "Home")
-    away = match.get("team_away", "Away")
-    competition = match.get("competition") or "League"
-    date = match.get("date") or "?"
 
-    marker_lines = [
+def _format_marker_lines(markers: list) -> list[str]:
+    """Compact one-line representation of timeline markers for the prompt."""
+    return [
         f"  - {m.get('time', 0):.0f}s [{(m.get('type') or '?').upper()}] "
         f"{(m.get('team') or '?')}: {m.get('description', '')[:140]}"
         for m in markers[:80]
     ]
-    clip_type_counts: dict[str, int] = {}
+
+
+def _summarize_clip_types(clips: list) -> str:
+    """Build a short '3 highlight, 2 goal' style summary string from clips."""
+    counts: dict[str, int] = {}
     for c in clips:
         t = (c.get("clip_type") or "highlight").lower()
-        clip_type_counts[t] = clip_type_counts.get(t, 0) + 1
-    clip_summary = ", ".join(f"{n} {t}" for t, n in clip_type_counts.items()) or "none"
+        counts[t] = counts.get(t, 0) + 1
+    return ", ".join(f"{n} {t}" for t, n in counts.items()) or "none"
 
-    prompt = f"""You are a senior soccer coach producing a post-game intelligence brief for a youth team coach.
+
+def _build_insights_prompt(signal: dict) -> str:
+    """Compose the Gemini prompt from the loaded signal. Pure function so it
+    can be unit-tested without hitting Mongo or the LLM."""
+    match = signal["match"]
+    markers = signal["markers"]
+
+    home = match.get("team_home", "Home")
+    away = match.get("team_away", "Away")
+    competition = match.get("competition") or "League"
+    date = match.get("date") or "?"
+    marker_lines = _format_marker_lines(markers)
+    clip_summary = _summarize_clip_types(signal["clips"])
+
+    return f"""You are a senior soccer coach producing a post-game intelligence brief for a youth team coach.
 
 Match: {home} vs {away}  ({competition}, {date})
-Roster size: {len(roster)} players
+Roster size: {len(signal["roster"])} players
 Clip totals: {clip_summary}
 
 Timeline markers ({len(markers)} total, showing first 80):
@@ -112,6 +124,13 @@ Produce a JSON object with these exact keys (and nothing else, no markdown):
 
 Be specific. Reference actual minute marks ("around 47'") when possible. Keep tone constructive."""
 
+
+async def _call_gemini_insights(prompt: str, match_id: str) -> dict:
+    """Call Gemini 2.5 Flash with the insights prompt, parse the JSON, and
+    return a clean dict. Raises HTTPException on LLM key issues or bad JSON."""
+    if not EMERGENT_KEY:
+        raise HTTPException(status_code=500, detail="LLM key not configured")
+
     # Lazy-import so this module doesn't crash if emergentintegrations isn't installed
     from emergentintegrations.llm.chat import LlmChat, UserMessage
 
@@ -128,15 +147,17 @@ Be specific. Reference actual minute marks ("around 47'") when possible. Keep to
         cleaned = cleaned.strip("`").lstrip("json").strip()
 
     try:
-        parsed = _json.loads(cleaned)
+        return _json.loads(cleaned)
     except Exception:
-        # If Gemini returns malformed JSON, surface a graceful error
         raise HTTPException(
             status_code=502,
             detail=f"AI returned an invalid response. Try regenerating. (debug: {cleaned[:120]})",
         )
 
-    insights = {
+
+def _shape_insights_response(parsed: dict) -> dict:
+    """Trim/clamp the LLM output to safe sizes and add bookkeeping fields."""
+    return {
         "summary": parsed.get("summary", "")[:600],
         "coaching_points": parsed.get("coaching_points", [])[:6],
         "strengths": parsed.get("strengths", [])[:4],
@@ -146,6 +167,23 @@ Be specific. Reference actual minute marks ("around 47'") when possible. Keep to
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "model": "gemini-2.5-flash",
     }
+
+
+@router.post("/matches/{match_id}/insights")
+async def generate_match_insights(
+    match_id: str, current_user: dict = Depends(get_current_user)
+):
+    """Generate (or refresh) AI coaching insights for a match.
+
+    Cached on the match document — re-call to refresh.
+
+    Refactored iter66 — extracted _load_match_signal, _build_insights_prompt,
+    _call_gemini_insights, _shape_insights_response so this endpoint stays
+    under CC=10 / 50-line / 15-locals targets."""
+    signal = await _load_match_signal(match_id, current_user["id"])
+    prompt = _build_insights_prompt(signal)
+    parsed = await _call_gemini_insights(prompt, match_id)
+    insights = _shape_insights_response(parsed)
 
     # Cache on the match document so refresh doesn't re-bill the LLM
     await db.matches.update_one(

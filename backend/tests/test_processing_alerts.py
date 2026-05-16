@@ -71,11 +71,38 @@ def _fresh_alerts_state():
     _clear_all_alerts()
 
 
+def _scoped_compute(sentinel):
+    """Return a replacement for `_compute_last_hour_stats` that only counts
+    events tagged with our sentinel video_id. Necessary because the live
+    preview DB accumulates real final_* events from dev testing, which would
+    otherwise pollute the assertions of these isolated unit tests."""
+    async def impl():
+        events = list(_sync_db().processing_events.find(
+            {"video_id": sentinel, "event_type": {"$in": ["final_success", "final_failure"]}},
+            {"_id": 0, "event_type": 1, "failure_mode": 1, "video_id": 1},
+        ))
+        s = sum(1 for e in events if e["event_type"] == "final_success")
+        f = sum(1 for e in events if e["event_type"] == "final_failure")
+        total = s + f
+        modes: dict = {}
+        for e in events:
+            if e["event_type"] == "final_failure" and e.get("failure_mode"):
+                modes[e["failure_mode"]] = modes.get(e["failure_mode"], 0) + 1
+        return {
+            "total": total, "final_success": s, "final_failure": f,
+            "failure_rate_pct": round(f / total * 100, 1) if total else 0.0,
+            "failure_modes": modes,
+            "since": datetime.now(timezone.utc).isoformat(),
+        }
+    return impl
+
+
 def test_skip_low_volume(monkeypatch):
     """Fewer than MIN_ATTEMPTS_FOR_ALERT events → skip silently."""
     from services import processing_alerts as svc
     sentinel = f"sentinel-{uuid.uuid4()}"
     _seed_events([_mk_event(sentinel, "final_failure", failure_mode="oom", mins_ago=5)])
+    monkeypatch.setattr(svc, "_compute_last_hour_stats", _scoped_compute(sentinel))
     try:
         result = run_async(svc.check_and_alert())
         assert result["action"] == "skip_low_volume"
@@ -90,6 +117,7 @@ def test_skip_below_threshold(monkeypatch):
     events = [_mk_event(sentinel, "final_success", mins_ago=5) for _ in range(5)]
     events.append(_mk_event(sentinel, "final_failure", failure_mode="oom", mins_ago=5))
     _seed_events(events)
+    monkeypatch.setattr(svc, "_compute_last_hour_stats", _scoped_compute(sentinel))
     try:
         result = run_async(svc.check_and_alert())
         assert result["action"] == "skip_below_threshold"
@@ -106,6 +134,7 @@ def test_alert_fires_when_threshold_crossed(monkeypatch):
     events = [_mk_event(sentinel, "final_success", mins_ago=5) for _ in range(2)]
     events += [_mk_event(sentinel, "final_failure", failure_mode="oom", mins_ago=5) for _ in range(3)]
     _seed_events(events)
+    monkeypatch.setattr(svc, "_compute_last_hour_stats", _scoped_compute(sentinel))
 
     sent = []
     async def fake_send(*, to_email, subject, html):
@@ -133,6 +162,7 @@ def test_dedup_within_window(monkeypatch):
     events = [_mk_event(sentinel, "final_success", mins_ago=5) for _ in range(2)]
     events += [_mk_event(sentinel, "final_failure", failure_mode="oom", mins_ago=5) for _ in range(3)]
     _seed_events(events)
+    monkeypatch.setattr(svc, "_compute_last_hour_stats", _scoped_compute(sentinel))
 
     sent = []
     async def fake_send(*, to_email, subject, html):
@@ -159,6 +189,7 @@ def test_no_recipient_does_not_crash(monkeypatch):
     sentinel = f"sentinel-{uuid.uuid4()}"
     events = [_mk_event(sentinel, "final_failure", failure_mode="oom", mins_ago=5) for _ in range(4)]
     _seed_events(events)
+    monkeypatch.setattr(svc, "_compute_last_hour_stats", _scoped_compute(sentinel))
 
     monkeypatch.delenv("ALERT_RECIPIENT_EMAIL", raising=False)
     monkeypatch.delenv("SENDER_EMAIL", raising=False)

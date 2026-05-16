@@ -452,7 +452,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter65"
+BUILD_VERSION = "iter66"
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",
@@ -529,6 +529,12 @@ SHIPPED_FEATURES = [
     "alert-dedup-window",
     "alert-escalation-on-rising-rate",
     "manual-alert-trigger-endpoint",
+    # iter66 — complexity refactors from code-review report
+    "refactor-processing-events-stats",
+    "refactor-generate-match-insights",
+    "refactor-build-match-recap-prompt",
+    "refactor-browse-public-reels",
+    "refactor-my-reel-stats",
 ]
 
 def _get_build_sha() -> str:
