@@ -452,7 +452,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter64"
+BUILD_VERSION = "iter65"
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",
@@ -522,6 +522,13 @@ SHIPPED_FEATURES = [
     "processing-events-stats-endpoint",
     "processing-events-recent-endpoint",
     "retry-save-rate-tracking",
+    # iter65 — admin dashboard + auto-alert spike detector
+    "admin-processing-events-dashboard",
+    "processing-pipeline-charts",
+    "hourly-failure-rate-alert",
+    "alert-dedup-window",
+    "alert-escalation-on-rising-rate",
+    "manual-alert-trigger-endpoint",
 ]
 
 def _get_build_sha() -> str:
@@ -2389,9 +2396,31 @@ async def startup():
     asyncio.create_task(deleted_video_sweeper())
     # One-shot cleanup of stale ffmpeg temp files left over from a crashed/killed previous boot
     asyncio.create_task(_cleanup_stale_temp_files())
+    # iter64 follow-up — hourly pipeline-health check that alerts via Resend
+    # when the final_failure rate spikes (gives us a heads-up before users
+    # start reporting). De-duped + threshold-gated; see processing_alerts.py.
+    asyncio.create_task(_processing_alerts_loop())
     # APScheduler — weekly Coach Pulse blast every Monday 08:00 UTC +
     # email-queue retry every 30 min for quota-deferred sends.
     start_coach_pulse_scheduler()
+
+
+async def _processing_alerts_loop():
+    """Run the pipeline-health check once an hour, forever. Wraps check_and_alert
+    in a sleep loop so we don't need APScheduler for this one-line job."""
+    from services.processing_alerts import check_and_alert
+    # Stagger startup so we don't spam if the pod is restarting frequently
+    await asyncio.sleep(120)
+    while True:
+        try:
+            result = await check_and_alert()
+            if result.get("action") == "alert_sent":
+                logger.warning(f"Pipeline alert fired: {result}")
+            elif result.get("action") not in ("skip_low_volume", "skip_below_threshold"):
+                logger.info(f"Pipeline alert check: {result.get('action')}")
+        except Exception as e:
+            logger.exception(f"_processing_alerts_loop tick failed (will retry): {e}")
+        await asyncio.sleep(3600)  # 1 hour
 
 
 async def _cleanup_stale_temp_files():

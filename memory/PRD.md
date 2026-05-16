@@ -1,6 +1,49 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Admin Dashboard + Auto-Alert Spike Detector (iter65 — Feb 2026)
+
+User asked for both: admin UI for the iter64 processing-events stats AND auto-alert on failure spikes. Both shipped.
+
+**Admin Dashboard** (`pages/AdminProcessingEvents.js`, new route `/admin/processing-events`):
+- 4 stat cards: success rate, retry save rate, OOMs at tier 0, unique videos
+- Bar chart: failure modes (color-coded: oom red, timeout amber, moov orange, etc)
+- Bar chart: attempts by tier (horizontal — see at a glance which tier dominates)
+- Bar chart: event types
+- Recent events table (last 25, with timestamps + failure modes color-coded)
+- Day-range selector: 24h / 7d / 30d
+- "Run alert check now" button — fires the hourly check immediately for verification
+- Uses `recharts` (already in deps from CoachNetwork.js)
+- Verified live: dashboard rendered the real iter64 data on first load (18.2% success rate, 66.7% retry save rate on the test environment with 60 tier-0 attempts and the retry tier saving 6 of them).
+
+**Auto-Alert Spike Detector** (`services/processing_alerts.py`, new):
+- Hourly check loop wired in `server.py::on_startup` → `_processing_alerts_loop()`. Stagger-starts 2 minutes after boot then ticks every 3600s.
+- Pulls `final_success` + `final_failure` events from the last hour. Computes `failure_rate_pct`.
+- **Alert fires** when ALL of: `total >= MIN_ATTEMPTS_FOR_ALERT (3)`, `failure_rate_pct >= FAILURE_RATE_THRESHOLD_PCT (20)`, and either no prior alert in `ALERT_DEDUP_WINDOW_HOURS (6h)` OR new rate exceeds prior by `ESCALATION_RATE_DELTA_PCT (10pt)`.
+- Email via existing `send_or_queue` (Resend) — recipient from `ALERT_RECIPIENT_EMAIL` env (falls back to `SENDER_EMAIL`). Tracked in `processing_alerts` collection for de-dup.
+- HTML email template includes failure-rate, breakdown by mode, "what to check" checklist (pod memory bump, recent uploads, recent-failures link).
+- Hard guarded: any exception in the loop is swallowed + logged. Alert monitoring cannot itself crash the app.
+- New admin endpoint `POST /api/admin/processing-alerts/check` — manually trigger the same logic for verification.
+
+**Tests** (`tests/test_processing_alerts.py` — 6 new tests):
+- `test_skip_low_volume` — < 3 attempts → skip
+- `test_skip_below_threshold` — 16.7% < 20% threshold → skip
+- `test_alert_fires_when_threshold_crossed` — 60% failure → alert sent (Resend mocked)
+- `test_dedup_within_window` — second consecutive check → skip_deduped
+- `test_no_recipient_does_not_crash` — gracefully skips when no email configured
+- `test_exception_in_compute_does_not_propagate` — defensive guard verified
+
+**Test totals**: 39/39 passing across all suites. BUILD_VERSION → **iter65**, feature_count 68.
+
+**New env vars** (production secrets to consider setting):
+- `ALERT_RECIPIENT_EMAIL` — defaults to SENDER_EMAIL if unset
+- `PROCESSING_ALERT_THRESHOLD_PCT` (default 20) — failure rate that triggers alert
+- `PROCESSING_ALERT_MIN_ATTEMPTS` (default 3) — minimum volume for alert eligibility
+- `PROCESSING_ALERT_DEDUP_HOURS` (default 6) — quiet period after last alert
+- `PROCESSING_ALERT_ESCALATION_PCT` (default 10) — rate rise that breaks dedup
+
+
+
 ## Processing-Events Instrumentation (iter64 — Feb 2026)
 
 User asked for visibility into the iter63 auto-retry: "would be useful to size your pod's memory limits when you scale."

@@ -26,6 +26,7 @@ import PlayerSeasonTrends from './pages/PlayerSeasonTrends';
 import CoachNetwork from './pages/CoachNetwork';
 import MentionsInbox from './pages/MentionsInbox';
 import AdminUsers from './pages/AdminUsers';
+import AdminProcessingEvents from './pages/AdminProcessingEvents';
 import AdminClaim from './pages/AdminClaim';
 import AdminScouts from './pages/AdminScouts';
 import ScoutBrowse from './pages/ScoutBrowse';
@@ -271,6 +272,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <AdminUsers />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/processing-events"
+            element={
+              <ProtectedRoute>
+                <AdminProcessingEvents />
               </ProtectedRoute>
             }
           />

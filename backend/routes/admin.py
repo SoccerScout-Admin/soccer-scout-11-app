@@ -350,3 +350,19 @@ async def processing_events_recent(
         q["failure_mode"] = failure_mode
     cursor = db.processing_events.find(q, {"_id": 0}).sort("created_at", -1).limit(max(1, min(limit, 500)))
     return await cursor.to_list(500)
+
+
+
+@router.post("/admin/processing-alerts/check")
+async def trigger_processing_alert_check(
+    current_user: dict = Depends(get_current_user),
+):
+    """Manually run the hourly pipeline-health check. Used to:
+      - Verify Resend wiring + alert email looks right in production
+      - Force an immediate re-eval after fixing a regression (e.g., you just
+        bumped pod memory — does the next hour clear?)
+    The same de-dup logic applies, so calling this twice in 5 minutes won't
+    spam your inbox unless the rate has materially worsened."""
+    _require_admin(current_user)
+    from services.processing_alerts import check_and_alert
+    return await check_and_alert()
