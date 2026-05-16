@@ -1,6 +1,34 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Top-5 Largest Failed Videos Triage Panel (iter68 — May 2026)
+
+Quick-triage panel added to the Admin Processing Events Dashboard (P2 from the iter67 backlog). Surfaces the biggest failures first because they're the highest-leverage to investigate: either pushing against the pod-memory ceiling (justifies a bump) or hitting an upload-size UX gap (justifies clearer warnings).
+
+**New endpoint** `GET /api/admin/processing-events/top-failed?hours=24&limit=5`
+- Pulls `final_failure` events from `processing_events` within the window, sorted by `source_size_gb` DESC.
+- Dedupes by `video_id` — a single video that retried 3 times can't crowd out 4 other failing videos.
+- Joins with `videos` / `matches` / `users` so the admin sees filename, parent match, and coach email in one row. Defensive against hard-deleted joins → falls back to `(deleted)` / `null` rather than dropping the row (admin still wants to know an 8 GB upload died, even if the video doc is gone).
+- Admin-only (`_require_admin`). Hours capped at 168 (1 week), limit capped at 20.
+
+**Frontend panel** (`pages/AdminProcessingEvents.js`)
+- New "Top largest failed videos" Section placed directly under the stat cards (above-the-fold for triage priority).
+- Independent hours selector: `Today (24h)` / `Last 3d` / `Last 7d` — separate from the main `days` selector so the admin can scope triage tighter than the aggregate dashboard.
+- Table columns: Size (right-aligned, bold), Filename, Failure (color-coded same as charts), Tier reached, Coach (mailto link with pre-filled subject), Match (button → `/match/{id}`), Failed at.
+- Empty state: "No final failures in this window. 🎉"
+
+**Verified live (preview)**: panel rendered real data on first load — a `2.5 GB` OOM with `all_tiers_exhausted` (exactly the leverage case this panel exists to surface) plus a `0.03 GB` moov_missing failure tied to "Team A vs Team B" with the coach mailto populated.
+
+**4 pytest cases shipped** (`test_processing_events_top_failed.py`):
+- `test_top_failed_sorts_by_size_and_dedupes` — 3 videos seeded with one repeat-failer, verifies size ordering + dedup + enrichment.
+- `test_top_failed_respects_window` — 9.9 GB failure 72h ago must NOT appear when window=24h.
+- `test_top_failed_handles_missing_joins` — orphaned event (no videos doc) still renders as `(deleted)` instead of crashing.
+- `test_top_failed_requires_admin` — unauthenticated callers get 401/403.
+
+BUILD_VERSION → **iter68**, feature_count 75.
+
+
+
 ## "Import Existing Team" UI Wire-Up (iter67 — May 2026)
 
 User reported: "Attach an existing team to an already uploaded game. There is no option to SELECT TEAM. Only Create player or import CSV." Bug spans **preview + production**.

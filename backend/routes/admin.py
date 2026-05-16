@@ -12,7 +12,7 @@ logged, no-op if the caller is already admin.
 import hmac
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -338,7 +338,6 @@ async def processing_events_stats(
     keep this function under the 50-line / CC-10 / 15-locals limits.
     """
     _require_admin(current_user)
-    from datetime import timedelta
     since = (datetime.now(timezone.utc) - timedelta(days=max(1, min(days, 365)))).isoformat()
 
     cursor = db.processing_events.find(
@@ -387,6 +386,100 @@ async def processing_events_recent(
     cursor = db.processing_events.find(q, {"_id": 0}).sort("created_at", -1).limit(max(1, min(limit, 500)))
     return await cursor.to_list(500)
 
+
+async def _enrich_failed_event(ev: dict) -> dict:
+    """Join a final_failure event with the source video / match / coach so the
+    admin sees enough triage context in one row (no second-click required).
+
+    Defensive: any of these documents may have been hard-deleted between the
+    failure and the admin opening the dashboard. Missing joins degrade to
+    None values rather than dropping the row — the admin still wants to know
+    a 4.2GB upload died, even if the video doc is gone.
+    """
+    video = await db.videos.find_one(
+        {"id": ev["video_id"]},
+        {"_id": 0, "id": 1, "filename": 1, "match_id": 1, "user_id": 1},
+    ) or {}
+
+    match = None
+    if video.get("match_id"):
+        match = await db.matches.find_one(
+            {"id": video["match_id"]},
+            {"_id": 0, "id": 1, "team_home": 1, "team_away": 1, "date": 1},
+        )
+
+    coach = None
+    if video.get("user_id") or ev.get("user_id"):
+        uid = video.get("user_id") or ev.get("user_id")
+        coach = await db.users.find_one(
+            {"id": uid}, {"_id": 0, "id": 1, "email": 1, "name": 1},
+        )
+
+    match_label = None
+    if match and (match.get("team_home") or match.get("team_away")):
+        match_label = f"{match.get('team_home') or '—'} vs {match.get('team_away') or '—'}"
+
+    return {
+        "video_id": ev["video_id"],
+        "filename": video.get("filename") or "(deleted)",
+        "size_gb": ev.get("source_size_gb"),
+        "failure_mode": ev.get("failure_mode") or "unknown",
+        "tier_label": ev.get("tier_label"),
+        "tier_idx": ev.get("tier_idx"),
+        "duration_seconds": ev.get("duration_seconds"),
+        "error_message": ev.get("error_message"),
+        "failed_at": ev.get("created_at"),
+        "match_id": video.get("match_id"),
+        "match_label": match_label,
+        "match_date": match.get("date") if match else None,
+        "coach_email": coach.get("email") if coach else None,
+        "coach_name": coach.get("name") if coach else None,
+    }
+
+
+@router.get("/admin/processing-events/top-failed")
+async def processing_events_top_failed(
+    hours: int = 24,
+    limit: int = 5,
+    current_user: dict = Depends(get_current_user),
+):
+    """Top-N largest videos that hit `final_failure` in the last `hours`.
+
+    Quick-triage panel for the Admin Processing Events Dashboard. Sorted by
+    `source_size_gb` DESC because the biggest failures are the highest-leverage
+    ones to investigate first — they're either pushing us against the pod
+    memory ceiling (justifies bumping) or hitting a user-facing size limit
+    (justifies a clearer upload warning).
+
+    Deduped by `video_id` — only the worst event per video is returned, so
+    one video that retried 3 times doesn't crowd out 4 other failing videos.
+    Joined with `videos` / `matches` / `users` so the admin can DM the coach
+    immediately without a second lookup.
+    """
+    _require_admin(current_user)
+    hours = max(1, min(hours, 168))  # cap at 1 week
+    limit = max(1, min(limit, 20))
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+    cursor = db.processing_events.find(
+        {"event_type": "final_failure", "created_at": {"$gte": since}},
+        {"_id": 0},
+    ).sort("source_size_gb", -1).limit(200)
+    events = await cursor.to_list(200)
+
+    seen: set[str] = set()
+    top: list[dict] = []
+    for ev in events:
+        vid = ev.get("video_id")
+        if not vid or vid in seen:
+            continue
+        seen.add(vid)
+        top.append(ev)
+        if len(top) >= limit:
+            break
+
+    enriched = [await _enrich_failed_event(ev) for ev in top]
+    return {"window_hours": hours, "count": len(enriched), "videos": enriched}
 
 
 @router.post("/admin/processing-alerts/check")

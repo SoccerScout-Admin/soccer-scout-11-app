@@ -60,26 +60,30 @@ const AdminProcessingEvents = () => {
   const [days, setDays] = useState(7);
   const [stats, setStats] = useState(null);
   const [recent, setRecent] = useState([]);
+  const [topFailed, setTopFailed] = useState(null);
+  const [topFailedHours, setTopFailedHours] = useState(24);
   const [loading, setLoading] = useState(true);
   const [alertResult, setAlertResult] = useState(null);
   const [alertBusy, setAlertBusy] = useState(false);
 
-  const fetchAll = useCallback(async (selectedDays) => {
+  const fetchAll = useCallback(async (selectedDays, hoursForTop) => {
     setLoading(true);
     try {
-      const [s, r] = await Promise.all([
+      const [s, r, tf] = await Promise.all([
         axios.get(`${API}/admin/processing-events/stats?days=${selectedDays}`, { headers: getAuthHeader() }),
         axios.get(`${API}/admin/processing-events/recent?limit=25`, { headers: getAuthHeader() }),
+        axios.get(`${API}/admin/processing-events/top-failed?hours=${hoursForTop}&limit=5`, { headers: getAuthHeader() }),
       ]);
       setStats(s.data);
       setRecent(r.data || []);
+      setTopFailed(tf.data);
     } catch (err) {
       if (err.response?.status === 403) navigate('/dashboard');
       console.error('Failed to load processing-events:', err);
     } finally { setLoading(false); }
   }, [navigate]);
 
-  useEffect(() => { fetchAll(days); }, [days, fetchAll]);
+  useEffect(() => { fetchAll(days, topFailedHours); }, [days, topFailedHours, fetchAll]);
 
   const handleAlertCheck = async () => {
     setAlertBusy(true);
@@ -123,7 +127,7 @@ const AdminProcessingEvents = () => {
               <option value={7}>Last 7d</option>
               <option value={30}>Last 30d</option>
             </select>
-            <button data-testid="refresh-btn" onClick={() => fetchAll(days)}
+            <button data-testid="refresh-btn" onClick={() => fetchAll(days, topFailedHours)}
               className="p-2 border border-white/10 hover:bg-white/5 transition-colors" aria-label="Refresh">
               <ArrowsClockwise size={14} />
             </button>
@@ -156,6 +160,93 @@ const AdminProcessingEvents = () => {
                 hint={`${stats.total_events} events total`}
                 accent="#E5E5E5" />
             </div>
+
+            <Section
+              title="Top largest failed videos"
+              right={
+                <div className="flex items-center gap-2">
+                  <select data-testid="top-failed-hours-select" value={topFailedHours}
+                    onChange={(e) => setTopFailedHours(Number(e.target.value))}
+                    className="bg-[#141414] border border-white/10 text-white text-[11px] px-2 py-1">
+                    <option value={24}>Today (24h)</option>
+                    <option value={72}>Last 3d</option>
+                    <option value={168}>Last 7d</option>
+                  </select>
+                  <span className="text-[10px] text-[#666]">
+                    {topFailed?.count ?? 0} shown
+                  </span>
+                </div>
+              }>
+              {!topFailed || topFailed.count === 0 ? (
+                <p className="text-xs text-[#A3A3A3]" data-testid="no-top-failed-msg">
+                  No final failures in this window. 🎉
+                </p>
+              ) : (
+                <div className="overflow-x-auto -mx-2" data-testid="top-failed-table">
+                  <table className="min-w-full text-xs">
+                    <thead className="text-[#666] text-[10px] tracking-[0.2em] uppercase">
+                      <tr>
+                        <th className="text-right p-2 w-16">Size</th>
+                        <th className="text-left p-2">Filename</th>
+                        <th className="text-left p-2">Failure</th>
+                        <th className="text-left p-2">Tier reached</th>
+                        <th className="text-left p-2">Coach</th>
+                        <th className="text-left p-2">Match</th>
+                        <th className="text-left p-2">Failed at</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {topFailed.videos.map((v) => (
+                        <tr key={v.video_id}
+                          data-testid={`top-failed-row-${v.video_id}`}
+                          className="border-t border-white/5 hover:bg-white/[0.02]">
+                          <td className="p-2 text-right font-bold" style={{ fontFamily: 'Space Grotesk' }}>
+                            {v.size_gb != null ? `${v.size_gb} GB` : '—'}
+                          </td>
+                          <td className="p-2 text-[#E5E5E5] truncate max-w-[200px]" title={v.filename}>
+                            {v.filename}
+                          </td>
+                          <td className="p-2" style={{ color: FAILURE_MODE_COLOR[v.failure_mode] || '#888' }}>
+                            {v.failure_mode}
+                          </td>
+                          <td className="p-2 text-[#A3A3A3]">
+                            {v.tier_label || (v.tier_idx != null ? `tier ${v.tier_idx}` : '—')}
+                          </td>
+                          <td className="p-2">
+                            {v.coach_email ? (
+                              <a href={`mailto:${v.coach_email}?subject=Your video upload failed to process`}
+                                data-testid={`top-failed-mailto-${v.video_id}`}
+                                className="text-[#7DD3FC] hover:underline">
+                                {v.coach_name || v.coach_email}
+                              </a>
+                            ) : (
+                              <span className="text-[#666]">—</span>
+                            )}
+                          </td>
+                          <td className="p-2">
+                            {v.match_id ? (
+                              <button onClick={() => navigate(`/match/${v.match_id}`)}
+                                data-testid={`top-failed-open-match-${v.video_id}`}
+                                className="text-[#7DD3FC] hover:underline text-left">
+                                {v.match_label || 'Open match'}
+                              </button>
+                            ) : (
+                              <span className="text-[#666]">—</span>
+                            )}
+                          </td>
+                          <td className="p-2 text-[#A3A3A3] whitespace-nowrap">
+                            {v.failed_at ? new Date(v.failed_at).toLocaleString() : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="text-[10px] text-[#666] mt-3 px-2">
+                    Sorted by source size DESC. Biggest failures point at OOM ceiling or upload-limit UX gaps.
+                  </p>
+                </div>
+              )}
+            </Section>
 
             <Section
               title="Failure modes"
