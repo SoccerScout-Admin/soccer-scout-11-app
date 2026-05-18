@@ -493,7 +493,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter76"
+BUILD_VERSION = "iter77"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -2274,6 +2274,76 @@ app.include_router(api_router)
 
 # ===== Auto-Resume on Startup =====
 
+async def _seed_owner_admin_once():
+    """One-time startup migration: promote the canonical app owner email to
+    `role: "admin"` so they can access /admin/processing-events without
+    needing the env-var path that the Emergent UI doesn't expose on their
+    plan tier.
+
+    Idempotent via the `system_migrations` collection — once the
+    `iter77_owner_admin_seed` marker is recorded, subsequent restarts are
+    no-ops. We delay the marker write until promotion actually succeeds, so
+    if the owner hasn't registered yet on the first deploy this migration
+    will re-attempt on the next restart instead of being marked complete
+    forever.
+
+    Owner email is hardcoded because the deployment-UI env-var path is
+    blocked on this user's plan. If the owner ever changes email, replace
+    the constant below and bump the migration id (e.g.,
+    `iter77b_owner_admin_seed`) so the new value takes effect.
+    """
+    OWNER_EMAIL = "ben.buursma@gmail.com"
+    MIGRATION_ID = "iter77_owner_admin_seed"
+
+    await asyncio.sleep(3)  # let main routes settle so logs aren't interleaved
+    try:
+        # Idempotent guard — never re-run after a successful seed
+        marker = await db.system_migrations.find_one({"id": MIGRATION_ID})
+        if marker:
+            logger.info(f"iter77 owner-admin seed: already applied at {marker.get('ran_at')}")
+            return
+
+        # Case-insensitive lookup so re-typed-with-different-case re-registers
+        # don't break the migration
+        user = await db.users.find_one(
+            {"email": {"$regex": f"^{OWNER_EMAIL}$", "$options": "i"}},
+            {"_id": 0, "id": 1, "email": 1, "role": 1},
+        )
+        if not user:
+            logger.warning(
+                f"iter77 owner-admin seed: user {OWNER_EMAIL!r} not yet registered. "
+                "Will retry on next startup."
+            )
+            return  # don't record marker — try again next boot
+
+        current_role = (user.get("role") or "").lower()
+        if current_role in ("admin", "owner"):
+            logger.info(
+                f"iter77 owner-admin seed: {user['email']} already has role={current_role!r}, "
+                "recording marker so we stop retrying."
+            )
+        else:
+            await db.users.update_one(
+                {"id": user["id"]}, {"$set": {"role": "admin"}},
+            )
+            logger.warning(
+                f"iter77 owner-admin seed: promoted {user['email']} "
+                f"from role={current_role!r} to role='admin' (user_id={user['id']})"
+            )
+
+        # Record the marker on either success path so we don't retry forever
+        await db.system_migrations.insert_one({
+            "id": MIGRATION_ID,
+            "ran_at": datetime.now(timezone.utc).isoformat(),
+            "promoted_email": user["email"],
+            "promoted_user_id": user["id"],
+            "prior_role": current_role,
+        })
+    except Exception as e:
+        # Migration failures must never crash startup
+        logger.error(f"iter77 owner-admin seed failed: {e}")
+
+
 async def resume_interrupted_processing():
     """On server restart, find any videos stuck in 'processing' or 'queued' state and resume them.
 
@@ -2557,6 +2627,13 @@ async def startup():
     logger.info(f"Chunk storage dir: {CHUNK_STORAGE_DIR}")
     logger.info(f"Server boot ID: {SERVER_BOOT_ID}")
     
+    # iter77 — one-time owner-admin seed migration. Runs once per Mongo
+    # database to promote the canonical app owner to admin without requiring
+    # any UI env-var configuration (the Emergent deployment UI on the user's
+    # plan doesn't expose the secrets panel after deploy). Marker stored in
+    # `system_migrations` so a second startup is a no-op.
+    asyncio.create_task(_seed_owner_admin_once())
+
     # Auto-resume interrupted processing from previous server instance
     asyncio.create_task(resume_interrupted_processing())
     # Periodic sweeper for permanently purging soft-deleted videos

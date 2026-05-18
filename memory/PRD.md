@@ -1,6 +1,38 @@
 # Soccer Scout - Product Requirements Document
 
 
+## One-Time Owner-Admin Seed Migration (iter77 — May 2026)
+
+User context: production owner couldn't access `/admin/processing-events`. iter76 added `ADMIN_AUTOPROMOTE_EMAIL` env-var auto-promotion, but the Emergent deployment UI on the user's plan doesn't expose a secrets/env-var panel post-deploy — they had no way to set the env var. iter77 ships a code-only fix that requires zero UI interaction.
+
+### Behavior
+- New `_seed_owner_admin_once()` startup task in `server.py` runs once per Mongo database.
+- Looks up the hardcoded canonical owner email (`ben.buursma@gmail.com`, case-insensitive) in the users collection.
+- If found AND not already `admin`/`owner` → promotes to `admin` + logs at WARNING level for audit.
+- Records a `system_migrations` marker `iter77_owner_admin_seed` so subsequent restarts are no-ops.
+- Marker write is **conditional on the user existing** — if the owner hasn't registered yet, the migration silently no-ops and retries on the next boot (instead of being marked complete forever).
+- Migration failures are swallowed — never crash startup.
+
+### Why hardcoded
+The user's Emergent plan tier doesn't expose the env-var panel post-deploy. Once they upgrade or the env-var path becomes available again, iter76's `ADMIN_AUTOPROMOTE_EMAIL` mechanism remains operational as the long-term solution — iter77 is just the one-time bootstrap. Hardcoding is documented inline in `server.py::_seed_owner_admin_once` with the rotation pattern (bump the migration_id when changing the email).
+
+### Files touched
+- `server.py`: new `_seed_owner_admin_once()` helper + scheduled in `@app.on_event("startup")` as `asyncio.create_task` (so a slow Mongo lookup doesn't delay other startup tasks).
+
+### Tests
+- 3 new pytest cases in `test_owner_admin_seed.py`, subprocess-isolated (same pattern as iter70/iter75 to avoid Motor cross-file state leaks):
+  - `test_seed_promotes_existing_coach_owner` — happy path: coach → admin, marker recorded
+  - `test_seed_idempotent_when_marker_present` — marker exists, full no-op (role stays coach)
+  - `test_seed_skips_when_user_not_registered` — no user matches → no marker (retries on next boot)
+- All passing. Wide regression: 61/61 tests pass across iter72-77 touched surface.
+
+### Onboarding flow for the production owner
+**Single step**: redeploy. On next pod startup, the migration runs, promotes Ben.buursma@gmail.com to admin, logs the action, records the marker. `/admin/processing-events` becomes accessible. No env vars, no UI clicks, no curl commands needed.
+
+BUILD_VERSION → **iter77**, feature_count 84.
+
+
+
 ## Admin Auto-Promote on Login (iter76 — May 2026)
 
 User Ben on production couldn't access `/admin/processing-events` because the production Atlas DB had no admin role flag on their account, and the existing `/api/admin/bootstrap` endpoint required a manual curl with the `ADMIN_BOOTSTRAP_SECRET` env var — too cumbersome.
