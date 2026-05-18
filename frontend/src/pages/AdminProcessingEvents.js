@@ -45,6 +45,7 @@ const FAILURE_MODE_COLOR = {
   moov_missing: '#F97316',
   invalid_data: '#A855F7',
   no_space: '#10B981',
+  incomplete_upload: '#0EA5E9',  // sky blue — distinct from the "file too big" reds/oranges
   unknown: '#888888',
 };
 const EVENT_TYPE_COLOR = {
@@ -284,7 +285,9 @@ const AdminProcessingEvents = () => {
                                 onClick={() => handleEmailFix(v.video_id, v.coach_email)}
                                 disabled={!v.coach_email || emailingVideoId === v.video_id}
                                 title={v.coach_email
-                                  ? "Send the coach HandBrake compression instructions"
+                                  ? (v.failure_mode === 'incomplete_upload'
+                                      ? "Send the coach 'upload got cut off — re-upload from a stable network' instructions"
+                                      : "Send the coach HandBrake compression instructions")
                                   : "No coach email on record"}
                                 className="inline-flex items-center gap-1 px-2 py-1 border border-[#FBBF24]/40 bg-[#FBBF24]/10 text-[#FBBF24] hover:bg-[#FBBF24]/20 text-[10px] font-bold tracking-wider uppercase transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                                 {emailingVideoId === v.video_id ? 'Sending…' : 'Email fix'}

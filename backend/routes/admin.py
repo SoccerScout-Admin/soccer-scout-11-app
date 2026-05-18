@@ -496,9 +496,8 @@ class CompressionHelpRequest(BaseModel):
 
 
 def _compression_help_html(coach_name: Optional[str], filename: str, size_gb: Optional[float], failure_mode: str) -> str:
-    """HTML body for the compression-help email. Keep it short, friendly, and
-    actionable — the goal is to convert "video failed" into "video succeeded
-    in their next attempt" with as little friction as possible.
+    """HTML body for the compression-help email — the "file is too big" case.
+    Sent when the failure mode is oom / all_tiers_exhausted / no_space / etc.
 
     Style mirrors existing Soccer Scout transactional emails (dark header,
     light card body, single primary instruction)."""
@@ -531,6 +530,70 @@ def _compression_help_html(coach_name: Optional[str], filename: str, size_gb: Op
     <p style="font-size:11px;color:#666;text-align:center;margin-top:16px;">You're receiving this because a Soccer Scout admin manually flagged your upload for follow-up help. We don't send this automatically.</p>
   </div>
 </body></html>"""
+
+
+def _incomplete_upload_help_html(coach_name: Optional[str], filename: str, size_gb: Optional[float], available: Optional[int], total: Optional[int]) -> str:
+    """HTML body for the incomplete-upload case. The file isn't too big —
+    it's incomplete on disk because the browser disconnected mid-upload.
+    Different problem → different advice. The HandBrake template would be
+    actively misleading here (the coach's source video is fine; only our
+    copy is broken)."""
+    greeting = f"Hi {coach_name}," if coach_name else "Hi there,"
+    size_label = f"{size_gb} GB" if size_gb is not None else "your last upload"
+    progress_line = ""
+    if available is not None and total:
+        pct = round((available / total) * 100, 1)
+        progress_line = (
+            f"Our copy of <strong style=\"color:#fff;\">{filename}</strong> only has "
+            f"{available} of {total} chunks ({pct}%) — the upload got interrupted before "
+            "finishing. Your original file on your computer is fine; just our copy is incomplete."
+        )
+    else:
+        progress_line = (
+            f"Our copy of <strong style=\"color:#fff;\">{filename}</strong> ({size_label}) is "
+            "incomplete — the upload got interrupted before all chunks landed. Your original "
+            "file on your computer is fine; just our copy is incomplete."
+        )
+    return f"""\
+<!DOCTYPE html>
+<html><body style="margin:0;padding:0;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#0A0A0A;color:#E5E5E5;">
+  <div style="max-width:560px;margin:0 auto;padding:24px;">
+    <div style="background:#141414;border:1px solid #2A2A2A;border-radius:8px;overflow:hidden;">
+      <div style="background:#EF4444;padding:20px 24px;">
+        <div style="color:#fff;font-size:11px;letter-spacing:0.2em;text-transform:uppercase;font-weight:700;">Soccer Scout · Upload Interrupted</div>
+        <div style="color:#fff;font-size:20px;font-weight:700;margin-top:6px;">Your upload got cut off — quick re-upload needed</div>
+      </div>
+      <div style="padding:24px;color:#E5E5E5;line-height:1.55;font-size:14px;">
+        <p>{greeting}</p>
+        <p>{progress_line}</p>
+        <p style="margin-top:18px;font-weight:700;color:#fff;">To recover, just re-upload from a stable network</p>
+        <ol style="padding-left:18px;margin:8px 0;">
+          <li>Open the same match on Soccer Scout</li>
+          <li>Hit the red <strong style="color:#EF4444;">DELETE &amp; RE-UPLOAD</strong> button on the video page</li>
+          <li>Pick the same file from your computer and drop it in</li>
+          <li>For best results: use a wired connection or stay close to your Wi-Fi router during the upload</li>
+        </ol>
+        <p style="margin-top:18px;">Large videos (5+ GB) are most prone to this — pausing or backgrounding the browser tab mid-upload can break the chunk stream. If your connection is flaky, consider compressing the file with HandBrake first ("Fast 720p30" preset cuts size by ~80% without losing tactical detail).</p>
+        <p style="margin-top:18px;color:#A3A3A3;font-size:13px;">If the same upload keeps cutting off, reply to this email and I'll personally take a look. — Soccer Scout team</p>
+      </div>
+    </div>
+    <p style="font-size:11px;color:#666;text-align:center;margin-top:16px;">You're receiving this because a Soccer Scout admin manually flagged your upload for follow-up help. We don't send this automatically.</p>
+  </div>
+</body></html>"""
+
+
+def _parse_chunks_from_error(error_message: Optional[str]) -> tuple[Optional[int], Optional[int]]:
+    """Pull `available` + `total` out of the canonical error string written by
+    services/processing.py::run_auto_processing — "Upload incomplete (980 of
+    991 chunks, ...)". Defensive: returns (None, None) if the pattern doesn't
+    match, so the email still sends with a fallback message."""
+    if not error_message:
+        return (None, None)
+    import re
+    m = re.search(r"(\d+)\s+of\s+(\d+)\s+chunks", error_message)
+    if not m:
+        return (None, None)
+    return (int(m.group(1)), int(m.group(2)))
 
 
 @router.post("/admin/processing-events/email-compression-help")
@@ -586,23 +649,40 @@ async def email_compression_help(
         return {"status": "skipped", "reason": "coach has no email on record"}
 
     filename = video.get("filename") or "your match film"
-    html = _compression_help_html(
-        coach_name=coach.get("name"),
-        filename=filename,
-        size_gb=ev.get("source_size_gb"),
-        failure_mode=ev.get("failure_mode") or "unknown",
-    )
-    subject = "Your Soccer Scout upload didn't process — quick fix inside"
+    failure_mode = ev.get("failure_mode") or "unknown"
+    if failure_mode == "incomplete_upload":
+        # Different problem (browser disconnect, not file-too-big) → different
+        # advice. The HandBrake template would be misleading because the
+        # coach's source video is fine; only our copy is broken.
+        available, total = _parse_chunks_from_error(ev.get("error_message"))
+        html = _incomplete_upload_help_html(
+            coach_name=coach.get("name"),
+            filename=filename,
+            size_gb=ev.get("source_size_gb"),
+            available=available,
+            total=total,
+        )
+        subject = "Your Soccer Scout upload got cut off — quick re-upload"
+        email_kind = "incomplete_upload_help"
+    else:
+        html = _compression_help_html(
+            coach_name=coach.get("name"),
+            filename=filename,
+            size_gb=ev.get("source_size_gb"),
+            failure_mode=failure_mode,
+        )
+        subject = "Your Soccer Scout upload didn't process — quick fix inside"
+        email_kind = "compression_help"
 
     from services.email_queue import send_or_queue
     result = await send_or_queue(
         to_email=coach["email"],
         subject=subject,
         html=html,
-        kind="compression_help",
+        kind=email_kind,
         metadata={
             "video_id": body.video_id,
-            "failure_mode": ev.get("failure_mode"),
+            "failure_mode": failure_mode,
             "size_gb": ev.get("source_size_gb"),
             "sent_by_admin_id": current_user["id"],
         },

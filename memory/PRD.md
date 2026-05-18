@@ -1,6 +1,39 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Email-Fix Template Branching + `incomplete_upload` Chart Surface (iter71 — May 2026)
+
+After iter70 added the `incomplete_upload` failure mode, the existing "Email fix" button on the Top Failed Videos panel was actively misleading for those rows — it sent HandBrake compression instructions for a file that was already small enough; the real problem was the browser connection dropping mid-upload. iter71 closes that loop.
+
+### Backend (`routes/admin.py`)
+- New `_incomplete_upload_help_html(coach_name, filename, size_gb, available, total)` — red-header email template (`#EF4444`) with:
+  - The exact chunk progress baked into the body ("Our copy only has 980 of 991 chunks (98.9%)")
+  - Reassurance that the source file is fine ("Your original file on your computer is fine; just our copy is incomplete")
+  - In-product DELETE & RE-UPLOAD CTA reference (added in iter70)
+  - Network-quality advice (wired / close to router) as the primary fix, with HandBrake mentioned only as a secondary tip for flaky connections
+- New `_parse_chunks_from_error(error_message)` — pulls `(available, total)` out of the canonical "Upload incomplete (N of M chunks, P%)" string written by `services/processing.py`. Returns `(None, None)` defensively if the pattern doesn't match, so the fallback message still sends.
+- `POST /api/admin/processing-events/email-compression-help` now branches:
+  - `failure_mode == "incomplete_upload"` → red template + subject "Your Soccer Scout upload got cut off — quick re-upload" + `kind="incomplete_upload_help"`
+  - Everything else → existing blue HandBrake template (unchanged behavior)
+
+### Frontend (`pages/AdminProcessingEvents.js`)
+- `FAILURE_MODE_COLOR` extended with `incomplete_upload: '#0EA5E9'` (sky blue) — visually distinct from the OOM/timeout reds & oranges so admins can spot connection-quality failures at a glance on the bar chart.
+- Email Fix button tooltip is now failure-mode-aware: hovering an `incomplete_upload` row says "Send the coach 'upload got cut off — re-upload from a stable network' instructions" so admins know which template will go out before they click.
+
+### Tests
+- New `test_compression_email_templates.py` with 6 unit tests:
+  - `test_parse_chunks_from_error_canonical` — round-trips "980 of 991 chunks"
+  - `test_parse_chunks_from_error_returns_none_when_unparseable` — defensive on `None`, `""`, arbitrary text
+  - `test_incomplete_upload_html_includes_red_cta_and_progress` — red header, chunk progress (98.9% — verifies the rounding), DELETE & RE-UPLOAD CTA, no HandBrake in primary message
+  - `test_incomplete_upload_html_falls_back_without_chunk_numbers` — graceful when chunk parse fails
+  - `test_compression_html_recommends_handbrake` — existing template still recommends Fast 720p30 / CQ 28
+  - `test_html_templates_handle_no_name` — graceful greeting without a `coach_name`
+- Full regression: **44/44 tests pass** across all touched suites (templates + quick-attach + partial-upload-failfast + processing-events + processing-events-top-failed + processing-alerts + ffmpeg-error-classification).
+
+BUILD_VERSION → **iter71**, feature_count 78.
+
+
+
 ## Partial-Upload Fail-Fast Guard (iter70 — May 2026)
 
 Real production bug 2026-05-16 (video `48823490-f162-...`, 9.67 GB, 980/991 chunks = 99%) sat at 0% forever showing "Server restarted — processing resumed automatically. Preparing video for AI analysis." Root cause: the upload itself was incomplete (11 chunks missing), but the system kept resuming and re-queueing — every pod restart hit the same incomplete-data wall. ffmpeg either silently produced a broken sample or got OOM-killed on the partial 9.67 GB source.
