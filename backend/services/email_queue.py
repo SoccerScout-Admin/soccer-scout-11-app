@@ -90,6 +90,39 @@ async def _resend_send(to_email: str, subject: str, html: str) -> str:
     return (resp or {}).get("id", "")
 
 
+_PIXEL_PLACEHOLDER = "[[EMAIL_OPEN_PIXEL]]"
+
+
+def _public_app_url() -> str:
+    return (os.environ.get("PUBLIC_APP_URL")
+            or os.environ.get("REACT_APP_BACKEND_URL", "")).rstrip("/")
+
+
+def _inject_open_pixel(html: str, queue_id: str) -> str:
+    """Append a 1x1 transparent PNG to the HTML body — the request to load
+    the pixel marks `opened_at` on the email_queue record.
+
+    Most modern mail clients (Gmail, Apple Mail, Outlook web) auto-load
+    images, so this gives us a high-signal "delivered AND read" marker on
+    nearly every successful send. We deliberately put the pixel inside the
+    final ``</body>`` so the body renders fully even if image loading is
+    disabled or rate-limited.
+
+    Backward-compat: this is a no-op for HTML that doesn't end in
+    ``</body></html>`` — the pixel just isn't appended and `opened_at`
+    stays null. (Audit log table still surfaces send, just not opens.)
+    """
+    base = _public_app_url()
+    if not base or "</body>" not in html:
+        return html
+    pixel_url = f"{base}/api/lens-track/email-pixel/{queue_id}.png"
+    pixel_tag = (
+        f'<img src="{pixel_url}" width="1" height="1" alt="" '
+        f'style="display:block;border:0;width:1px;height:1px;" />'
+    )
+    return html.replace("</body>", f"{pixel_tag}</body>", 1)
+
+
 async def send_or_queue(
     to_email: str,
     subject: str,
@@ -106,11 +139,16 @@ async def send_or_queue(
       - error: str (on failure)
     """
     queue_id = f"eq-{secrets.token_urlsafe(12)}"
+    # Inject pixel BEFORE persistence so the queued copy (for retries) and
+    # the actually-sent copy stay byte-identical. The pixel URL embeds the
+    # queue_id, so opens are credited to the correct send even if the same
+    # email gets re-sent via the queue retry path.
+    tracked_html = _inject_open_pixel(html, queue_id)
     base_doc = {
         "id": queue_id,
         "to_email": to_email,
         "subject": subject,
-        "html": html,
+        "html": tracked_html,
         "kind": kind,
         "metadata": metadata or {},
         "created_at": _now_iso(),
@@ -124,7 +162,7 @@ async def send_or_queue(
         return {"status": "failed", "queue_id": queue_id, "error": "RESEND_API_KEY missing"}
 
     try:
-        email_id = await _resend_send(to_email, subject, html)
+        email_id = await _resend_send(to_email, subject, tracked_html)
         base_doc.update({
             "status": "sent",
             "attempts": 1,

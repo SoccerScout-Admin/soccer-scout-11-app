@@ -19,12 +19,15 @@ import { API, getAuthHeader } from '../../App';
 import { X, EnvelopeSimple, Funnel, CheckCircle, Warning, PaperPlaneTilt } from '@phosphor-icons/react';
 
 const RecruiterOutreachModal = ({ open, teamId, teamName, filters, onClose, onSent }) => {
+  const [mode, setMode] = useState('single'); // 'single' | 'blast'
   const [recipientEmail, setRecipientEmail] = useState('');
   const [recipientName, setRecipientName] = useState('');
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  const [result, setResult] = useState(null);  // {lens_link, tracked_url, email_status}
+  const [result, setResult] = useState(null);  // single send: {lens_link, tracked_url, email_status}
+  const [blastCsv, setBlastCsv] = useState('');
+  const [blastResult, setBlastResult] = useState(null);  // bulk send: { summary, results }
 
   if (!open) return null;
 
@@ -39,7 +42,46 @@ const RecruiterOutreachModal = ({ open, teamId, teamName, filters, onClose, onSe
     setMessage('');
     setError('');
     setResult(null);
+    setBlastCsv('');
+    setBlastResult(null);
   };
+
+  // Parse the CSV/TSV/newline-separated input into {email, name?} rows.
+  // Skip blank lines, comment lines (#), and header rows (case-insensitive).
+  // Multi-format: handles `email` / `email,name` / `name <email>` / `email\tname`.
+  const parseBlastCsv = (raw) => {
+    const out = [];
+    const seen = new Set();
+    const lines = raw.split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      if (/^email\b/i.test(trimmed)) continue;  // header row
+      // RFC 5322-ish "Name <email@x.com>"
+      const angleMatch = trimmed.match(/^(.*?)\s*<\s*([^>]+@[^>]+)\s*>\s*$/);
+      let email, name;
+      if (angleMatch) {
+        name = angleMatch[1].trim() || null;
+        email = angleMatch[2].trim();
+      } else {
+        // Try comma/tab split
+        const parts = trimmed.split(/[,\t]/).map((p) => p.trim()).filter(Boolean);
+        // Whichever part contains @ is the email
+        const emailIdx = parts.findIndex((p) => p.includes('@'));
+        if (emailIdx < 0) continue;  // no email on this row, skip
+        email = parts[emailIdx];
+        const nameParts = parts.filter((_, i) => i !== emailIdx);
+        name = nameParts.length ? nameParts.join(' ') : null;
+      }
+      const key = email.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ email, name });
+    }
+    return out;
+  };
+
+  const parsedRecipients = mode === 'blast' ? parseBlastCsv(blastCsv) : [];
 
   const handleClose = () => {
     reset();
@@ -64,6 +106,28 @@ const RecruiterOutreachModal = ({ open, teamId, teamName, filters, onClose, onSe
     } catch (err) {
       const detail = err.response?.data?.detail;
       setError(typeof detail === 'string' ? detail : 'Could not send. Please try again.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleBlastSubmit = async (e) => {
+    e.preventDefault();
+    if (parsedRecipients.length === 0) return;
+    setSending(true);
+    setError('');
+    try {
+      const res = await axios.post(`${API}/lens-links/blast`, {
+        team_id: teamId,
+        filters: filters || {},
+        recipients: parsedRecipients,
+        message: message.trim() || null,
+      }, { headers: getAuthHeader() });
+      setBlastResult(res.data);
+      onSent?.(res.data);
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : 'Blast failed — try again.');
     } finally {
       setSending(false);
     }
@@ -102,7 +166,27 @@ const RecruiterOutreachModal = ({ open, teamId, teamName, filters, onClose, onSe
             </div>
           )}
 
-          {!result && (
+          {/* Mode toggle: single recipient vs CSV blast */}
+          {!result && !blastResult && (
+            <div className="flex border border-white/10" data-testid="outreach-mode-toggle">
+              <button data-testid="mode-single-btn" type="button"
+                onClick={() => { setMode('single'); setError(''); }}
+                className={`flex-1 py-2 text-[10px] font-bold tracking-[0.2em] uppercase transition-colors ${
+                  mode === 'single' ? 'bg-[#10B981] text-white' : 'text-[#A3A3A3] hover:bg-[#1F1F1F]'
+                }`}>
+                One recipient
+              </button>
+              <button data-testid="mode-blast-btn" type="button"
+                onClick={() => { setMode('blast'); setError(''); }}
+                className={`flex-1 py-2 text-[10px] font-bold tracking-[0.2em] uppercase transition-colors ${
+                  mode === 'blast' ? 'bg-[#10B981] text-white' : 'text-[#A3A3A3] hover:bg-[#1F1F1F]'
+                }`}>
+                Mass blast (CSV)
+              </button>
+            </div>
+          )}
+
+          {!result && !blastResult && mode === 'single' && (
             <form data-testid="outreach-form" onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1.5">
@@ -151,6 +235,109 @@ const RecruiterOutreachModal = ({ open, teamId, teamName, filters, onClose, onSe
                 Your contact info is never shared with us.
               </p>
             </form>
+          )}
+
+          {!result && !blastResult && mode === 'blast' && (
+            <form data-testid="blast-form" onSubmit={handleBlastSubmit} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1.5">
+                  Recipients (one per line)
+                </label>
+                <textarea data-testid="blast-csv-input" rows="6"
+                  placeholder={'coach.smith@school.edu\ncoach.jones@uni.edu, Coach Jones\nCoach Brown <brown@college.edu>'}
+                  value={blastCsv}
+                  onChange={(e) => setBlastCsv(e.target.value)}
+                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#10B981] focus:outline-none resize-none font-mono text-sm" />
+                <p className="text-[10px] text-[#666] mt-1.5">
+                  One per line. Accepts <code>email</code>, <code>email, name</code>, or <code>Name &lt;email&gt;</code>. Headers, blank lines, and <code>#</code> comments are ignored.
+                </p>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1.5">
+                  Shared note (optional)
+                </label>
+                <textarea data-testid="blast-message-input" rows="2"
+                  placeholder="One personal note sent to every recipient..."
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#10B981] focus:outline-none resize-none" />
+              </div>
+              {parsedRecipients.length > 0 && (
+                <div data-testid="blast-preview" className="bg-[#0A0A0A] border border-white/10 p-3 max-h-32 overflow-y-auto">
+                  <div className="text-[10px] font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-1.5">
+                    Preview · {parsedRecipients.length} unique recipient{parsedRecipients.length === 1 ? '' : 's'}
+                  </div>
+                  <ul className="text-xs text-[#CFCFCF] space-y-0.5">
+                    {parsedRecipients.slice(0, 8).map((r, i) => (
+                      <li key={i} className="font-mono">
+                        {r.email}{r.name ? ` — ${r.name}` : ''}
+                      </li>
+                    ))}
+                    {parsedRecipients.length > 8 && (
+                      <li className="text-[#666]">+ {parsedRecipients.length - 8} more</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+              {error && (
+                <div data-testid="blast-error"
+                  className="bg-[#FF3B30]/10 border border-[#FF3B30] text-[#FF3B30] px-4 py-3 text-sm flex items-start gap-2">
+                  <Warning size={18} weight="fill" className="flex-shrink-0 mt-0.5" />
+                  <span>{error}</span>
+                </div>
+              )}
+              <button data-testid="send-blast-btn" type="submit" disabled={sending || parsedRecipients.length === 0}
+                className="w-full flex items-center justify-center gap-2 bg-[#10B981] hover:bg-[#0EA975] disabled:opacity-50 disabled:cursor-not-allowed text-white py-3 font-bold tracking-wider uppercase text-xs transition-colors">
+                <PaperPlaneTilt size={14} weight="fill" />
+                {sending ? 'Blasting...' : `Blast ${parsedRecipients.length || 0} recipient${parsedRecipients.length === 1 ? '' : 's'}`}
+              </button>
+              <p className="text-[10px] text-[#666] leading-relaxed text-center">
+                Each recipient gets a unique tracking link. Daily cap of 25 across all your sends — keeps inboxes happy.
+              </p>
+            </form>
+          )}
+
+          {blastResult && (
+            <div data-testid="blast-success" className="space-y-3">
+              <div className="bg-[#10B981]/10 border border-[#10B981]/30 px-4 py-3">
+                <div className="text-sm font-bold text-[#10B981]">
+                  Blast complete · {blastResult.summary.sent + blastResult.summary.queued} of {blastResult.summary.total_unique_recipients} delivered
+                </div>
+                <div className="text-xs text-[#A3A3A3] mt-1">
+                  ✓ {blastResult.summary.sent} sent
+                  {blastResult.summary.queued > 0 && ` · ⏳ ${blastResult.summary.queued} queued (Resend quota)`}
+                  {blastResult.summary.skipped_over_cap > 0 && ` · ⚠ ${blastResult.summary.skipped_over_cap} skipped (daily cap)`}
+                  {blastResult.summary.failed > 0 && ` · ✗ ${blastResult.summary.failed} failed`}
+                </div>
+              </div>
+              <div className="bg-[#0A0A0A] border border-white/10 max-h-64 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-[10px] tracking-[0.2em] uppercase text-[#666] border-b border-white/10">
+                      <th className="text-left p-2">Recipient</th>
+                      <th className="text-left p-2">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {blastResult.results.map((r, i) => (
+                      <tr key={i} className="border-t border-white/5">
+                        <td className="p-2 text-[#CFCFCF] truncate max-w-[280px]" title={r.email}>{r.email}{r.name ? ` (${r.name})` : ''}</td>
+                        <td className="p-2" style={{
+                          color: r.status === 'sent' ? '#22C55E'
+                            : r.status === 'quota_deferred' ? '#FBBF24'
+                            : r.status === 'skipped_over_cap' ? '#F97316'
+                            : '#EF4444',
+                        }}>{r.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <button data-testid="blast-done-btn" onClick={reset}
+                className="w-full flex items-center justify-center gap-2 border border-white/10 hover:bg-[#1F1F1F] text-white py-2.5 font-bold tracking-wider uppercase text-xs transition-colors">
+                Send another blast
+              </button>
+            </div>
           )}
 
           {result && (

@@ -720,3 +720,311 @@ async def trigger_processing_alert_check(
     _require_admin(current_user)
     from services.processing_alerts import check_and_alert
     return await check_and_alert()
+
+
+@router.get("/admin/email-audit-log")
+async def email_audit_log(
+    days: int = 30,
+    kind: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Sent-email audit log for the Admin Dashboard. Returns each row from
+    the `email_queue` collection in the time window with delivery state +
+    open-tracking info, sorted newest-first.
+
+    Pixel-tracking (services/email_queue.py::_inject_open_pixel) writes
+    `opened_at`, `last_opened_at`, and `open_count` when the recipient's
+    mail client loads the 1x1 PNG. Open rate is reported as a count, not
+    a probability — Gmail/Apple Mail/Outlook all auto-load images, but
+    Outlook desktop sometimes blocks them, so we surface the raw signal
+    and let the admin interpret.
+
+    `kind` filter lets the admin slice to a single template family
+    (e.g., `incomplete_upload_help` to assess that specific advice).
+    """
+    _require_admin(current_user)
+    days = max(1, min(days, 365))
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    query: dict = {"created_at": {"$gte": since}}
+    if kind:
+        query["kind"] = kind
+
+    cursor = db.email_queue.find(query, {"_id": 0}).sort("created_at", -1).limit(500)
+    rows = await cursor.to_list(500)
+
+    # Project just the fields the audit table needs — `html` is heavy and
+    # would balloon the response payload pointlessly.
+    summary = [{
+        "id": r.get("id"),
+        "kind": r.get("kind") or "generic",
+        "to_email": r.get("to_email"),
+        "subject": r.get("subject"),
+        "status": r.get("status"),
+        "created_at": r.get("created_at"),
+        "sent_at": r.get("sent_at"),
+        "opened_at": r.get("opened_at"),
+        "last_opened_at": r.get("last_opened_at"),
+        "open_count": r.get("open_count", 0),
+        "attempts": r.get("attempts", 0),
+        "last_error": r.get("last_error"),
+        "metadata": r.get("metadata") or {},
+    } for r in rows]
+
+    # Aggregate rollup the admin sees at the top of the table
+    total = len(summary)
+    sent = sum(1 for r in summary if r["status"] == "sent")
+    opened = sum(1 for r in summary if r.get("opened_at"))
+    by_kind: dict = {}
+    for r in summary:
+        k = r["kind"]
+        by_kind.setdefault(k, {"sent": 0, "opened": 0})
+        if r["status"] == "sent":
+            by_kind[k]["sent"] += 1
+        if r.get("opened_at"):
+            by_kind[k]["opened"] += 1
+
+    return {
+        "window_days": days,
+        "total": total,
+        "sent": sent,
+        "opened": opened,
+        "open_rate": round(opened / sent, 3) if sent else 0.0,
+        "by_kind": by_kind,
+        "rows": summary,
+    }
+
+
+# ---------------------------------------------------------------------------
+# iter74: empty-roster reminder admin tool
+# ---------------------------------------------------------------------------
+
+def _roster_reminder_html(coach_name: Optional[str], match_label: str, match_id: str) -> str:
+    """Dark-themed HTML for the empty-roster nudge. Matches the existing
+    Soccer Scout transactional email style and points at the in-product
+    Quick Attach pill (iter69) so the coach's recovery path is one click."""
+    greeting = f"Hi {coach_name}," if coach_name else "Hi there,"
+    base = (os.environ.get("PUBLIC_APP_URL")
+            or os.environ.get("REACT_APP_BACKEND_URL", "")).rstrip("/")
+    match_url = f"{base}/match/{match_id}" if base else f"/match/{match_id}"
+    return f"""\
+<!DOCTYPE html>
+<html><body style="margin:0;padding:0;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#0A0A0A;color:#E5E5E5;">
+  <div style="max-width:560px;margin:0 auto;padding:24px;">
+    <div style="background:#141414;border:1px solid #2A2A2A;border-radius:8px;overflow:hidden;">
+      <div style="background:#FBBF24;padding:20px 24px;">
+        <div style="color:#0A0A0A;font-size:11px;letter-spacing:0.2em;text-transform:uppercase;font-weight:700;">Soccer Scout · Roster Needed</div>
+        <div style="color:#0A0A0A;font-size:20px;font-weight:700;margin-top:6px;">Your match film is in, but the roster is empty</div>
+      </div>
+      <div style="padding:24px;color:#E5E5E5;line-height:1.55;font-size:14px;">
+        <p>{greeting}</p>
+        <p>Your match film for <strong style="color:#fff;">{match_label}</strong> uploaded and processed successfully — but the roster is empty, so AI tactical attribution can't credit goals, assists, or chances to your players.</p>
+        <p style="margin-top:18px;font-weight:700;color:#fff;">Quick fix — takes 2 clicks</p>
+        <ol style="padding-left:18px;margin:8px 0;">
+          <li>Open the match: <a href="{match_url}" style="color:#7DD3FC;">{match_url}</a></li>
+          <li>Hit the ⚡ <strong style="color:#FBBF24;">QUICK ATTACH</strong> pill at the top of the Player Roster section — it'll attach your most recently used team in one click.</li>
+        </ol>
+        <p style="margin-top:18px;">If this is a new team you haven't created yet, use the "IMPORT EXISTING TEAM" dropdown or paste a CSV — both options are next to the Quick Attach pill.</p>
+        <p style="margin-top:18px;color:#A3A3A3;font-size:13px;">Once players are attached, AI will re-process the match and you'll see per-player stats within a few minutes. — Soccer Scout team</p>
+      </div>
+    </div>
+    <p style="font-size:11px;color:#666;text-align:center;margin-top:16px;">You're receiving this because a Soccer Scout admin manually flagged your match for a roster-attach reminder. We don't send this automatically.</p>
+  </div>
+</body></html>"""
+
+
+@router.get("/admin/empty-roster-matches")
+async def list_empty_roster_matches(
+    days: int = 14,
+    limit: int = 25,
+    current_user: dict = Depends(get_current_user),
+):
+    """Find matches that uploaded a video successfully but still have an
+    empty roster. Quick-triage panel for the Admin Dashboard: high-leverage
+    because the AI tactical pipeline silently produces 0 player-attributed
+    events on these matches, leaving the coach with nothing actionable to
+    show.
+
+    Logic:
+      - Match created in last `days`
+      - Match has at least one video where processing_status == 'completed'
+      - Players collection has 0 rows for `match_id`
+
+    Returns enriched rows (coach email, match label, video age) so admin can
+    one-click the "Send roster reminder" button per row.
+    """
+    _require_admin(current_user)
+    days = max(1, min(days, 90))
+    limit = max(1, min(limit, 100))
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    # Step 1: find videos that completed processing in the window
+    completed_videos = await db.videos.find(
+        {"processing_status": "completed", "uploaded_at": {"$gte": since}, "match_id": {"$ne": None}},
+        {"_id": 0, "id": 1, "match_id": 1, "user_id": 1, "uploaded_at": 1},
+    ).sort("uploaded_at", -1).limit(500).to_list(500)
+
+    if not completed_videos:
+        return {"window_days": days, "count": 0, "matches": []}
+
+    # Step 2: filter to matches with 0 players, dedup by match_id
+    seen_matches: set[str] = set()
+    candidate_match_ids: list[str] = []
+    for v in completed_videos:
+        mid = v.get("match_id")
+        if not mid or mid in seen_matches:
+            continue
+        seen_matches.add(mid)
+        candidate_match_ids.append(mid)
+        if len(candidate_match_ids) >= limit * 3:
+            # Cap upstream lookup to keep aggregations bounded
+            break
+
+    # One round-trip to compute roster size per candidate match
+    pipeline = [
+        {"$match": {"match_id": {"$in": candidate_match_ids}}},
+        {"$group": {"_id": "$match_id", "count": {"$sum": 1}}},
+    ]
+    counts = await db.players.aggregate(pipeline).to_list(len(candidate_match_ids))
+    counts_map = {c["_id"]: c["count"] for c in counts}
+    empty_match_ids = [mid for mid in candidate_match_ids if counts_map.get(mid, 0) == 0]
+    empty_match_ids = empty_match_ids[:limit]
+
+    if not empty_match_ids:
+        return {"window_days": days, "count": 0, "matches": []}
+
+    # Step 3: enrich with match + coach + reminder-sent status
+    matches = await db.matches.find(
+        {"id": {"$in": empty_match_ids}},
+        {"_id": 0, "id": 1, "team_home": 1, "team_away": 1, "date": 1, "user_id": 1, "created_at": 1},
+    ).to_list(len(empty_match_ids))
+    match_map = {m["id"]: m for m in matches}
+
+    user_ids = list({m.get("user_id") for m in matches if m.get("user_id")})
+    users = await db.users.find(
+        {"id": {"$in": user_ids}},
+        {"_id": 0, "id": 1, "email": 1, "name": 1},
+    ).to_list(len(user_ids)) if user_ids else []
+    user_map = {u["id"]: u for u in users}
+
+    sent_records = await db.roster_reminder_sent.find(
+        {"match_id": {"$in": empty_match_ids}},
+        {"_id": 0, "match_id": 1, "sent_at": 1, "to_email": 1},
+    ).to_list(len(empty_match_ids))
+    sent_map = {s["match_id"]: s for s in sent_records}
+
+    # Build the response (preserve uploaded_at order from completed_videos)
+    video_uploaded_map: dict = {}
+    for v in completed_videos:
+        mid = v.get("match_id")
+        if mid in empty_match_ids and mid not in video_uploaded_map:
+            video_uploaded_map[mid] = v.get("uploaded_at")
+
+    enriched = []
+    for mid in empty_match_ids:
+        m = match_map.get(mid, {})
+        coach = user_map.get(m.get("user_id"), {})
+        sent = sent_map.get(mid)
+        match_label = None
+        if m.get("team_home") or m.get("team_away"):
+            match_label = f"{m.get('team_home') or '—'} vs {m.get('team_away') or '—'}"
+        enriched.append({
+            "match_id": mid,
+            "match_label": match_label,
+            "match_date": m.get("date"),
+            "video_uploaded_at": video_uploaded_map.get(mid),
+            "coach_email": coach.get("email"),
+            "coach_name": coach.get("name"),
+            "reminder_sent_at": sent.get("sent_at") if sent else None,
+        })
+
+    return {"window_days": days, "count": len(enriched), "matches": enriched}
+
+
+class RosterReminderRequest(BaseModel):
+    match_id: str
+
+
+@router.post("/admin/empty-roster-matches/send-reminder")
+async def send_roster_reminder(
+    body: RosterReminderRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Send a Resend email to the coach of a match whose video completed but
+    has 0 players. Templated copy points them at the iter69 ⚡ Quick Attach
+    pill so their recovery is one click.
+
+    De-duped via `roster_reminder_sent` collection — same match_id returns
+    `status: "already_sent"` so the admin can safely click without spamming."""
+    _require_admin(current_user)
+
+    match = await db.matches.find_one(
+        {"id": body.match_id},
+        {"_id": 0, "id": 1, "team_home": 1, "team_away": 1, "user_id": 1},
+    )
+    if not match:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    prior = await db.roster_reminder_sent.find_one(
+        {"match_id": body.match_id}, {"_id": 0, "sent_at": 1, "to_email": 1},
+    )
+    if prior:
+        return {
+            "status": "already_sent",
+            "sent_at": prior.get("sent_at"),
+            "to_email": prior.get("to_email"),
+        }
+
+    coach = await db.users.find_one(
+        {"id": match["user_id"]}, {"_id": 0, "email": 1, "name": 1},
+    )
+    if not coach or not coach.get("email"):
+        return {"status": "skipped", "reason": "coach has no email on record"}
+
+    # Sanity-check: don't send a reminder if the roster has been populated
+    # in the meantime (e.g., between dashboard load and admin click).
+    player_count = await db.players.count_documents({"match_id": body.match_id})
+    if player_count > 0:
+        return {
+            "status": "skipped",
+            "reason": f"match already has {player_count} player(s) — reminder no longer needed",
+        }
+
+    match_label = None
+    if match.get("team_home") or match.get("team_away"):
+        match_label = f"{match.get('team_home') or '—'} vs {match.get('team_away') or '—'}"
+    html = _roster_reminder_html(
+        coach_name=coach.get("name"),
+        match_label=match_label or "your match",
+        match_id=body.match_id,
+    )
+    subject = f"Quick fix: roster needed for {match_label or 'your latest match'}"
+
+    from services.email_queue import send_or_queue
+    result = await send_or_queue(
+        to_email=coach["email"],
+        subject=subject,
+        html=html,
+        kind="roster_reminder",
+        metadata={
+            "match_id": body.match_id,
+            "match_label": match_label,
+            "sent_by_admin_id": current_user["id"],
+        },
+    )
+    if result.get("status") in ("sent", "quota_deferred"):
+        await db.roster_reminder_sent.insert_one({
+            "id": f"rr-{body.match_id}",
+            "match_id": body.match_id,
+            "to_email": coach["email"],
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "sent_by_admin_id": current_user["id"],
+            "delivery_status": result.get("status"),
+            "email_id": result.get("email_id"),
+            "queue_id": result.get("queue_id"),
+        })
+        return {
+            "status": result.get("status"),
+            "to_email": coach["email"],
+            "email_id": result.get("email_id"),
+        }
+    return {"status": "skipped", "reason": result.get("error") or "send failed"}

@@ -67,25 +67,34 @@ const AdminProcessingEvents = () => {
   const [alertResult, setAlertResult] = useState(null);
   const [alertBusy, setAlertBusy] = useState(false);
   const [emailingVideoId, setEmailingVideoId] = useState(null);
+  const [emailAudit, setEmailAudit] = useState(null);
+  const [emailAuditKind, setEmailAuditKind] = useState('');
+  const [emptyRoster, setEmptyRoster] = useState(null);
+  const [reminderingMatchId, setReminderingMatchId] = useState(null);
 
-  const fetchAll = useCallback(async (selectedDays, hoursForTop) => {
+  const fetchAll = useCallback(async (selectedDays, hoursForTop, auditKind) => {
     setLoading(true);
     try {
-      const [s, r, tf] = await Promise.all([
+      const auditUrl = `${API}/admin/email-audit-log?days=${selectedDays}${auditKind ? `&kind=${auditKind}` : ''}`;
+      const [s, r, tf, ea, er] = await Promise.all([
         axios.get(`${API}/admin/processing-events/stats?days=${selectedDays}`, { headers: getAuthHeader() }),
         axios.get(`${API}/admin/processing-events/recent?limit=25`, { headers: getAuthHeader() }),
         axios.get(`${API}/admin/processing-events/top-failed?hours=${hoursForTop}&limit=5`, { headers: getAuthHeader() }),
+        axios.get(auditUrl, { headers: getAuthHeader() }),
+        axios.get(`${API}/admin/empty-roster-matches?days=14&limit=25`, { headers: getAuthHeader() }),
       ]);
       setStats(s.data);
       setRecent(r.data || []);
       setTopFailed(tf.data);
+      setEmailAudit(ea.data);
+      setEmptyRoster(er.data);
     } catch (err) {
       if (err.response?.status === 403) navigate('/dashboard');
       console.error('Failed to load processing-events:', err);
     } finally { setLoading(false); }
   }, [navigate]);
 
-  useEffect(() => { fetchAll(days, topFailedHours); }, [days, topFailedHours, fetchAll]);
+  useEffect(() => { fetchAll(days, topFailedHours, emailAuditKind); }, [days, topFailedHours, emailAuditKind, fetchAll]);
 
   const handleAlertCheck = async () => {
     setAlertBusy(true);
@@ -96,6 +105,37 @@ const AdminProcessingEvents = () => {
     } catch (err) {
       setAlertResult({ action: 'error', error: err.response?.data?.detail || err.message });
     } finally { setAlertBusy(false); }
+  };
+
+  const handleSendRosterReminder = async (matchId, coachEmail) => {
+    if (!coachEmail) {
+      alert("This row has no coach email on record — nothing to send to.");
+      return;
+    }
+    const ok = window.confirm(
+      `Send a roster-reminder email to ${coachEmail}?\n\nTheir match has an uploaded video but 0 players, so AI tactical attribution can't run. The email points them at the in-product ⚡ Quick Attach pill for a one-click recovery.`
+    );
+    if (!ok) return;
+    setReminderingMatchId(matchId);
+    try {
+      const r = await axios.post(
+        `${API}/admin/empty-roster-matches/send-reminder`,
+        { match_id: matchId },
+        { headers: getAuthHeader() }
+      );
+      if (r.data.status === "sent" || r.data.status === "quota_deferred") {
+        alert(`Reminder ${r.data.status === "sent" ? "sent" : "queued"} to ${r.data.to_email || coachEmail}.`);
+      } else if (r.data.status === "already_sent") {
+        alert(`Already sent to ${r.data.to_email} at ${new Date(r.data.sent_at).toLocaleString()}. Skipped.`);
+      } else {
+        alert(`Skipped: ${r.data.reason || "unknown"}`);
+      }
+      await fetchAll(days, topFailedHours, emailAuditKind);
+    } catch (err) {
+      alert("Failed to send: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setReminderingMatchId(null);
+    }
   };
 
   const handleEmailFix = async (videoId, coachEmail) => {
@@ -122,7 +162,7 @@ const AdminProcessingEvents = () => {
         alert(`Skipped: ${r.data.reason || "unknown"}`);
       }
       // Refresh to surface the new sent_at timestamp
-      await fetchAll(days, topFailedHours);
+      await fetchAll(days, topFailedHours, emailAuditKind);
     } catch (err) {
       alert("Failed to send: " + (err.response?.data?.detail || err.message));
     } finally {
@@ -161,7 +201,7 @@ const AdminProcessingEvents = () => {
               <option value={7}>Last 7d</option>
               <option value={30}>Last 30d</option>
             </select>
-            <button data-testid="refresh-btn" onClick={() => fetchAll(days, topFailedHours)}
+            <button data-testid="refresh-btn" onClick={() => fetchAll(days, topFailedHours, emailAuditKind)}
               className="p-2 border border-white/10 hover:bg-white/5 transition-colors" aria-label="Refresh">
               <ArrowsClockwise size={14} />
             </button>
@@ -374,6 +414,172 @@ const AdminProcessingEvents = () => {
                 <pre data-testid="alert-result" className="mt-3 bg-[#0A0A0A] border border-white/10 p-3 text-[11px] text-[#A3A3A3] overflow-x-auto rounded">
                   {JSON.stringify(alertResult, null, 2)}
                 </pre>
+              )}
+            </Section>
+
+            <Section
+              title="Empty-roster matches"
+              right={
+                <span className="text-[10px] text-[#666]" data-testid="empty-roster-summary">
+                  {emptyRoster?.count ?? 0} match{emptyRoster?.count === 1 ? '' : 'es'} need roster · last 14d
+                </span>
+              }>
+              {!emptyRoster || emptyRoster.count === 0 ? (
+                <p className="text-xs text-[#A3A3A3]" data-testid="no-empty-roster-msg">
+                  No matches with uploaded videos + empty rosters. 🎉
+                </p>
+              ) : (
+                <div className="overflow-x-auto -mx-2" data-testid="empty-roster-table">
+                  <table className="min-w-full text-xs">
+                    <thead className="text-[#666] text-[10px] tracking-[0.2em] uppercase">
+                      <tr>
+                        <th className="text-left p-2">Match</th>
+                        <th className="text-left p-2">Date</th>
+                        <th className="text-left p-2">Coach</th>
+                        <th className="text-left p-2">Video uploaded</th>
+                        <th className="text-left p-2">Reminder</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {emptyRoster.matches.map((m) => (
+                        <tr key={m.match_id}
+                          data-testid={`empty-roster-row-${m.match_id}`}
+                          className="border-t border-white/5 hover:bg-white/[0.02]">
+                          <td className="p-2">
+                            <button onClick={() => navigate(`/match/${m.match_id}`)}
+                              className="text-[#7DD3FC] hover:underline text-left">
+                              {m.match_label || 'Open match'}
+                            </button>
+                          </td>
+                          <td className="p-2 text-[#A3A3A3] whitespace-nowrap">{m.match_date || '—'}</td>
+                          <td className="p-2">
+                            {m.coach_email ? (
+                              <a href={`mailto:${m.coach_email}`}
+                                className="text-[#7DD3FC] hover:underline">
+                                {m.coach_name || m.coach_email}
+                              </a>
+                            ) : (
+                              <span className="text-[#666]">—</span>
+                            )}
+                          </td>
+                          <td className="p-2 text-[#A3A3A3] whitespace-nowrap">
+                            {m.video_uploaded_at ? new Date(m.video_uploaded_at).toLocaleString() : '—'}
+                          </td>
+                          <td className="p-2">
+                            {m.reminder_sent_at ? (
+                              <span data-testid={`roster-reminder-sent-${m.match_id}`}
+                                title={`Sent ${new Date(m.reminder_sent_at).toLocaleString()}`}
+                                className="inline-flex items-center gap-1 text-[10px] text-[#22C55E] font-bold tracking-wider uppercase">
+                                ✓ Sent
+                              </span>
+                            ) : (
+                              <button
+                                data-testid={`roster-reminder-btn-${m.match_id}`}
+                                onClick={() => handleSendRosterReminder(m.match_id, m.coach_email)}
+                                disabled={!m.coach_email || reminderingMatchId === m.match_id}
+                                title={m.coach_email
+                                  ? "Email the coach a one-click roster-attach reminder"
+                                  : "No coach email on record"}
+                                className="inline-flex items-center gap-1 px-2 py-1 border border-[#FBBF24]/40 bg-[#FBBF24]/10 text-[#FBBF24] hover:bg-[#FBBF24]/20 text-[10px] font-bold tracking-wider uppercase transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                                {reminderingMatchId === m.match_id ? 'Sending…' : 'Send reminder'}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="text-[10px] text-[#666] mt-3 px-2">
+                    Matches where the video processed cleanly but the roster is empty — AI tactical attribution produces 0 player-credited
+                    events on these. The reminder points the coach at the in-product ⚡ Quick Attach pill for a 2-click fix.
+                  </p>
+                </div>
+              )}
+            </Section>
+
+            <Section
+              title="Admin email audit"
+              right={
+                <div className="flex items-center gap-2">
+                  <select data-testid="email-audit-kind-select" value={emailAuditKind}
+                    onChange={(e) => setEmailAuditKind(e.target.value)}
+                    className="bg-[#141414] border border-white/10 text-white text-[11px] px-2 py-1">
+                    <option value="">All templates</option>
+                    <option value="compression_help">compression_help</option>
+                    <option value="incomplete_upload_help">incomplete_upload_help</option>
+                    <option value="hot_lead">hot_lead</option>
+                    <option value="processing_alert">processing_alert</option>
+                  </select>
+                  {emailAudit && (
+                    <span className="text-[10px] text-[#666]" data-testid="email-audit-summary">
+                      {emailAudit.opened}/{emailAudit.sent} opened ({Math.round((emailAudit.open_rate || 0) * 100)}%)
+                    </span>
+                  )}
+                </div>
+              }>
+              {!emailAudit || emailAudit.total === 0 ? (
+                <p className="text-xs text-[#A3A3A3]" data-testid="no-audit-rows-msg">
+                  No transactional emails sent in this window.
+                </p>
+              ) : (
+                <div className="overflow-x-auto -mx-2" data-testid="email-audit-table">
+                  <table className="min-w-full text-xs">
+                    <thead className="text-[#666] text-[10px] tracking-[0.2em] uppercase">
+                      <tr>
+                        <th className="text-left p-2">Sent</th>
+                        <th className="text-left p-2">Template</th>
+                        <th className="text-left p-2">Recipient</th>
+                        <th className="text-left p-2">Subject</th>
+                        <th className="text-left p-2">Status</th>
+                        <th className="text-left p-2">Opened</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {emailAudit.rows.map((row) => {
+                        const opened = !!row.opened_at;
+                        return (
+                          <tr key={row.id}
+                            data-testid={`email-audit-row-${row.id}`}
+                            className="border-t border-white/5 hover:bg-white/[0.02]">
+                            <td className="p-2 text-[#A3A3A3] whitespace-nowrap">
+                              {row.sent_at ? new Date(row.sent_at).toLocaleString()
+                                : row.created_at ? new Date(row.created_at).toLocaleString()
+                                : '—'}
+                            </td>
+                            <td className="p-2 text-[#E5E5E5]">{row.kind}</td>
+                            <td className="p-2 text-[#7DD3FC] truncate max-w-[200px]" title={row.to_email}>
+                              {row.to_email}
+                            </td>
+                            <td className="p-2 text-[#A3A3A3] truncate max-w-[280px]" title={row.subject}>
+                              {row.subject}
+                            </td>
+                            <td className="p-2" style={{
+                              color: row.status === 'sent' ? '#22C55E'
+                                : row.status === 'quota_deferred' ? '#FBBF24'
+                                : row.status === 'failed' ? '#EF4444' : '#888',
+                            }}>{row.status || '—'}</td>
+                            <td className="p-2">
+                              {opened ? (
+                                <span data-testid={`email-audit-opened-${row.id}`}
+                                  title={`First opened ${new Date(row.opened_at).toLocaleString()}${row.open_count > 1 ? ` · ${row.open_count} opens total` : ''}`}
+                                  className="inline-flex items-center gap-1 text-[#22C55E] font-bold tracking-wider uppercase text-[10px]">
+                                  ✓ {row.open_count > 1 ? `${row.open_count}×` : 'Opened'}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-[#666]">unopened</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <p className="text-[10px] text-[#666] mt-3 px-2">
+                    Open tracking via a 1x1 pixel embedded in each templated email. Gmail/Apple Mail auto-load images;
+                    Outlook desktop sometimes blocks them, so "unopened" doesn't always mean unread — but the signal is high enough to
+                    compare relative open-rates across template families (see by_kind in the summary above).
+                  </p>
+                </div>
               )}
             </Section>
 

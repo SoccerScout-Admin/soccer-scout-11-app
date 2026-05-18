@@ -1,6 +1,59 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Three Triple-Header Features (iter72/73/74 — May 2026)
+
+### iter72: Sent-Email Audit Log + Open Tracking
+
+**Backend** (`services/email_queue.py`, `routes/recruiter_lens.py`, `routes/admin.py`):
+- New `_inject_open_pixel(html, queue_id)` helper appends a `<img>` tag pointing at `/api/lens-track/email-pixel/{queue_id}.png` BEFORE `</body>` on every templated send. Pixel URL embeds the `queue_id` so opens are credited to the specific send (even if Resend retries via the queue).
+- New public endpoint `GET /api/lens-track/email-pixel/{queue_id}.png` — returns a hardcoded 67-byte transparent PNG (no Pillow dep), idempotent: stamps `opened_at` only on first hit, bumps `open_count` and `last_opened_at` on every subsequent hit. Returns 200 + PNG even for unknown queue_ids (no info leak about which IDs are valid).
+- New admin endpoint `GET /api/admin/email-audit-log?days=30&kind=` — newest-first list of email_queue rows with `opened_at` / `open_count` / `attempts` / `last_error`, plus `by_kind` rollup for relative open-rate comparison across template families.
+- Critical bug fixed during testing: `find_one(query, {"opened_at": 1})` returns `{}` (falsy in Python) when neither field exists yet — switched to `is not None` check + included `id` in projection.
+
+**Frontend** (`pages/AdminProcessingEvents.js`):
+- New "Admin email audit" Section with a kind filter (`all` / `compression_help` / `incomplete_upload_help` / `hot_lead` / `processing_alert`) and an "X/Y opened (Z%)" summary. Per-row "✓ Opened" badge with hover tooltip showing first-open timestamp + repeat-open count.
+
+**Tests**: 7 cases in `test_email_audit_and_pixel.py` covering pixel + audit + injection. All passing.
+
+### iter73: Mass Recruiter Blast / Mail Merge (P1)
+
+**Backend** (`routes/recruiter_lens.py`):
+- New `POST /api/lens-links/blast` — body `{team_id, filters, recipients[], message, blast_id?}`. Creates ONE unique `lens_link` row + tracking token PER recipient so Hot Lead detection / opens / clicks remain attributable per-recipient.
+- **Per-coach daily cap**: 25 unique lens_link rows per 24h, enforced across BOTH `/lens-links` (single) and `/lens-links/blast` so coaches can't bypass via alternation. Computed by counting all of the coach's lens_link rows in the trailing 24h. Once hit, remaining recipients get `status: "skipped_over_cap"` instead of being silently dropped.
+- **Per-request hard ceiling**: 50 recipients to keep response payloads bounded.
+- **In-request dedup**: case-insensitive on emails, preserves first-occurrence order so the UI results table matches what the coach pasted.
+- All recipients in one blast share the same `blast_id` so the SentLensLinks panel can later group them visually.
+
+**Frontend** (`pages/components/RecruiterOutreachModal.js`):
+- Modal now has a **mode toggle** at the top: "One recipient" (existing flow, unchanged) ↔ "Mass blast (CSV)".
+- Blast mode: paste-area textarea accepting `email`, `email, name`, OR `Name <email>` formats. Skips blank lines, `#` comments, and header rows ("email"/"Email"). Live preview table shows the parsed unique recipients.
+- After send: results table per-row with color-coded status (`sent` / `quota_deferred` / `skipped_over_cap` / `failed`) + summary line ("✓ 12 sent · ⚠ 3 skipped (daily cap)").
+
+**Tests**: 8 cases in `test_lens_blast.py` covering auth, validation (empty, >50, unknown team), dedup, per-recipient unique tokens, blast_id grouping, daily cap respect. All passing.
+
+### iter74: Send Roster Reminder Admin Tool
+
+**Backend** (`routes/admin.py`):
+- New `GET /api/admin/empty-roster-matches?days=14&limit=25` — surfaces matches where the video processed cleanly (`processing_status == "completed"`) but the roster is empty (0 player rows). High-leverage triage because AI tactical attribution silently produces 0 player-credited events on these — coaches see analysis "complete" but with no value.
+  - Joins with `videos` + `players` (aggregation for count) + `users` + `roster_reminder_sent` for triage context.
+  - Each row includes `coach_email`, `match_label`, `video_uploaded_at`, and `reminder_sent_at` (null if not yet sent).
+- New `POST /api/admin/empty-roster-matches/send-reminder` body `{match_id}` — sends an amber-themed Resend HTML email pointing the coach at the iter69 ⚡ Quick Attach pill for a 2-click recovery.
+  - De-duped via `roster_reminder_sent` collection — repeat clicks return `status: "already_sent"`.
+  - **Race-condition guard**: if the roster has been populated between dashboard load and admin click, returns `status: "skipped"` with reason "match already has N player(s) — reminder no longer needed".
+
+**Frontend** (`pages/AdminProcessingEvents.js`):
+- New "Empty-roster matches" Section with one-click "Send reminder" button per row, flips to "✓ SENT" badge after success. Clicking the match label navigates to the match page.
+
+**Tests**: 8 cases in `test_roster_reminder.py` covering auth, list filtering (with/without players), 404, race-condition skip, dedup, sent-flag surfacing. All passing.
+
+### Wide Regression
+**92/92 tests pass** across 12 touched test files (templates + audit + blast + reminder + partial-upload + quick-attach + recruiter-outreach + email-queue + processing-events + processing-alerts + match-roster-first). Lint clean across all touched Python and JS files.
+
+BUILD_VERSION → **iter74**, feature_count 81 (+3).
+
+
+
 ## Email-Fix Template Branching + `incomplete_upload` Chart Surface (iter71 — May 2026)
 
 After iter70 added the `incomplete_upload` failure mode, the existing "Email fix" button on the Top Failed Videos panel was actively misleading for those rows — it sent HandBrake compression instructions for a file that was already small enough; the real problem was the browser connection dropping mid-upload. iter71 closes that loop.
