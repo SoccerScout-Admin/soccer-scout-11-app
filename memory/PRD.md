@@ -1,6 +1,34 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Pod-OOM-Loop Guard (iter75 — May 2026)
+
+Real production bug 2026-05-18: a 3.93 GB video (`2ebe539f-b00b-...`) uploaded cleanly to soccerscout11.com (full integrity, no partial banner), but processing stuck at 0% forever — every pod restart re-queued it via `resume_interrupted_processing`, ffmpeg OOM-killed the **whole pod** mid-`prepare_video_sample` before iter63's Python-level auto-retry tier could fire, then the cycle repeated indefinitely.
+
+iter70's integrity guard didn't trip because integrity was full. iter63's auto-retry didn't trip because ffmpeg never returned a Python exception — the pod itself died.
+
+### Fix
+- New `resume_attempts` field on the `videos` collection, bumped on every resume by `resume_interrupted_processing`.
+- New `_MAX_RESUME_ATTEMPTS = 3` constant in `server.py`.
+- When `resume_interrupted_processing` finds a video with `resume_attempts >= 3` AND `processing_progress == 0`, it marks the video `failed` with: *"Processing failed N× without making any progress. Source file is too heavy for our encoding pod — re-compress with HandBrake (Fast 720p30 / CQ 28) and re-upload."*
+- A `final_failure` event is logged with `failure_mode = "pod_oom_loop"` so the Top Failed Videos panel surfaces it with a distinct color.
+- A video that previously made >0% progress is NOT subject to the guard — iter63's auto-retry can still help it.
+
+### Frontend
+- `FAILURE_MODE_COLOR` extended with `pod_oom_loop: '#DC2626'` (dark red — even worse than single oom).
+- No new UI surface needed: the `failed` status already triggers iter70's red `RE-UPLOAD REQUIRED` banner with a one-click DELETE & RE-UPLOAD CTA, and the Email Fix button in the Top Failed Videos panel auto-routes the iter71 HandBrake compression-help template (since `failure_mode != "incomplete_upload"`).
+
+### Tests
+- 3 new pytest cases in `test_pod_oom_loop_guard.py` (subprocess-isolated):
+  - `test_resume_marks_oom_loop_after_max_attempts` — full happy-path: 3 attempts → failed + event logged
+  - `test_resume_bumps_attempts_when_below_cap` — below cap, counter bumped to N+1, NOT failed
+  - `test_resume_with_partial_progress_does_not_trip_oom_guard` — progress=35%, attempts=5 still re-queues (iter63's tier can still help)
+- Wide regression: 45/45 tests pass across touched suites.
+
+BUILD_VERSION → **iter75**, feature_count 82.
+
+
+
 ## Three Triple-Header Features (iter72/73/74 — May 2026)
 
 ### iter72: Sent-Email Audit Log + Open Tracking

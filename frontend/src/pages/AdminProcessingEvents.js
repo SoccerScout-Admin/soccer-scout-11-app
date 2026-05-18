@@ -46,6 +46,7 @@ const FAILURE_MODE_COLOR = {
   invalid_data: '#A855F7',
   no_space: '#10B981',
   incomplete_upload: '#0EA5E9',  // sky blue — distinct from the "file too big" reds/oranges
+  pod_oom_loop: '#DC2626',  // dark red — even worse than single oom (pod killed N×)
   unknown: '#888888',
 };
 const EVENT_TYPE_COLOR = {

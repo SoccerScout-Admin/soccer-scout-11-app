@@ -452,7 +452,15 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter74"
+BUILD_VERSION = "iter75"
+
+# Max number of times resume_interrupted_processing will re-queue a video
+# that's still stuck at 0% progress. After this many attempts with no
+# forward movement, we conclude the pod is OOM-killing ffmpeg BEFORE the
+# Python handler can fire iter63's auto-retry tier, and we mark the video
+# failed with the same "compress with HandBrake" guidance — better to fail
+# clearly than infinite-loop the pod across the rest of the user's work.
+_MAX_RESUME_ATTEMPTS = 3
 SHIPPED_FEATURES = [
     "auto-highlight-reels",
     "trending-reel-library",
@@ -2226,13 +2234,22 @@ app.include_router(api_router)
 # ===== Auto-Resume on Startup =====
 
 async def resume_interrupted_processing():
-    """On server restart, find any videos stuck in 'processing' or 'queued' state and resume them"""
+    """On server restart, find any videos stuck in 'processing' or 'queued' state and resume them.
+
+    Each resume bumps `resume_attempts` on the video doc. If a video has
+    been resumed `_MAX_RESUME_ATTEMPTS` times with zero progress on the
+    last attempt, we declare a pod-OOM-loop and mark it `failed` with a
+    clear actionable error — re-queueing forever would just keep
+    OOM-killing the pod across the rest of the user's work (iter75, real
+    production bug 2026-05-18 video 2ebe539f, 3.93 GB).
+    """
     await asyncio.sleep(5)  # Wait for server to fully initialize
     try:
         stuck_videos = await db.videos.find(
             {"processing_status": {"$in": ["processing", "queued"]}},
             {"_id": 0, "id": 1, "user_id": 1, "is_chunked": 1, "total_chunks": 1,
-             "chunk_paths": 1, "chunk_backends": 1, "file_size_bytes": 1}
+             "chunk_paths": 1, "chunk_backends": 1, "file_size_bytes": 1,
+             "resume_attempts": 1, "processing_progress": 1, "filename": 1}
         ).to_list(100)
 
         if not stuck_videos:
@@ -2285,6 +2302,57 @@ async def resume_interrupted_processing():
                     )
                     continue
 
+            # iter75: pod-OOM-loop detection.
+            # If a video has been resumed _MAX_RESUME_ATTEMPTS times AND the
+            # last resume made zero progress (still at 0%), conclude that
+            # ffmpeg is OOM-killing the pod BEFORE its Python handler can
+            # fire iter63's auto-retry. Mark it failed with the "compression
+            # required" error — the frontend banner already escalates to
+            # the red RE-UPLOAD REQUIRED CTA on `processing_status == 'failed'`.
+            #
+            # A successful previous attempt that crossed >0% indicates the
+            # pipeline IS able to make progress; in that case we keep
+            # resuming so iter63's retry-at-240p tier can still kick in.
+            prior_attempts = int(video.get("resume_attempts") or 0)
+            prior_progress = int(video.get("processing_progress") or 0)
+            if prior_attempts >= _MAX_RESUME_ATTEMPTS and prior_progress == 0:
+                size_gb = round((video.get("file_size_bytes") or 0) / (1024 ** 3), 2) or None
+                msg = (
+                    f"Processing failed {prior_attempts}× without making any progress. "
+                    "Source file is too heavy for our encoding pod — re-compress with "
+                    "HandBrake (Fast 720p30 / CQ 28) and re-upload."
+                )
+                logger.warning(
+                    f"Pod-OOM-loop detected for {video_id} "
+                    f"(resume_attempts={prior_attempts}, progress=0). Marking failed."
+                )
+                await db.videos.update_one(
+                    {"id": video_id},
+                    {"$set": {
+                        "processing_status": "failed",
+                        "processing_error": msg,
+                        "processing_progress": 0,
+                        "processing_current": None,
+                        "processing_completed_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                # Log to processing_events so the Top Failed Videos panel
+                # picks it up with a distinct failure_mode and the Email Fix
+                # button routes the compression-help template (iter71).
+                try:
+                    from services.processing_events import log_event as _log_event
+                    await _log_event(
+                        video_id=video_id,
+                        user_id=user_id,
+                        event_type="final_failure",
+                        failure_mode="pod_oom_loop",
+                        source_size_gb=size_gb,
+                        error_message=f"{msg} (resume_attempts={prior_attempts})",
+                    )
+                except Exception:
+                    pass  # instrumentation must never break the guard
+                continue
+
             # Check which types are already completed
             completed = set()
             analyses = await db.analyses.find(
@@ -2300,7 +2368,18 @@ async def resume_interrupted_processing():
             remaining = [t for t in ["tactical", "player_performance", "highlights", "timeline_markers"] if t not in completed]
 
             if remaining:
-                logger.info(f"Resuming processing for video {video_id}: {remaining} (already done: {list(completed)})")
+                # Bump the resume counter BEFORE kicking off the new attempt
+                # so we count THIS resume even if the pod dies before
+                # run_auto_processing can record progress.
+                await db.videos.update_one(
+                    {"id": video_id},
+                    {"$inc": {"resume_attempts": 1}},
+                )
+                logger.info(
+                    f"Resuming processing for video {video_id}: {remaining} "
+                    f"(attempt {prior_attempts + 1}/{_MAX_RESUME_ATTEMPTS}, "
+                    f"already done: {list(completed)})"
+                )
                 asyncio.create_task(run_auto_processing(video_id, user_id, only_types=remaining))
             else:
                 # All types completed, just mark as done
