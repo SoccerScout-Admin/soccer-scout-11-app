@@ -1,6 +1,49 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Admin Auto-Promote on Login (iter76 — May 2026)
+
+User Ben on production couldn't access `/admin/processing-events` because the production Atlas DB had no admin role flag on their account, and the existing `/api/admin/bootstrap` endpoint required a manual curl with the `ADMIN_BOOTSTRAP_SECRET` env var — too cumbersome.
+
+iter76 adds an env-controlled auto-promote path so the owner can self-onboard simply by setting one production secret.
+
+### Behavior
+- New env var `ADMIN_AUTOPROMOTE_EMAIL` — accepts a single email or a comma-separated list (`a@x.com, b@y.com`).
+- On every successful `/api/auth/login` AND every authenticated request via `get_current_user`, if the user's email (case-insensitive) matches any entry in the env var AND the user isn't already `admin`/`owner`, their role is `$set` to `admin` in `users` collection.
+- Idempotent: already-admin users are a no-op (no DB write).
+- Fail-safe: env var unset → no-op. DB failure during promotion → swallowed + logged, login still succeeds with the old role.
+- Audit trail: every promotion logs at WARNING level with the user_id, old role, and new role.
+
+### Files touched
+- `server.py`: new `_maybe_autopromote_admin(user)` helper. Called in both the login endpoint (BEFORE `create_token`) and inside `get_current_user`.
+- `routes/auth.py`: mirror of the helper to keep both authentication paths in sync (codebase already maintains two synced `get_current_user` implementations).
+
+### Onboarding workflow for the production owner
+1. In Emergent Deployments UI → Secrets → add `ADMIN_AUTOPROMOTE_EMAIL=Ben.buursma@gmail.com`
+2. Redeploy
+3. Log out + log back in on https://soccerscout11.com — server logs "ADMIN_AUTOPROMOTE_EMAIL match — promoted Ben.buursma@gmail.com from role='coach' to role='admin'"
+4. Admin sections (`/admin/processing-events`) now accessible
+
+### Playbook compliance
+Per the system prompt rules for any auth-touching change, this was routed through `integration_playbook_expert_v2` BEFORE writing code. Playbook recommendations applied: case-insensitive email normalization, idempotent DB writes, WARNING-level audit logging, fail-safe defaults, no changes to bcrypt verification / JWT signing / cookie setting paths.
+
+### Tests
+- 9 new pytest cases in `test_admin_autopromote.py`:
+  - env unset → no-op
+  - already-admin → idempotent no-op
+  - already-owner → idempotent no-op
+  - happy path: email matches, role flipped in DB
+  - case-insensitive email matching
+  - comma-separated list matches any entry
+  - email doesn't match → no-op
+  - server.py + routes/auth.py copies behave identically
+  - E2E login flow on the live API doesn't promote unmatched users
+- All passing. Wide regression: 71/71 tests pass across touched suites when run individually.
+
+BUILD_VERSION → **iter76**, feature_count 83.
+
+
+
 ## Pod-OOM-Loop Guard (iter75 — May 2026)
 
 Real production bug 2026-05-18: a 3.93 GB video (`2ebe539f-b00b-...`) uploaded cleanly to soccerscout11.com (full integrity, no partial banner), but processing stuck at 0% forever — every pod restart re-queued it via `resume_interrupted_processing`, ffmpeg OOM-killed the **whole pod** mid-`prepare_video_sample` before iter63's Python-level auto-retry tier could fire, then the cycle repeated indefinitely.

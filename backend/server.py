@@ -347,6 +347,41 @@ def verify_token(token: str) -> dict:
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+async def _maybe_autopromote_admin(user: dict) -> dict:
+    """If `ADMIN_AUTOPROMOTE_EMAIL` env var is set and the user's email matches
+    (case-insensitive), flip their role to `admin` and return the updated user
+    dict. Idempotent — already-admin users are a no-op. Supports
+    comma-separated lists so multiple owners can be configured without a code
+    change. Logged at WARNING level so we have an audit trail of every
+    auto-promotion in production logs (iter76, real production owner-onboard
+    fix 2026-05-18)."""
+    raw = os.environ.get("ADMIN_AUTOPROMOTE_EMAIL", "").strip()
+    if not raw:
+        return user
+    current_role = (user.get("role") or "").lower()
+    if current_role in ("admin", "owner"):
+        return user  # nothing to do
+    user_email = (user.get("email") or "").strip().lower()
+    if not user_email:
+        return user
+    allowed = {e.strip().lower() for e in raw.split(",") if e.strip()}
+    if user_email not in allowed:
+        return user
+    try:
+        await db.users.update_one(
+            {"id": user["id"]}, {"$set": {"role": "admin"}}
+        )
+        logger.warning(
+            f"ADMIN_AUTOPROMOTE_EMAIL match — promoted {user_email} "
+            f"from role={current_role!r} to role='admin' (user_id={user['id']})"
+        )
+        user["role"] = "admin"
+    except Exception as e:
+        # Failing to promote must never break login or auth — log and proceed.
+        logger.error(f"Admin auto-promote failed for {user_email}: {e}")
+    return user
+
+
 async def get_current_user(request: Request, authorization: str = Header(None)):
     """Authenticate the caller. Reads the httpOnly access_token cookie first
     (XSS-proof, the migration target); falls back to the legacy Authorization
@@ -368,6 +403,9 @@ async def get_current_user(request: Request, authorization: str = Header(None)):
     user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    # iter76: auto-promote on every authenticated request so an existing
+    # logged-in user gets their role flipped without a logout/login cycle.
+    user = await _maybe_autopromote_admin(user)
     return user
 
 async def get_user_from_token_param(token: str) -> dict:
@@ -430,6 +468,9 @@ async def login(input: LoginRequest, request: Request, response: Response):
         await record_failed_login(request, input.email, db)
         raise HTTPException(status_code=401, detail="Invalid email or password")
     await record_successful_login(request, input.email, db)
+    # iter76: auto-promote owner emails BEFORE issuing the token so the
+    # returned role reflects the updated value the rest of the session uses.
+    user = await _maybe_autopromote_admin(user)
     token = create_token(user["id"], user["email"])
     _set_auth_cookie(response, token)
     _set_csrf_cookie(response, _generate_csrf_token())  # csrf double-submit token
@@ -452,7 +493,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter75"
+BUILD_VERSION = "iter76"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
