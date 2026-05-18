@@ -7,7 +7,7 @@
 # If you see `-e\n# Environment and credential files\n.env\n.env.*\n*.env`
 # blocks appended at the bottom of this file again — a platform hook re-added
 # them. Re-rewrite this file from scratch (iter66 history shows this has
-# happened 3 times now).
+# happened 3 times now; iter74 makes it 4).
 
 # IDE and editors
 .idea/
@@ -93,25 +93,6 @@ frontend/node_modules/.cache/default-development/70.pack
 frontend/node_modules/.cache/default-development/2.pack
 frontend/node_modules/.cache/default-development/19.pack
 frontend/node_modules/.cache/default-development/5.pack
-frontend/node_modules/.cache/default-development/5.pack
 frontend/node_modules/.cache/default-development/9.pack
 frontend/node_modules/.cache/default-development/13.pack
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
 frontend/node_modules/.cache/default-development/10.pack
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
