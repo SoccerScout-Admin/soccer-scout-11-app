@@ -1,6 +1,39 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Manual Claim-Owner Endpoint (iter78 — May 2026)
+
+Production owner still couldn't access `/admin/processing-events` after iter77 deployed. Possible causes: deploy didn't actually pick up iter77 due to recurring `.gitignore` corruption, the startup migration timing missed the owner's user doc, or the migration ran but the user's existing JWT was carrying the stale `coach` role until next login.
+
+iter78 ships a manual one-shot fallback that works regardless of which iteration is actually deployed and regardless of whether the migration fired:
+
+### Endpoint
+- New `POST /api/admin/claim-owner` — no body needed, no shared secret needed.
+- Only callers whose authenticated email matches the hardcoded `_OWNER_CLAIM_EMAILS` allowlist (currently `{"ben.buursma@gmail.com"}`, case-insensitive) can use it.
+- Any other authenticated user gets a clean **403** with an explicit "reserved for the app owner" message — never a silent no-op so we can debug accidental hits.
+- Idempotent: re-running for an already-admin caller returns `{status: "already_admin", role: "admin"}`.
+- Logs every promotion at WARNING level for audit.
+
+### Owner recovery one-liner (after deploy)
+While logged into soccerscout11.com with the owner email, paste in the browser dev console:
+```js
+fetch('/api/admin/claim-owner', { method: 'POST', credentials: 'include' })
+  .then(r => r.json()).then(console.log)
+```
+Expected output: `{status: "promoted", role: "admin"}`. Then refresh — `/admin/processing-events` will now load.
+
+### Tests
+- 4 new pytest cases in `test_claim_owner.py`:
+  - `test_claim_owner_requires_auth` — 401/403 for unauthenticated callers
+  - `test_claim_owner_rejects_non_owner_user` — 403 with explicit reason for callers not in allowlist
+  - `test_claim_owner_promotes_canonical_owner` — happy path: coach → admin in DB
+  - `test_claim_owner_idempotent_when_already_admin` — `status: already_admin`
+- All passing. Wide regression: 24/24 across admin-bootstrap test surface (claim-owner + owner-admin-seed + admin-autopromote + pod-oom-loop + partial-upload).
+
+BUILD_VERSION → **iter78**, feature_count 85.
+
+
+
 ## One-Time Owner-Admin Seed Migration (iter77 — May 2026)
 
 User context: production owner couldn't access `/admin/processing-events`. iter76 added `ADMIN_AUTOPROMOTE_EMAIL` env-var auto-promotion, but the Emergent deployment UI on the user's plan doesn't expose a secrets/env-var panel post-deploy — they had no way to set the env var. iter77 ships a code-only fix that requires zero UI interaction.

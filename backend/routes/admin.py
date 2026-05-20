@@ -71,6 +71,50 @@ async def bootstrap_admin(
     return {"status": "promoted", "role": "admin"}
 
 
+# Hardcoded canonical owner emails for the no-secret claim path below.
+# Plan: this app is single-owner today; if a co-owner needs admin later,
+# either add their email here (one-line code change) OR use /admin/users to
+# promote them via the iter78 list_users + role-toggle flow (still TODO).
+_OWNER_CLAIM_EMAILS = {"ben.buursma@gmail.com"}
+
+
+@router.post("/admin/claim-owner")
+async def claim_owner_admin(
+    current_user: dict = Depends(get_current_user),
+):
+    """No-secret self-promote for the canonical app owner. Designed for
+    environments where the iter76 ADMIN_AUTOPROMOTE_EMAIL env-var path is
+    unusable (the Emergent deployment UI on the user's plan doesn't expose
+    a secrets panel) AND the iter77 startup migration didn't fire (timing
+    issue, email case mismatch, or a marker from a previous failed attempt).
+
+    Only the caller's authenticated email matters — no body needed. We
+    check the email against the hardcoded `_OWNER_CLAIM_EMAILS` allowlist
+    (case-insensitive). Any other authenticated user gets a clean 403; we
+    never silently no-op so the admin can debug if they hit it by mistake.
+
+    Idempotent: re-running for an already-admin caller is a no-op that
+    returns `status: "already_admin"`."""
+    user_email = (current_user.get("email") or "").strip().lower()
+    if user_email not in _OWNER_CLAIM_EMAILS:
+        logger.warning(
+            "[claim-owner] rejected for user=%s — not in owner allowlist",
+            current_user.get("email"),
+        )
+        raise HTTPException(status_code=403, detail="This endpoint is reserved for the app owner.")
+
+    current_role = (current_user.get("role") or "").lower()
+    if current_role in ("admin", "owner"):
+        return {"status": "already_admin", "role": current_role}
+
+    await db.users.update_one({"id": current_user["id"]}, {"$set": {"role": "admin"}})
+    logger.warning(
+        "[claim-owner] GRANTED admin to user=%s (id=%s) via no-secret claim path",
+        current_user.get("email"), current_user.get("id"),
+    )
+    return {"status": "promoted", "role": "admin"}
+
+
 @router.get("/admin/users")
 async def list_users(
     q: Optional[str] = None,
