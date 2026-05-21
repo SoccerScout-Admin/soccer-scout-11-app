@@ -493,7 +493,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter78"
+BUILD_VERSION = "iter79"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -903,6 +903,50 @@ async def get_upload_status(upload_id: str, current_user: dict = Depends(get_cur
         "created_at": upload.get("created_at"),
         "last_chunk_at": upload.get("last_chunk_at")
     }
+
+
+@api_router.get("/matches/{match_id}/pending-uploads")
+async def list_pending_uploads(match_id: str, current_user: dict = Depends(get_current_user)):
+    """Return any incomplete chunked-upload sessions for a given match so the
+    match-page UI can show a "Resume incomplete upload" banner.
+
+    A coach with a flaky home connection can lose half their upload, close
+    the tab, and come back the next day without realizing they can pick the
+    same file and resume from where they left off. This endpoint feeds a
+    banner on the match page that surfaces that recovery path.
+
+    Filters to in-progress / failed / initialized sessions only — sessions
+    that completed don't belong here (the resulting video doc handles its
+    own state).
+    """
+    cursor = db.chunked_uploads.find({
+        "match_id": match_id,
+        "user_id": current_user["id"],
+        "status": {"$in": ["initialized", "in_progress", "failed"]},
+    }, {"_id": 0}).sort("created_at", -1).limit(5)
+    sessions = await cursor.to_list(5)
+    out = []
+    for s in sessions:
+        chunk_paths = s.get("chunk_paths", {})
+        uploaded = len(chunk_paths)
+        file_size = s.get("file_size", 0)
+        chunk_size = s.get("chunk_size", CHUNK_SIZE)
+        total = max(1, -(-file_size // chunk_size))  # ceil
+        out.append({
+            "upload_id": s.get("upload_id"),
+            "video_id": s.get("video_id"),
+            "filename": s.get("filename"),
+            "file_size": file_size,
+            "file_size_gb": round(file_size / (1024 ** 3), 2),
+            "chunks_received": uploaded,
+            "total_chunks": total,
+            "progress_pct": round((uploaded / total) * 100, 1) if total else 0,
+            "status": s.get("status"),
+            "created_at": s.get("created_at"),
+            "last_chunk_at": s.get("last_chunk_at"),
+        })
+    return {"count": len(out), "sessions": out}
+
 
 @api_router.post("/videos/upload/chunk")
 async def upload_chunk(

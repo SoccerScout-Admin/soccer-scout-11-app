@@ -1,6 +1,32 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Resilient Chunked Upload + Auto-Resume Banner (iter79 — May 2026)
+
+User screenshot (2026-05-20) showed the iter70 red `RE-UPLOAD REQUIRED` banner firing correctly on a 7.63 GB upload that landed at only **404 of 782 chunks (51.7%)**. The fail-fast and recovery UI are working; the actual problem is the **upload itself keeps dropping mid-flight** on the user's home connection (~4 hours of upload time = plenty of opportunity for a wifi blip to kill it).
+
+iter79 makes the upload pipeline far more resilient:
+
+### Frontend (`pages/MatchDetail.js`)
+- **`uploadChunkWithRetry` upgraded**: 3 → 6 retries with exponential backoff up to 60s per attempt (vs old 30s cap).
+- **New `waitForOnline(statusSetter)` helper**: when the browser reports offline (`navigator.onLine === false`), the upload loop **pauses** instead of failing, updates the status to "Offline — upload paused. Will auto-resume when connection returns.", and resumes the moment `online` fires. Falls back to a 5s poll for VPNs / captive portals that don't emit the event.
+- **Smarter failure message**: when the retry budget genuinely exhausts, the alert now includes file-size-aware compression advice — for files >2 GB it shows HandBrake `Fast 720p30 / CQ 28` step-by-step (cuts size ~80% without losing AI-relevant detail).
+- **NEW "Incomplete upload waiting" banner** at the top of the match page: surfaces when `GET /api/matches/{match_id}/pending-uploads` returns sessions with status `initialized` / `in_progress` / `failed`. Tells the coach exactly which file to re-pick + the current % complete so they know resume is possible and won't waste another upload session from scratch.
+
+### Backend (`server.py`)
+- New `GET /api/matches/{match_id}/pending-uploads` — returns the coach's incomplete chunked-upload sessions for the match with `chunks_received / total_chunks / progress_pct / file_size_gb / filename` so the resume banner can render with accurate progress info.
+
+### Why this matters for the user's actual workflow
+The 7.63 GB / 51.7% case from the screenshot would now:
+- Auto-retry each chunk up to 6× with 60s backoff (catches most home-wifi blips)
+- Auto-pause on offline detection rather than burning retries (catches longer dropouts)
+- If the coach closes the tab and comes back, show the resume banner immediately — no need to guess whether to re-pick the file or start over
+- If the retry budget genuinely exhausts (truly bad connection), the error message now points at HandBrake compression instead of just saying "try again"
+
+BUILD_VERSION → **iter79**, feature_count 86.
+
+
+
 ## Manual Claim-Owner Endpoint (iter78 — May 2026)
 
 Production owner still couldn't access `/admin/processing-events` after iter77 deployed. Possible causes: deploy didn't actually pick up iter77 due to recurring `.gitignore` corruption, the startup migration timing missed the owner's user doc, or the migration ran but the user's existing JWT was carrying the stale `coach` role until next login.

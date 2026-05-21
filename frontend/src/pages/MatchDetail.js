@@ -24,6 +24,7 @@ const MatchDetail = () => {
   const [selectedTeamId, setSelectedTeamId] = useState('');
   const [importingTeam, setImportingTeam] = useState(false);
   const [lastTeam, setLastTeam] = useState(null);
+  const [pendingUploads, setPendingUploads] = useState([]);
   const [playerForm, setPlayerForm] = useState({ name: '', number: '', position: '', team: '', team_id: '' });
   const [csvData, setCsvData] = useState('');
   const [csvTeam, setCsvTeam] = useState('');
@@ -92,12 +93,20 @@ const MatchDetail = () => {
     } catch (err) { /* non-critical — pill just won't show */ }
   }, []);
 
+  const fetchPendingUploads = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API}/matches/${matchId}/pending-uploads`, { headers: getAuthHeader() });
+      setPendingUploads(res.data?.sessions || []);
+    } catch (err) { /* non-critical — banner just won't show */ }
+  }, [matchId]);
+
   useEffect(() => {
     fetchMatch();
     fetchPlayers();
     fetchTeams();
     fetchLastTeam();
-  }, [fetchMatch, fetchPlayers, fetchTeams, fetchLastTeam]);
+    fetchPendingUploads();
+  }, [fetchMatch, fetchPlayers, fetchTeams, fetchLastTeam, fetchPendingUploads]);
 
   useEffect(() => {
     if (!match?.video_id) { setVideoMeta(null); return; }
@@ -259,14 +268,42 @@ const MatchDetail = () => {
     }
   };
 
-  const uploadChunkWithRetry = async (url, formData, maxRetries = 3) => {
+  // Wait until the browser reports the network is back online. Falls back to
+  // a 5-second poll if the `online` event somehow doesn't fire (some VPNs or
+  // captive portals miss it). Returns immediately if already online.
+  const waitForOnline = async (statusSetter) => {
+    if (navigator.onLine) return;
+    statusSetter('Offline — upload paused. Will auto-resume when connection returns.');
+    await new Promise((resolve) => {
+      const onOnline = () => {
+        window.removeEventListener('online', onOnline);
+        clearInterval(poll);
+        resolve();
+      };
+      window.addEventListener('online', onOnline);
+      const poll = setInterval(() => {
+        if (navigator.onLine) onOnline();
+      }, 5000);
+    });
+  };
+
+  // Six retries with exponential backoff up to 60s. The user's home wifi can
+  // blip for 30-60s and we want to ride it out rather than failing the whole
+  // upload (real production bug — 7.63 GB file landed at 51.7% chunks because
+  // the previous 3-retry budget exhausted during a longer dropout).
+  const uploadChunkWithRetry = async (url, formData, maxRetries = 6, statusSetter = null) => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
+        // If the browser thinks we're offline, wait it out BEFORE burning a
+        // retry attempt — being offline isn't a chunk failure, it's a pause.
+        if (statusSetter) await waitForOnline(statusSetter);
         return await axios.post(url, formData, { headers: getAuthHeader(), timeout: 300000 });
       } catch (err) {
         const isRetryable = !err.response || err.response.status >= 500 || err.code === 'ECONNABORTED';
         if (attempt === maxRetries || !isRetryable) throw err;
-        await new Promise(r => setTimeout(r, Math.min(2000 * Math.pow(2, attempt - 1), 30000)));
+        const backoffMs = Math.min(2000 * Math.pow(2, attempt - 1), 60000);
+        if (statusSetter) statusSetter(`Chunk failed (attempt ${attempt}/${maxRetries}) — retrying in ${Math.round(backoffMs / 1000)}s...`);
+        await new Promise(r => setTimeout(r, backoffMs));
       }
     }
   };
@@ -300,7 +337,11 @@ const MatchDetail = () => {
         const chunkFormData = new FormData();
         chunkFormData.append('file', chunk);
         const resp = await uploadChunkWithRetry(
-          `${API}/videos/upload/chunk?upload_id=${upload_id}&chunk_index=${i}&total_chunks=${totalChunks}`, chunkFormData);
+          `${API}/videos/upload/chunk?upload_id=${upload_id}&chunk_index=${i}&total_chunks=${totalChunks}`,
+          chunkFormData,
+          6,
+          setUploadStatus,
+        );
         uploadedCount++;
         setUploadProgress(Math.round((uploadedCount / totalChunks) * 100));
         setUploadStatus(`Uploading: ${uploadedCount}/${totalChunks} chunks`);
@@ -310,7 +351,20 @@ const MatchDetail = () => {
       navigate(`/video/${video_id}`);
     } catch (err) {
       console.error('Chunked upload failed:', err);
-      alert('Upload interrupted. Try again — it will resume.\n' + (err.response?.data?.detail || err.message));
+      const fileSizeGB = (file.size / (1024 ** 3)).toFixed(2);
+      const reason = err.response?.data?.detail || err.message || 'connection dropped';
+      // For multi-GB files that exhausted the retry budget, compression is
+      // the real fix — the upload will keep dropping on a flaky connection
+      // until the file is small enough to finish in one good window.
+      const advice = file.size > 2 * 1024 ** 3
+        ? `\n\nThis is a ${fileSizeGB} GB file. The fastest fix is to compress it BEFORE re-uploading:\n` +
+          `1. Open the file in HandBrake (handbrake.fr — free)\n` +
+          `2. Preset: "Fast 720p30"\n` +
+          `3. Video → Constant Quality = 28\n` +
+          `4. Save the smaller file (~80% smaller, same visual quality for AI analysis)\n` +
+          `5. Re-upload the compressed file instead.`
+        : '\n\nRe-pick the same file and we will resume from where we left off.';
+      alert(`Upload interrupted: ${reason}${advice}`);
     } finally {
       setUploading(false);
       setUploadProgress(0);
@@ -389,6 +443,27 @@ const MatchDetail = () => {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-8">
+        {pendingUploads.length > 0 && !uploading && (
+          <div data-testid="pending-upload-banner"
+            className="mb-6 bg-[#1A0F0A] border border-[#FBBF24]/40 px-6 py-4">
+            <div className="flex items-start gap-4">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FBBF24" strokeWidth="2" className="flex-shrink-0 mt-0.5">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+              <div className="flex-1">
+                <p className="text-sm font-bold text-[#FBBF24] tracking-wider uppercase">Incomplete upload waiting</p>
+                <p className="text-xs text-[#A3A3A3] mt-1">
+                  <strong className="text-white">{pendingUploads[0].filename}</strong>{' '}
+                  ({pendingUploads[0].file_size_gb} GB) — {pendingUploads[0].chunks_received} of {pendingUploads[0].total_chunks} chunks delivered ({pendingUploads[0].progress_pct}%).
+                </p>
+                <p className="text-xs text-[#A3A3A3] mt-1">
+                  Pick the <em>same</em> file below to resume from where you left off. No re-upload from scratch needed.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
         {!match.video_id && (
           <ManualResultForm match={match} players={players} onSaved={() => fetchMatch()} />
         )}
