@@ -50,7 +50,7 @@ def put_object_sync(path: str, data: bytes, content_type: str) -> dict:
     resp.raise_for_status()
     return resp.json()
 
-async def put_object_with_retry(path: str, data: bytes, content_type: str, max_retries: int = 4) -> dict:
+async def put_object_with_retry(path: str, data: bytes, content_type: str, max_retries: int = 6) -> dict:
     global storage_session
     last_error = None
     for attempt in range(max_retries):
@@ -142,7 +142,7 @@ async def store_chunk(video_id: str, user_id: str, chunk_index: int, data: bytes
     chunk_path = f"{APP_NAME}/videos/{user_id}/{video_id}_chunk_{chunk_index:06d}.bin"
     if not storage_breaker.is_open:
         try:
-            await put_object_with_retry(chunk_path, data, "application/octet-stream", max_retries=4)
+            await put_object_with_retry(chunk_path, data, "application/octet-stream", max_retries=6)
             storage_breaker.record_success()
             return {"backend": "storage", "path": chunk_path, "size": len(data)}
         except Exception as e:

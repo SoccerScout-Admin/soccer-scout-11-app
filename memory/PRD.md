@@ -1,6 +1,47 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Patience Through Storage Outages + Auto-Resume UX (iter82 — May 2026)
+
+Follow-up to iter81. Real production incident 2026-05-21 ~07:13 UTC: object storage (`integrations.emergentagent.com/objstore`) returned HTTP 500 on every chunk PUT for ~6 minutes. iter81's 503-on-filesystem-fallback correctly refused to commit ephemeral chunks, but the iter79 client only had **6 retries (~2 min total)** before alerting the user with "Upload interrupted". User's screenshot: orange banner "INCOMPLETE UPLOAD WAITING — LFC 07B at ACGR 07 MLSNext2.mp4 (0.83 GB) — 0 of 85 chunks delivered (0%)".
+
+### Fixes shipped
+
+1. **Client retry budget bumped 6 → 20** in `frontend/src/pages/MatchDetail.js::uploadChunkWithRetry`. With 60s max backoff that's ~15 minutes of patient retrying — covers virtually every transient object-storage outage we've observed.
+2. **503 gets a friendly status message** instead of the scary "Chunk failed (attempt X/6)" — distinguishes "storage is degraded, just waiting it out" from real chunk-level failures. The message reads: *"Storage temporarily slow — auto-resuming in Ns (attempt X/20). Keep this tab open."*
+3. **`fetchPendingUploads()` is called inside the upload's catch block** so the orange "INCOMPLETE UPLOAD WAITING" banner refreshes immediately without forcing a page reload. Previously the banner only appeared after F5 — many users wouldn't notice their resume option.
+4. **`put_object_with_retry` default raised 4 → 6** (`backend/services/storage.py`) so transient ~minute-long storage hiccups get absorbed server-side before triggering the 503 bounce. Exponential backoff already caps at 10s, so worst case server-side retry budget is ~30s per chunk before falling back — still safe.
+5. **Failure-message routing**: when the final `err.response.status === 503` (storage degraded for >15 min), the alert now points users at the orange resume banner rather than rambling about HandBrake.
+
+### `.gitignore` Deploy Hook — Predeploy Script
+
+The Emergent platform hook keeps re-injecting `.env`, `.env.*`, `*.env`, and `frontend/node_modules/.cache/default-development/*.pack` lines into `/app/.gitignore`. This causes the deploy pipeline to skip the secrets step ("failed to fetch envs") because the `.env` files become git-ignored.
+
+Shipped `/app/predeploy.sh` — an idempotent cleaner that strips all known platform-injected patterns. Tested against simulated corruption (6 lines removed cleanly). User should run `bash /app/predeploy.sh` immediately before each Deploy click.
+
+Caught 3 freshly-injected `.pack` lines during this iteration alone — confirms the script is needed.
+
+### Tests
+- `test_storage_circuit_breaker.py::test_put_object_with_retry_iter82_floor` — locks the server-side retry floor to >=6
+- `test_upload_retry_budget_frontend.py` — 4 new cases asserting client retry budget >=20, banner refresh, friendly 503 status
+- All 21 storage/upload-related tests pass. No regressions in lint or BUILD endpoint.
+
+### Verified live
+- `GET /api/health/deploy` on preview returns `build=iter82` with all 5 new feature flags listed
+- Smoke screenshot of preview homepage renders cleanly
+
+### Files touched
+- `frontend/src/pages/MatchDetail.js` (uploadChunkWithRetry retry budget, 503 status, catch-block banner refresh, smarter alert)
+- `backend/services/storage.py` (`put_object_with_retry` default 4 → 6, store_chunk call site updated)
+- `backend/server.py` (`BUILD_VERSION = "iter82"`, 5 new feature flags appended to SHIPPED_FEATURES)
+- `backend/tests/test_storage_circuit_breaker.py` (new iter82 floor test)
+- `backend/tests/test_upload_retry_budget_frontend.py` (NEW — 4 cases)
+- `/app/predeploy.sh` (NEW — gitignore platform-hook cleaner)
+- `/app/.gitignore` (cleaned of platform-injected `.env*` and `.pack` lines)
+
+---
+
+
 ## Storage Routing Fix — End the 50-of-85-Chunks Bug (iter81 — May 2026)
 
 Real production bug 2026-05-21 (video `25e71613`, 845 MB compressed file): the upload reported reaching ~25% then errored. The iter70 banner showed "Upload incomplete (50 of 85 chunks, 58.8%)". User had carefully followed the iter79 HandBrake compression advice; the upload pipeline still failed.

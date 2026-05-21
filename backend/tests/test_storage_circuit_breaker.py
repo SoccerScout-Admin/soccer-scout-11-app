@@ -84,3 +84,19 @@ def test_put_object_with_retry_signature():
         "should be at least 3 so transient flakes are absorbed before falling "
         "back to filesystem."
     )
+
+
+def test_put_object_with_retry_iter82_floor():
+    """iter82: must default to >=6 retries. Real production outage on
+    2026-05-21 lasted ~6 minutes and 4 retries (iter81) wasn't enough to
+    absorb it server-side — every chunk fell back to filesystem, triggering
+    the 503 path and forcing the client to bear the full retry burden."""
+    import inspect
+    from services.storage import put_object_with_retry
+    sig = inspect.signature(put_object_with_retry)
+    max_retries_default = sig.parameters["max_retries"].default
+    assert max_retries_default >= 6, (
+        f"put_object_with_retry default max_retries is {max_retries_default}; "
+        "iter82 raised the floor to 6 so transient ~minute-long storage "
+        "blips are absorbed without 503-bouncing every chunk to the client."
+    )

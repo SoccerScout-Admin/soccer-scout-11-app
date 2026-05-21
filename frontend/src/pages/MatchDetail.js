@@ -267,11 +267,19 @@ const MatchDetail = () => {
     });
   };
 
-  // Six retries with exponential backoff up to 60s. The user's home wifi can
-  // blip for 30-60s and we want to ride it out rather than failing the whole
-  // upload (real production bug — 7.63 GB file landed at 51.7% chunks because
-  // the previous 3-retry budget exhausted during a longer dropout).
-  const uploadChunkWithRetry = async (url, formData, maxRetries = 6, statusSetter = null) => {
+  // iter82: 20 retries total to ride out longer object-storage outages.
+  //
+  // Real production bug 2026-05-21: object storage was returning 500s for
+  // ~6 minutes. iter80's 503-on-filesystem-fallback correctly refused to
+  // commit ephemeral chunks, but the iter79 client only had 6 retries
+  // (~2 min total), so the user's upload aborted at 0 of 85 chunks with
+  // a generic alert. Bumping the retry budget to 20 gives transient storage
+  // hiccups up to ~15 minutes to clear before we ask the user to resume
+  // manually. Most outages clear within 5-10 minutes.
+  //
+  // Also: differentiate 503 (storage degraded — friendly "paused" message)
+  // from 500 ("Chunk failed") so the user understands the wait isn't a bug.
+  const uploadChunkWithRetry = async (url, formData, maxRetries = 20, statusSetter = null) => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         // If the browser thinks we're offline, wait it out BEFORE burning a
@@ -279,10 +287,18 @@ const MatchDetail = () => {
         if (statusSetter) await waitForOnline(statusSetter);
         return await axios.post(url, formData, { headers: getAuthHeader(), timeout: 300000 });
       } catch (err) {
-        const isRetryable = !err.response || err.response.status >= 500 || err.code === 'ECONNABORTED';
+        const status = err.response?.status;
+        const isRetryable = !err.response || status >= 500 || err.code === 'ECONNABORTED';
         if (attempt === maxRetries || !isRetryable) throw err;
         const backoffMs = Math.min(2000 * Math.pow(2, attempt - 1), 60000);
-        if (statusSetter) statusSetter(`Chunk failed (attempt ${attempt}/${maxRetries}) — retrying in ${Math.round(backoffMs / 1000)}s...`);
+        const secs = Math.round(backoffMs / 1000);
+        if (statusSetter) {
+          if (status === 503) {
+            statusSetter(`Storage temporarily slow — auto-resuming in ${secs}s (attempt ${attempt}/${maxRetries}). Keep this tab open.`);
+          } else {
+            statusSetter(`Chunk failed (attempt ${attempt}/${maxRetries}) — retrying in ${secs}s...`);
+          }
+        }
         await new Promise(r => setTimeout(r, backoffMs));
       }
     }
@@ -319,7 +335,7 @@ const MatchDetail = () => {
         const resp = await uploadChunkWithRetry(
           `${API}/videos/upload/chunk?upload_id=${upload_id}&chunk_index=${i}&total_chunks=${totalChunks}`,
           chunkFormData,
-          6,
+          20,
           setUploadStatus,
         );
         uploadedCount++;
@@ -332,18 +348,29 @@ const MatchDetail = () => {
     } catch (err) {
       console.error('Chunked upload failed:', err);
       const fileSizeGB = (file.size / (1024 ** 3)).toFixed(2);
+      const status = err.response?.status;
       const reason = err.response?.data?.detail || err.message || 'connection dropped';
+      // iter82: refresh the "Incomplete upload waiting" banner immediately so
+      // the user sees the resume option without having to reload the page.
+      try { await fetchPendingUploads(); } catch (_) { /* non-critical */ }
       // For multi-GB files that exhausted the retry budget, compression is
       // the real fix — the upload will keep dropping on a flaky connection
       // until the file is small enough to finish in one good window.
-      const advice = file.size > 2 * 1024 ** 3
-        ? `\n\nThis is a ${fileSizeGB} GB file. The fastest fix is to compress it BEFORE re-uploading:\n` +
+      let advice;
+      if (status === 503) {
+        // iter82: 503 means object storage was degraded for >15 minutes of
+        // retries. Direct the user at the orange banner above the upload box.
+        advice = '\n\nOur object storage has been slow for a while. Look for the orange "INCOMPLETE UPLOAD WAITING" banner at the top of this page — pick the SAME file there in a few minutes to resume from where you left off.';
+      } else if (file.size > 2 * 1024 ** 3) {
+        advice = `\n\nThis is a ${fileSizeGB} GB file. The fastest fix is to compress it BEFORE re-uploading:\n` +
           `1. Open the file in HandBrake (handbrake.fr — free)\n` +
           `2. Preset: "Fast 720p30"\n` +
           `3. Video → Constant Quality = 28\n` +
           `4. Save the smaller file (~80% smaller, same visual quality for AI analysis)\n` +
-          `5. Re-upload the compressed file instead.`
-        : '\n\nRe-pick the same file and we will resume from where we left off.';
+          `5. Re-upload the compressed file instead.`;
+      } else {
+        advice = '\n\nLook for the orange "INCOMPLETE UPLOAD WAITING" banner above and re-pick the SAME file to resume from where you left off.';
+      }
       alert(`Upload interrupted: ${reason}${advice}`);
     } finally {
       setUploading(false);

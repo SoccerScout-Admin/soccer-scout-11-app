@@ -493,7 +493,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter81"
+BUILD_VERSION = "iter82"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -584,6 +584,12 @@ SHIPPED_FEATURES = [
     "refactor-build-match-recap-prompt",
     "refactor-browse-public-reels",
     "refactor-my-reel-stats",
+    # iter82 — patience through transient object-storage outages
+    "client-upload-retry-budget-20",
+    "storage-degraded-friendly-status",
+    "auto-refresh-pending-uploads-banner-on-failure",
+    "put-object-retry-budget-6",
+    "predeploy-gitignore-cleanup-script",
 ]
 
 def _get_build_sha() -> str:
