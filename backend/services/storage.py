@@ -50,7 +50,7 @@ def put_object_sync(path: str, data: bytes, content_type: str) -> dict:
     resp.raise_for_status()
     return resp.json()
 
-async def put_object_with_retry(path: str, data: bytes, content_type: str, max_retries: int = 2) -> dict:
+async def put_object_with_retry(path: str, data: bytes, content_type: str, max_retries: int = 4) -> dict:
     global storage_session
     last_error = None
     for attempt in range(max_retries):
@@ -66,7 +66,9 @@ async def put_object_with_retry(path: str, data: bytes, content_type: str, max_r
                 storage_session = create_storage_session()
                 reset_storage()
                 init_storage()
-                await asyncio.sleep(2)
+                # Exponential backoff — was hard-coded 2s, now ramps to give the
+                # storage backend more recovery time between retries.
+                await asyncio.sleep(min(2 ** attempt, 10))
             else:
                 raise
     raise last_error
@@ -86,7 +88,12 @@ def delete_object_sync(path: str):
 
 # Circuit breaker
 class StorageCircuitBreaker:
-    def __init__(self, failure_threshold=1, reset_timeout=120):
+    """Trip after MANY consecutive failures — was 1 (way too aggressive: a single
+    transient SSL flake sent every subsequent chunk to ephemeral filesystem
+    storage, which then evaporated on the next pod restart, leaving the user
+    with "Upload incomplete (50 of 85 chunks)" failures that look like client
+    issues but were actually our storage-routing decision)."""
+    def __init__(self, failure_threshold=8, reset_timeout=60):
         self.consecutive_failures = 0
         self.failure_threshold = failure_threshold
         self.last_failure_time = 0
@@ -119,10 +126,23 @@ def _read_file(path: str) -> bytes:
         return f.read()
 
 async def store_chunk(video_id: str, user_id: str, chunk_index: int, data: bytes) -> dict:
+    """Store a single video chunk. Strongly prefers persistent object storage;
+    only falls back to ephemeral filesystem as a last resort.
+
+    Filesystem fallback IS still wired (for graceful degradation on small
+    chunks), but the caller in server.py::upload_chunk now ALSO raises a
+    503 back to the client whenever a chunk lands on filesystem, so the
+    iter79 client-side retry loop can wait for object storage to recover
+    instead of silently committing the chunk to ephemeral storage that
+    will evaporate on the next pod restart (real production bug
+    2026-05-21, video 25e71613, ended at 50 of 85 chunks because 35 of
+    them landed on filesystem during a transient storage hiccup and were
+    wiped when the pod recycled minutes later).
+    """
     chunk_path = f"{APP_NAME}/videos/{user_id}/{video_id}_chunk_{chunk_index:06d}.bin"
     if not storage_breaker.is_open:
         try:
-            await put_object_with_retry(chunk_path, data, "application/octet-stream", max_retries=2)
+            await put_object_with_retry(chunk_path, data, "application/octet-stream", max_retries=4)
             storage_breaker.record_success()
             return {"backend": "storage", "path": chunk_path, "size": len(data)}
         except Exception as e:

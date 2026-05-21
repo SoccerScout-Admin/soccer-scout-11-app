@@ -1,6 +1,48 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Storage Routing Fix — End the 50-of-85-Chunks Bug (iter81 — May 2026)
+
+Real production bug 2026-05-21 (video `25e71613`, 845 MB compressed file): the upload reported reaching ~25% then errored. The iter70 banner showed "Upload incomplete (50 of 85 chunks, 58.8%)". User had carefully followed the iter79 HandBrake compression advice; the upload pipeline still failed.
+
+### Root cause (not what we initially suspected)
+The actual failure mode wasn't a flaky home connection. It was a **storage-routing decision** inside our own backend:
+
+1. `services/storage.py::StorageCircuitBreaker` had `failure_threshold=1` and `reset_timeout=120s` — a **single** transient SSL/500 error from object storage tripped the breaker for 2 full minutes.
+2. While the breaker was open, every subsequent chunk uploaded by the user landed on **ephemeral pod filesystem** (`/var/video_chunks/...`) instead of persistent object storage.
+3. The pod restarted (frequent in this environment due to ephemeral storage churn — already documented as a recurring issue this session).
+4. All chunk files on filesystem **evaporated** with the pod.
+5. iter70's integrity guard counted what survived on object storage = 50 of 85, marked the video `failed` with "Upload incomplete".
+
+The user wasn't doing anything wrong — chunks were being silently routed to a storage tier that couldn't survive a pod recycle.
+
+### Fix
+- **Circuit breaker far more lenient**: `failure_threshold` raised 1 → 8, `reset_timeout` dropped 120 → 60. A single SSL flake no longer reroutes anything. Need 8 consecutive failures to open the breaker.
+- **`put_object_with_retry`**: `max_retries` raised 2 → 4 with exponential backoff (was hardcoded 2s) — most transient hiccups get absorbed silently before any fallback decision.
+- **Filesystem-routed chunks rejected with 503**: in `server.py::upload_chunk`, if a chunk lands on filesystem (because the breaker tripped or all object-storage retries failed), we delete the local file and raise `HTTPException(503, Retry-After: 5)` instead of committing the chunk to `chunked_uploads`. The iter79 client-side retry loop already treats 503 as retryable, so the client backs off (2s, 4s, 8s … up to 60s) and re-uploads against (hopefully recovered) object storage.
+- **HTTPException propagation fix**: the broad `except Exception` in `upload_chunk` was swallowing the new 503 and re-wrapping as 500. Added explicit `except HTTPException: raise` before the catch-all.
+
+### Verified live
+End-to-end smoke test on preview while object storage was returning intermittent 500s:
+- 4 internal retries attempted per chunk (was 2)
+- Circuit breaker stayed CLOSED (would have opened on the first failure under iter80)
+- After 4 failures, chunk falls back to filesystem → my new code deletes the local file and returns 503
+- Client retry sees 503, will back off and retry on next attempt
+
+### Tests
+- 5 new pytest cases in `test_storage_circuit_breaker.py`:
+  - `test_circuit_breaker_threshold_is_lenient` — guards against future tightening below 5
+  - `test_circuit_breaker_resets_after_timeout` — sanity-checks 30-120s range
+  - `test_circuit_breaker_opens_only_at_threshold` — opens at exactly 8, not earlier
+  - `test_circuit_breaker_success_resets_failure_count` — recovery semantics
+  - `test_put_object_with_retry_signature` — guards against future regression of max_retries default
+
+All passing. Lint clean across both modified Python files.
+
+BUILD_VERSION → **iter81**, feature_count 88.
+
+
+
 ## ALL Videos Use Chunked Upload Now (iter80 — May 2026)
 
 Real production bug 2026-05-21: user followed iter79 advice and compressed a 7.63 GB video down to **845 MB** with HandBrake. Tried to upload twice — both failed at 24%. Generic alert "Video upload failed" with no detail.
