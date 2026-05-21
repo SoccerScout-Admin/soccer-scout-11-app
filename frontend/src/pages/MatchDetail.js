@@ -245,28 +245,8 @@ const MatchDetail = () => {
     }
   };
 
-  const handleStandardUpload = async (file) => {
-    setUploading(true);
-    const formData = new FormData();
-    formData.append('file', file);
-    try {
-      const response = await axios.post(`${API}/videos/upload?match_id=${matchId}`, formData, {
-        headers: getAuthHeader(),
-        onUploadProgress: (progressEvent) => {
-          setUploadProgress(Math.round((progressEvent.loaded * 100) / progressEvent.total));
-        },
-        timeout: 600000
-      });
-      fireUploadCompleteNotification(response.data.video_id);
-      navigate(`/video/${response.data.video_id}`);
-    } catch (err) {
-      console.error('Upload failed:', err);
-      alert(err.response?.data?.detail || 'Video upload failed.');
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
-    }
-  };
+  // iter80: handleStandardUpload was removed — every video now goes through
+  // the resilient chunked path, even small files. See onFileChange below.
 
   // Wait until the browser reports the network is back online. Falls back to
   // a 5-second poll if the `online` event somehow doesn't fire (some VPNs or
@@ -380,10 +360,17 @@ const MatchDetail = () => {
       return;
     }
     const fileSizeGB = file.size / (1024 * 1024 * 1024);
-    // >5 GB files are intercepted by the in-page nudge in UploadPanel (which forces a deliberate choice),
-    // so we only show the OS confirm for the 1-5 GB band — large enough to set expectations, small enough
-    // not to demand a separate compression conversation.
-    if (file.size > 1024 * 1024 * 1024 && file.size <= 5 * 1024 * 1024 * 1024) {
+    // iter80: Always use the chunked upload path. The "standard" single-POST
+    // path had zero retry logic — a single connection blip mid-upload would
+    // fail the entire upload (real production bug 2026-05-21: an 845 MB
+    // compressed file failed at 24% twice on the same coach's connection).
+    // Chunked upload gives us per-chunk retries, offline auto-pause, and
+    // resume-from-where-we-left-off for free on every video size.
+    if (fileSizeGB > 5) {
+      // >5 GB: user already cleared the in-page nudge in UploadPanel; upload directly.
+      handleChunkedUpload(file);
+    } else if (fileSizeGB > 1) {
+      // 1-5 GB band: OS confirm dialog to set expectations on upload time.
       const mins = Math.max(5, Math.round(fileSizeGB * 4));
       const ok = window.confirm(
         `Large file detected (${fileSizeGB.toFixed(2)} GB).\n\n` +
@@ -393,11 +380,11 @@ const MatchDetail = () => {
       );
       if (!ok) return;
       handleChunkedUpload(file);
-    } else if (file.size > 1024 * 1024 * 1024) {
-      // >5 GB: user already cleared the in-page nudge; upload directly.
-      handleChunkedUpload(file);
     } else {
-      handleStandardUpload(file);
+      // ≤1 GB: still chunked — small files also benefit from retries and
+      // offline auto-pause. The standard single-POST path was the source of
+      // every "Video upload failed" generic alert with no diagnostic info.
+      handleChunkedUpload(file);
     }
   };
 

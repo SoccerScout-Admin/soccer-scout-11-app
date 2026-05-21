@@ -1,6 +1,31 @@
 # Soccer Scout - Product Requirements Document
 
 
+## ALL Videos Use Chunked Upload Now (iter80 — May 2026)
+
+Real production bug 2026-05-21: user followed iter79 advice and compressed a 7.63 GB video down to **845 MB** with HandBrake. Tried to upload twice — both failed at 24%. Generic alert "Video upload failed" with no detail.
+
+Root cause: `MatchDetail.js` routed files **≤1 GB through `handleStandardUpload`** — a single `axios.post()` with NO retry logic, NO offline detection, NO resume support. A 845 MB file at typical home upload speeds = ~25 min of continuous connection, and any blip kills the entire upload.
+
+The iter79 work (6 retries, offline auto-pause, resume banner) only applied to `handleChunkedUpload`. Files under 1 GB never benefited.
+
+### Fix
+- `onFileChange` in `MatchDetail.js` now routes **every video upload** through `handleChunkedUpload`, regardless of size.
+- `handleStandardUpload` removed — was the source of every "Video upload failed" generic alert. Replaced with a comment explaining why.
+- The OS confirm dialog for the 1-5 GB band is preserved (sets expectations on upload time), and the >5 GB UploadPanel nudge still works.
+
+### Why chunked-for-everything is the right call
+- A 100 MB file uploaded as 10 chunks of 10 MB each is barely slower than a single 100 MB POST (the round-trip overhead is dominated by upload bandwidth, not request count)
+- BUT it gets all the resilience for free: per-chunk retries, offline auto-pause, resume from last chunk, accurate progress in the iter79 "Incomplete upload waiting" banner
+- The standard-upload "fast path" was a premature optimization that cost the user two failed 845 MB attempts and a frustrating support cycle
+
+### Verified live
+End-to-end smoke test on preview: 886 MB sentinel init → `chunk_size=10MB`, `total_chunks=85`, `resume=false`, `progress_pct=0.0`. `pending-uploads` endpoint correctly surfaces the in-flight session with accurate progress fields.
+
+BUILD_VERSION → **iter80**, feature_count 87.
+
+
+
 ## Resilient Chunked Upload + Auto-Resume Banner (iter79 — May 2026)
 
 User screenshot (2026-05-20) showed the iter70 red `RE-UPLOAD REQUIRED` banner firing correctly on a 7.63 GB upload that landed at only **404 of 782 chunks (51.7%)**. The fail-fast and recovery UI are working; the actual problem is the **upload itself keeps dropping mid-flight** on the user's home connection (~4 hours of upload time = plenty of opportunity for a wifi blip to kill it).
