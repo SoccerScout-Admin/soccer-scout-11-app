@@ -3,11 +3,15 @@ import os
 import time
 import logging
 import asyncio
+import shutil
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from starlette.concurrency import run_in_threadpool
-from db import db, STORAGE_URL, EMERGENT_KEY, APP_NAME, CHUNK_STORAGE_DIR
+from db import (
+    db, STORAGE_URL, EMERGENT_KEY, APP_NAME, CHUNK_STORAGE_DIR,
+    PERSISTENT_CHUNK_DIR, PERSISTENT_CHUNK_FREE_MIN_BYTES,
+)
 
 logger = logging.getLogger(__name__)
 storage_key = None
@@ -127,17 +131,20 @@ def _read_file(path: str) -> bytes:
 
 async def store_chunk(video_id: str, user_id: str, chunk_index: int, data: bytes) -> dict:
     """Store a single video chunk. Strongly prefers persistent object storage;
-    only falls back to ephemeral filesystem as a last resort.
+    falls back to the persistent local PV (`/app/.video_chunks`) when storage
+    is degraded — never to ephemeral `/var/video_chunks` which evaporates on
+    pod restart.
 
-    Filesystem fallback IS still wired (for graceful degradation on small
-    chunks), but the caller in server.py::upload_chunk now ALSO raises a
-    503 back to the client whenever a chunk lands on filesystem, so the
-    iter79 client-side retry loop can wait for object storage to recover
-    instead of silently committing the chunk to ephemeral storage that
-    will evaporate on the next pod restart (real production bug
-    2026-05-21, video 25e71613, ended at 50 of 85 chunks because 35 of
-    them landed on filesystem during a transient storage hiccup and were
-    wiped when the pod recycled minutes later).
+    Returns one of:
+      - {"backend": "storage",                "path": <object-store-key>, ...}  # normal happy path
+      - {"backend": "persistent_filesystem",  "path": <local PV abs path>, ...} # fallback during outage; will be migrated later
+      - raises RuntimeError(reason)                                            # both tiers unusable — caller turns this into 503
+
+    The caller (`server.py::upload_chunk`) commits both backends to the
+    `chunked_uploads` document. A background task (`migrate_persistent_chunks`)
+    periodically walks `chunk_backends == "persistent_filesystem"` entries and
+    re-uploads them to object storage once it recovers, swapping the backend
+    in-place and deleting the local file.
     """
     chunk_path = f"{APP_NAME}/videos/{user_id}/{video_id}_chunk_{chunk_index:06d}.bin"
     if not storage_breaker.is_open:
@@ -147,20 +154,38 @@ async def store_chunk(video_id: str, user_id: str, chunk_index: int, data: bytes
             return {"backend": "storage", "path": chunk_path, "size": len(data)}
         except Exception as e:
             storage_breaker.record_failure()
-            logger.warning(f"Object Storage failed, falling back to filesystem: {str(e)[:80]}")
+            logger.warning(f"Object Storage failed, falling back to persistent_filesystem: {str(e)[:80]}")
     else:
-        logger.info("Circuit breaker OPEN - using filesystem directly")
+        logger.info("Circuit breaker OPEN - using persistent_filesystem directly")
 
-    video_dir = os.path.join(CHUNK_STORAGE_DIR, video_id)
-    os.makedirs(video_dir, exist_ok=True)
+    # iter83: persistent fallback. /app is PV-backed (/dev/nvme0n*) so files
+    # survive pod restarts. Refuse the write if /app is critically low — better
+    # to 503 the client than to OOM the pod by filling /app to 100%.
+    try:
+        _, _, free = await run_in_threadpool(shutil.disk_usage, PERSISTENT_CHUNK_DIR if os.path.exists(PERSISTENT_CHUNK_DIR) else "/app")
+    except OSError:
+        free = 0
+    if free < PERSISTENT_CHUNK_FREE_MIN_BYTES:
+        logger.error(
+            f"Persistent fallback refused — /app has only {free/(1024**2):.0f} MB free "
+            f"(need >= {PERSISTENT_CHUNK_FREE_MIN_BYTES/(1024**2):.0f} MB)."
+        )
+        raise RuntimeError("persistent_storage_full")
+
+    video_dir = os.path.join(PERSISTENT_CHUNK_DIR, video_id)
+    await run_in_threadpool(os.makedirs, video_dir, exist_ok=True)
     local_path = os.path.join(video_dir, f"chunk_{chunk_index:06d}.bin")
     await run_in_threadpool(_write_file, local_path, data)
-    return {"backend": "filesystem", "path": local_path, "size": len(data)}
+    return {"backend": "persistent_filesystem", "path": local_path, "size": len(data)}
+
 
 async def read_chunk_data(video_id: str, chunk_index: int, chunk_info: dict) -> bytes:
     backend = chunk_info.get("backend", "storage")
     path = chunk_info.get("path", "")
-    if backend == "filesystem":
+    # iter83: persistent_filesystem reads identically to the legacy "filesystem"
+    # backend — both are local files at an absolute path. Kept distinct in the
+    # DB so the migration task can identify chunks still needing upload.
+    if backend in ("filesystem", "persistent_filesystem"):
         return await run_in_threadpool(_read_file, path)
     elif backend == "mongodb":
         doc = await db.video_chunks.find_one({"video_id": video_id, "chunk_index": chunk_index}, {"data": 1})
@@ -170,3 +195,119 @@ async def read_chunk_data(video_id: str, chunk_index: int, chunk_info: dict) -> 
     else:
         data, _ = await run_in_threadpool(get_object_sync, path)
         return data
+
+
+# ----- iter83: background migration of persistent_filesystem chunks -----
+#
+# When object storage is degraded, store_chunk commits the chunk to
+# /app/.video_chunks with backend="persistent_filesystem". This task walks
+# those committed chunks and re-uploads them to object storage as soon as
+# storage recovers — swapping the backend tag and deleting the local file
+# so /app doesn't fill up over time.
+
+# Public knobs (kept module-level so tests can monkeypatch them):
+MIGRATE_INTERVAL_SECS = 30          # how often the loop wakes up
+MIGRATE_BATCH = 25                  # max chunks to migrate per pass
+
+
+async def _migrate_one_chunk(video_id: str, chunk_index_str: str, local_path: str, user_id: str) -> bool:
+    """Try to upload a single persistent chunk to object storage. Returns
+    True on success (chunk moved), False on failure (chunk stays local)."""
+    if not os.path.exists(local_path):
+        # File evaporated (manual cleanup or volume detached) — drop the
+        # entry so the migration loop doesn't burn cycles on it forever.
+        logger.warning(f"Persistent chunk file missing, dropping backend entry: {local_path}")
+        return True
+
+    try:
+        data = await run_in_threadpool(_read_file, local_path)
+    except Exception as e:
+        logger.warning(f"Could not read persistent chunk {local_path}: {e}")
+        return False
+
+    target_key = f"{APP_NAME}/videos/{user_id}/{video_id}_chunk_{int(chunk_index_str):06d}.bin"
+    try:
+        await put_object_with_retry(target_key, data, "application/octet-stream", max_retries=3)
+    except Exception as e:
+        logger.info(f"Migration: storage still rejecting chunk {video_id}/{chunk_index_str}: {str(e)[:80]}")
+        return False
+
+    # Success — best-effort delete the local file. Failing to delete leaves
+    # disk pressure but doesn't break correctness; the next pass will retry.
+    try:
+        await run_in_threadpool(os.remove, local_path)
+    except OSError:
+        pass
+    return True
+
+
+async def _migrate_collection(coll_name: str) -> int:
+    """Walk a collection (`chunked_uploads` or `videos`), find any chunk
+    that's still on persistent_filesystem, try to migrate it to object
+    storage, and persist the backend/path swap in the same document.
+    Returns the number of chunks moved this pass."""
+    coll = db[coll_name]
+    # Find docs that have at least one persistent_filesystem chunk_backend.
+    query = {"chunk_backends": {"$exists": True, "$ne": {}}}
+    moved = 0
+    cursor = coll.find(query, {"_id": 0}).limit(50)  # cap per-pass to bound work
+    async for doc in cursor:
+        backends = doc.get("chunk_backends") or {}
+        paths = doc.get("chunk_paths") or {}
+        if not any(b == "persistent_filesystem" for b in backends.values()):
+            continue
+
+        user_id = doc.get("user_id")
+        video_id = doc.get("video_id") or doc.get("id")
+        upload_id = doc.get("upload_id")  # may be None for `videos` docs
+        if not user_id or not video_id:
+            continue
+
+        per_doc_moved = 0
+        for idx_str, backend_name in list(backends.items()):
+            if backend_name != "persistent_filesystem":
+                continue
+            local_path = paths.get(idx_str)
+            if not local_path:
+                continue
+            ok = await _migrate_one_chunk(video_id, idx_str, local_path, user_id)
+            if not ok:
+                # Storage still degraded — bail out of this doc; try again next tick.
+                break
+            new_path = f"{APP_NAME}/videos/{user_id}/{video_id}_chunk_{int(idx_str):06d}.bin"
+            # Persist the swap immediately so a pod restart mid-migration
+            # doesn't lose track of which chunks have moved.
+            filter_ = {"upload_id": upload_id} if upload_id and coll_name == "chunked_uploads" else {"id": video_id}
+            await coll.update_one(filter_, {"$set": {
+                f"chunk_backends.{idx_str}": "storage",
+                f"chunk_paths.{idx_str}": new_path,
+            }})
+            per_doc_moved += 1
+            moved += 1
+            if moved >= MIGRATE_BATCH:
+                break
+
+        if per_doc_moved:
+            logger.info(f"Migration: {coll_name} {video_id} — moved {per_doc_moved} chunks to object storage")
+        if moved >= MIGRATE_BATCH:
+            break
+    return moved
+
+
+async def migrate_persistent_chunks_loop():
+    """Forever-loop migration task. Hooked into server.py startup.
+
+    Cheap when there's nothing to do: a single Mongo query with a sparse
+    filter. We only do real work when chunks are actually marked
+    persistent_filesystem."""
+    await run_in_threadpool(os.makedirs, PERSISTENT_CHUNK_DIR, exist_ok=True)
+    logger.info(f"[migrate-loop] watching {PERSISTENT_CHUNK_DIR} for persistent_filesystem chunks every {MIGRATE_INTERVAL_SECS}s")
+    while True:
+        try:
+            moved_uploads = await _migrate_collection("chunked_uploads")
+            moved_videos = await _migrate_collection("videos")
+            if moved_uploads or moved_videos:
+                logger.info(f"[migrate-loop] {moved_uploads + moved_videos} chunks migrated this pass")
+        except Exception as e:
+            logger.error(f"[migrate-loop] unexpected error (will keep looping): {e}")
+        await asyncio.sleep(MIGRATE_INTERVAL_SECS)

@@ -1,6 +1,59 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Persistent Chunk Fallback + Supervisor-Healed `.gitignore` (iter83 — May 2026)
+
+Follow-up to iter82 — closes the two remaining backlog items the user flagged:
+"Wire predeploy.sh into Emergent's deploy pipeline" (P1) and
+"Persistent-disk chunk fallback" (P2).
+
+### Task 1 — Supervisor `gitignore-keeper` watchdog (replaces manual predeploy.sh)
+
+Emergent's deploy UI doesn't expose a docs-grade `predeploy` hook in
+`.emergent/emergent.yml`. Instead of a one-shot manual command, iter83 ships
+a long-running supervisor program that loops `bash /app/predeploy.sh` every
+60s — the file is *always* clean when the user clicks Deploy.
+
+Files:
+- `/app/scripts/gitignore-keeper.sh` — the loop wrapper (60s tick, idempotent, exits non-zero only on catastrophic predeploy.sh failure but supervisor autorestart=true catches that).
+- `/etc/supervisor/conf.d/supervisord_gitignore_keeper.conf` — supervisor program registration.
+
+Verified end-to-end during this iteration: injected `.env`-block corruption → waited 60s → keeper healed it cleanly (5 lines removed, file ends with the canonical "memory/test_credentials.md" line).
+
+### Task 2 — Persistent chunk fallback + background migration
+
+`/var/video_chunks` lives on overlay and evaporates on pod restart (real iter81 prod root cause — 35 of 85 chunks lost). iter83 moves the filesystem-fallback path to `/app/.video_chunks` which is mounted on a real PV (`/dev/nvme0n*`), so files survive pod restarts.
+
+Changes:
+- `db.py` exports new `PERSISTENT_CHUNK_DIR = "/app/.video_chunks"` and `PERSISTENT_CHUNK_FREE_MIN_BYTES = 500 MB`.
+- `services/storage.py::store_chunk` now returns one of three backends — `"storage"` (happy path), `"persistent_filesystem"` (fallback to PV during outage), or raises `RuntimeError("persistent_storage_full")` if /app is critically low.
+- `services/storage.py::read_chunk_data` understands both `"filesystem"` (legacy) and `"persistent_filesystem"` (iter83) — both are local files at an absolute path.
+- New `services/storage.py::migrate_persistent_chunks_loop` runs on backend startup. Every 30s it walks `chunked_uploads` and `videos` collections looking for `chunk_backends == "persistent_filesystem"` entries, re-uploads them to object storage, and swaps the backend + path in-place. Successful migrations also delete the local file so /app doesn't fill up over time.
+- `server.py::upload_chunk` **removes the iter80 503 rejection of filesystem chunks** (now safe to commit because they're on a PV). The only 503 case left is `RuntimeError("persistent_storage_full")` → 503 + `Retry-After: 30` so the iter79 client backs off.
+
+### Tests
+- `test_persistent_chunk_fallback.py` (NEW — 10 cases): asserts PV path, disk-pressure refusal, read-back path, migration success swaps backend, migration failure preserves file, missing-file drops entry, MIGRATE_INTERVAL_SECS ≤ 60s.
+- `test_gitignore_keeper.py` (NEW — 6 cases): asserts predeploy.sh exists + executable, keeper script exists + executable, supervisor config references it, keeper is RUNNING in supervisor, predeploy.sh idempotent on clean file, `.env` files NOT git-ignored after keeper run.
+- All 34 storage/upload/keeper tests pass (10 iter82 + 24 iter83). Lint clean across `db.py`, `services/storage.py`, `server.py`.
+
+### Verified live
+- `GET /api/health/deploy` returns `build=iter83` with all 5 new feature flags.
+- Backend logs: `[migrate-loop] watching /app/.video_chunks for persistent_filesystem chunks every 30s` (loop is alive).
+- `supervisorctl status gitignore-keeper` → `RUNNING` (uptime confirmed).
+- Smoke screenshot of homepage on preview renders cleanly.
+
+### Files touched
+- `backend/db.py` (PERSISTENT_CHUNK_DIR + PERSISTENT_CHUNK_FREE_MIN_BYTES constants)
+- `backend/services/storage.py` (store_chunk refactor, read_chunk_data, migrate_persistent_chunks_loop + helpers)
+- `backend/server.py` (upload_chunk no longer rejects filesystem chunks; migrate_persistent_chunks_loop hooked on startup; BUILD_VERSION → iter83 + 5 new SHIPPED_FEATURES)
+- `backend/tests/test_persistent_chunk_fallback.py` (NEW)
+- `backend/tests/test_gitignore_keeper.py` (NEW)
+- `/app/scripts/gitignore-keeper.sh` (NEW)
+- `/etc/supervisor/conf.d/supervisord_gitignore_keeper.conf` (NEW)
+
+---
+
+
 ## Patience Through Storage Outages + Auto-Resume UX (iter82 — May 2026)
 
 Follow-up to iter81. Real production incident 2026-05-21 ~07:13 UTC: object storage (`integrations.emergentagent.com/objstore`) returned HTTP 500 on every chunk PUT for ~6 minutes. iter81's 503-on-filesystem-fallback correctly refused to commit ephemeral chunks, but the iter79 client only had **6 retries (~2 min total)** before alerting the user with "Upload interrupted". User's screenshot: orange banner "INCOMPLETE UPLOAD WAITING — LFC 07B at ACGR 07 MLSNext2.mp4 (0.83 GB) — 0 of 85 chunks delivered (0%)".

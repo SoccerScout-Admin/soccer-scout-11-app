@@ -493,7 +493,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter82"
+BUILD_VERSION = "iter83"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -590,6 +590,12 @@ SHIPPED_FEATURES = [
     "auto-refresh-pending-uploads-banner-on-failure",
     "put-object-retry-budget-6",
     "predeploy-gitignore-cleanup-script",
+    # iter83 — persistent chunk fallback + supervisor self-healing gitignore
+    "persistent-chunk-fallback-on-app-pv",
+    "background-chunk-migration-loop",
+    "supervisor-gitignore-keeper-watchdog",
+    "no-more-503-on-filesystem-fallback",
+    "persistent-storage-pressure-503",
 ]
 
 def _get_build_sha() -> str:
@@ -999,33 +1005,26 @@ async def upload_chunk(
         video_id = upload["video_id"]
 
         logger.info(f"Storing chunk {chunk_index+1}/{total_chunks} ({chunk_size_bytes} bytes)...")
-        # Use store_chunk which tries Object Storage first, falls back to filesystem.
-        store_result = await store_chunk(video_id, upload["user_id"], chunk_index, chunk_data)
-        # Free memory immediately
-        del chunk_data
-
-        # iter80: if the chunk landed on ephemeral filesystem (because the
-        # storage circuit breaker tripped), DO NOT commit it to chunked_uploads
-        # — the next pod restart will wipe it from disk and the user will see
-        # "Upload incomplete (X of Y chunks)" with no way to recover the
-        # missing chunks. Instead, delete the local file and return 503 so
-        # the iter79 client-side retry loop waits ~exponential backoff and
-        # retries. By then object storage has usually recovered.
-        if store_result["backend"] == "filesystem":
-            try:
-                if os.path.exists(store_result["path"]):
-                    os.remove(store_result["path"])
-            except Exception:
-                pass  # best-effort cleanup, never block the retry trigger
-            logger.warning(
-                f"Chunk {chunk_index+1}/{total_chunks} routed to ephemeral filesystem — "
-                "rejecting commit so client retries against object storage on next attempt"
-            )
+        # iter83: store_chunk returns one of {"storage", "persistent_filesystem"}.
+        # Both are safe to commit — persistent_filesystem lives on /app (PV
+        # backed), so it survives pod restarts and gets migrated to object
+        # storage by the background task in services/storage.py. The only
+        # error path that surfaces is RuntimeError("persistent_storage_full"),
+        # which we translate to 503 + Retry-After so the iter79 client retry
+        # loop backs off until disk frees up.
+        try:
+            store_result = await store_chunk(video_id, upload["user_id"], chunk_index, chunk_data)
+        except RuntimeError as rerr:
+            reason = str(rerr)
+            del chunk_data
+            logger.warning(f"Chunk {chunk_index+1}/{total_chunks} rejected: {reason}")
             raise HTTPException(
                 status_code=503,
                 detail="Storage temporarily unavailable. Retry the chunk.",
-                headers={"Retry-After": "5"},
+                headers={"Retry-After": "30"},
             )
+        # Free memory immediately
+        del chunk_data
 
         # Track chunk in database with backend info
         await db.chunked_uploads.update_one(
@@ -2720,6 +2719,11 @@ async def startup():
     # when the final_failure rate spikes (gives us a heads-up before users
     # start reporting). De-duped + threshold-gated; see processing_alerts.py.
     asyncio.create_task(_processing_alerts_loop())
+    # iter83 — background migration of persistent_filesystem chunks back to
+    # object storage as soon as storage recovers. Cheap when idle (single
+    # sparse Mongo query per tick).
+    from services.storage import migrate_persistent_chunks_loop
+    asyncio.create_task(migrate_persistent_chunks_loop())
     # APScheduler — weekly Coach Pulse blast every Monday 08:00 UTC +
     # email-queue retry every 30 min for quota-deferred sends.
     start_coach_pulse_scheduler()
