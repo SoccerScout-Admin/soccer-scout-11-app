@@ -1,6 +1,38 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Resume Across Devices (iter84 — May 2026)
+
+Enhancement enabled by iter83's durable chunk storage. The use case: a coach starts uploading an 800 MB game from their laptop at the field. WiFi drops at 60%. They drive home, open the app on their phone — but they have to *remember* which match the upload was tied to before they can find the resume banner. Most coaches just give up and re-upload from scratch from the laptop the next day.
+
+iter84 surfaces the recovery path at the **dashboard** level so any device that logs in sees: "1 upload paused — finish on this device" (or "N uploads paused …" with an expandable list).
+
+### Backend
+- New endpoint **`GET /api/me/pending-uploads`** in `server.py`. Returns up to 20 incomplete chunked-upload sessions for `current_user`, joined with the `matches` collection so the UI gets a human-readable label per session ("LFC 07B vs Express FC"). Cross-user isolation enforced by `user_id` filter on the Mongo query. Cookie-auth gated via existing `Depends(get_current_user)`.
+
+### Frontend
+- New component **`pages/components/ResumeAcrossDevicesBanner.js`**. Fetches the endpoint on mount, hides silently when zero sessions (no UI clutter for happy-path users). Single session → clicking the banner navigates straight to the match. Multiple sessions → caret expands an in-banner list with one row per session, each linking to its match.
+- Wired into `Dashboard.js` above `QuickActionsRow` so it's the first thing a returning coach sees.
+- All data-testids set (`resume-across-devices-banner`, `resume-across-devices-toggle`, `resume-session-{upload_id}`, `resume-across-devices-list`) so the testing agent can verify behavior.
+
+### Tests (6 new, all pass)
+- `test_resume_across_devices.py` — auth boundary, empty-state, real-session listing with match labels, cross-user isolation, dashboard wiring, banner file existence.
+- Existing CSRF flow validated (tests register a user, capture `csrf_token` cookie from the jar, echo it as `X-CSRF-Token` header on every POST — same pattern as `test_csrf_protection.py`).
+
+### Verified live on preview
+- `GET /api/health/deploy` returns `build=iter84` with both new feature flags.
+- End-to-end screenshot: logged in as `testcoach@demo.com` → dashboard renders the blue "CONTINUE WHERE YOU LEFT OFF" banner with "14 uploads paused" headline → clicking the caret expands the full list with match labels (Demo Home vs Demo Away, LFC 07B vs Express FC × 6, LFC 07B vs DPA Cobra, …) and chunk-progress sub-text.
+- Tested with both single-session and multi-session user states.
+
+### Files touched
+- `backend/server.py` (new `/api/me/pending-uploads` endpoint; BUILD_VERSION → iter84; 2 new SHIPPED_FEATURES)
+- `frontend/src/pages/components/ResumeAcrossDevicesBanner.js` (NEW)
+- `frontend/src/pages/Dashboard.js` (imports + renders the banner)
+- `backend/tests/test_resume_across_devices.py` (NEW — 6 cases)
+
+---
+
+
 ## Persistent Chunk Fallback + Supervisor-Healed `.gitignore` (iter83 — May 2026)
 
 Follow-up to iter82 — closes the two remaining backlog items the user flagged:

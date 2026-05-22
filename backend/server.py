@@ -493,7 +493,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter83"
+BUILD_VERSION = "iter84"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -596,6 +596,9 @@ SHIPPED_FEATURES = [
     "supervisor-gitignore-keeper-watchdog",
     "no-more-503-on-filesystem-fallback",
     "persistent-storage-pressure-503",
+    # iter84 — resume across devices
+    "resume-across-devices-banner",
+    "me-pending-uploads-endpoint",
 ]
 
 def _get_build_sha() -> str:
@@ -955,6 +958,71 @@ async def list_pending_uploads(match_id: str, current_user: dict = Depends(get_c
             "progress_pct": round((uploaded / total) * 100, 1) if total else 0,
             "status": s.get("status"),
             "created_at": s.get("created_at"),
+            "last_chunk_at": s.get("last_chunk_at"),
+        })
+    return {"count": len(out), "sessions": out}
+
+
+@api_router.get("/me/pending-uploads")
+async def list_my_pending_uploads(current_user: dict = Depends(get_current_user)):
+    """iter84 — Resume Across Devices.
+
+    Return every in-flight chunked upload owned by `current_user`, across
+    all matches. Powers a dashboard banner so a coach who starts an upload
+    on one device (e.g. laptop at the field) can see + jump back to it from
+    a different device (e.g. phone on the drive home) without first having
+    to remember which match they were uploading to.
+
+    The actual resume still requires re-picking the same file on the new
+    device — chunks already on the server are durable post-iter83. The
+    init endpoint matches on (user_id, match_id, filename, file_size) so a
+    file with the same name+size on any device resolves to the same
+    session.
+
+    Results are joined with the `matches` collection so the UI can show
+    a human-readable "Home vs Away" label per pending upload."""
+    cursor = db.chunked_uploads.find({
+        "user_id": current_user["id"],
+        "status": {"$in": ["initialized", "in_progress", "failed"]},
+    }, {"_id": 0}).sort("created_at", -1).limit(20)
+    sessions = await cursor.to_list(20)
+    if not sessions:
+        return {"count": 0, "sessions": []}
+
+    # Batch-fetch the match docs to avoid N+1 — coaches with 10+ pending
+    # uploads (e.g. after a long flaky-wifi weekend) shouldn't slow the
+    # dashboard to a crawl.
+    match_ids = list({s.get("match_id") for s in sessions if s.get("match_id")})
+    matches = await db.matches.find(
+        {"id": {"$in": match_ids}, "user_id": current_user["id"]},
+        {"_id": 0, "id": 1, "team_home": 1, "team_away": 1, "date": 1},
+    ).to_list(len(match_ids))
+    match_by_id = {m["id"]: m for m in matches}
+
+    out = []
+    for s in sessions:
+        chunk_paths = s.get("chunk_paths", {})
+        uploaded = len(chunk_paths)
+        file_size = s.get("file_size", 0)
+        chunk_size = s.get("chunk_size", CHUNK_SIZE)
+        total = max(1, -(-file_size // chunk_size))
+        m = match_by_id.get(s.get("match_id")) or {}
+        match_label = (
+            f"{m.get('team_home', '')} vs {m.get('team_away', '')}".strip(" vs")
+            or "Match"
+        )
+        out.append({
+            "upload_id": s.get("upload_id"),
+            "video_id": s.get("video_id"),
+            "match_id": s.get("match_id"),
+            "match_label": match_label,
+            "match_date": m.get("date"),
+            "filename": s.get("filename"),
+            "file_size_gb": round(file_size / (1024 ** 3), 2),
+            "chunks_received": uploaded,
+            "total_chunks": total,
+            "progress_pct": round((uploaded / total) * 100, 1) if total else 0,
+            "status": s.get("status"),
             "last_chunk_at": s.get("last_chunk_at"),
         })
     return {"count": len(out), "sessions": out}

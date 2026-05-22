@@ -16,6 +16,7 @@ import ShareFolderModal from './components/ShareFolderModal';
 import BulkActionBar from './components/BulkActionBar';
 import QuickActionsRow from './components/QuickActionsRow';
 import MyReelStatsCard from './components/MyReelStatsCard';
+import ResumeAcrossDevicesBanner from './components/ResumeAcrossDevicesBanner';
 import InstallGuideModal from '../components/InstallGuideModal';
 import BuildInfoChip from '../components/BuildInfoChip';
 
@@ -230,6 +231,7 @@ const Dashboard = () => {
 
           {!m.selectionMode && (
             <>
+              <ResumeAcrossDevicesBanner />
               <QuickActionsRow onCreate={() => setShowCreateModal(true)} />
               {hasAnyMatches && (
                 <>
