@@ -91,6 +91,10 @@ from services.storage import (
 CHUNK_STORAGE_DIR = "/var/video_chunks"
 os.makedirs(CHUNK_STORAGE_DIR, exist_ok=True)
 
+# iter83 — persistent PV-backed fallback path for chunks (used by dismiss
+# cleanup in iter85 to free local-disk space for abandoned sessions).
+from db import PERSISTENT_CHUNK_DIR  # noqa: E402,F401
+
 
 # Legacy wrappers (still referenced by non-chunked upload paths)
 def put_object(path, data, content_type):
@@ -493,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter84"
+BUILD_VERSION = "iter85"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -599,6 +603,10 @@ SHIPPED_FEATURES = [
     # iter84 — resume across devices
     "resume-across-devices-banner",
     "me-pending-uploads-endpoint",
+    # iter85 — dismiss button on resume banner
+    "dismiss-pending-upload-endpoint",
+    "resume-banner-row-dismiss-buttons",
+    "dismiss-frees-persistent-fallback-chunks",
 ]
 
 def _get_build_sha() -> str:
@@ -984,6 +992,10 @@ async def list_my_pending_uploads(current_user: dict = Depends(get_current_user)
     cursor = db.chunked_uploads.find({
         "user_id": current_user["id"],
         "status": {"$in": ["initialized", "in_progress", "failed"]},
+        # iter85 — dismiss button: hide sessions the user explicitly waved off.
+        # The dismissed status keeps the row in Mongo for audit/forensics
+        # without cluttering the dashboard banner.
+        "dismissed_at": {"$exists": False},
     }, {"_id": 0}).sort("created_at", -1).limit(20)
     sessions = await cursor.to_list(20)
     if not sessions:
@@ -1026,6 +1038,74 @@ async def list_my_pending_uploads(current_user: dict = Depends(get_current_user)
             "last_chunk_at": s.get("last_chunk_at"),
         })
     return {"count": len(out), "sessions": out}
+
+
+@api_router.delete("/me/pending-uploads/{upload_id}")
+async def dismiss_my_pending_upload(upload_id: str, current_user: dict = Depends(get_current_user)):
+    """iter85 — Dismiss button on resume banner.
+
+    A coach who has 14 stale "0/85 chunks (0%)" sessions from a flaky-wifi
+    weekend doesn't want them cluttering the dashboard forever. This endpoint
+    marks ONE session as dismissed so it disappears from
+    `/api/me/pending-uploads`, and best-effort deletes any persistent
+    fallback chunks on `/app/.video_chunks` so disk doesn't grow unbounded.
+
+    We intentionally DO NOT hard-delete the chunked_uploads row — the
+    `dismissed_at` timestamp keeps the audit trail (when, why, how far it
+    got) in case the user later wants to know "what happened to that game
+    last weekend?". Mongo TTL or a future sweeper can hard-purge after a
+    grace period if storage pressure forces it.
+    """
+    session = await db.chunked_uploads.find_one(
+        {"upload_id": upload_id, "user_id": current_user["id"]},
+        {"_id": 0},
+    )
+    if not session:
+        # Idempotent: dismissing a session that doesn't exist (or that some
+        # other tab already dismissed) is a no-op success rather than a 404.
+        return {"upload_id": upload_id, "dismissed": True, "already": True}
+    if session.get("dismissed_at"):
+        return {"upload_id": upload_id, "dismissed": True, "already": True}
+
+    # Best-effort: free up any persistent_filesystem chunks on /app so the
+    # next upload doesn't run out of disk. Object-storage chunks are cheap
+    # so we leave those to natural lifecycle cleanup.
+    chunk_paths = session.get("chunk_paths", {})
+    chunk_backends = session.get("chunk_backends", {})
+    freed_files = 0
+    for idx_str, backend_name in chunk_backends.items():
+        if backend_name not in ("filesystem", "persistent_filesystem"):
+            continue
+        local_path = chunk_paths.get(idx_str)
+        if not local_path:
+            continue
+        try:
+            if os.path.exists(local_path):
+                os.remove(local_path)
+                freed_files += 1
+        except OSError as e:
+            logger.warning(f"dismiss: could not delete {local_path}: {e}")
+
+    # Best-effort: clean up the now-empty per-video chunk directory too.
+    video_id = session.get("video_id")
+    if video_id:
+        for parent_dir in (PERSISTENT_CHUNK_DIR, CHUNK_STORAGE_DIR):
+            video_dir = os.path.join(parent_dir, video_id)
+            try:
+                if os.path.isdir(video_dir) and not os.listdir(video_dir):
+                    os.rmdir(video_dir)
+            except OSError:
+                pass
+
+    await db.chunked_uploads.update_one(
+        {"upload_id": upload_id},
+        {"$set": {
+            "dismissed_at": datetime.now(timezone.utc).isoformat(),
+            "dismissed_freed_chunk_files": freed_files,
+        }},
+    )
+    logger.info(f"dismiss: upload_id={upload_id} dismissed by user={current_user['id']}, freed {freed_files} local chunk files")
+    return {"upload_id": upload_id, "dismissed": True, "freed_chunk_files": freed_files}
 
 
 @api_router.post("/videos/upload/chunk")

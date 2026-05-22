@@ -1,6 +1,52 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Dismiss Button on Resume Banner (iter85 — May 2026)
+
+A coach with 14 stale "0/85 chunks (0%)" sessions from a flaky-wifi weekend shouldn't have the dashboard banner clutter forever. iter85 adds a per-row X button that hides the session AND best-effort frees any persistent_filesystem chunks on `/app` so disk doesn't grow unbounded across abandoned uploads.
+
+### Backend
+- New endpoint **`DELETE /api/me/pending-uploads/{upload_id}`** in `server.py`:
+  - Marks the session `dismissed_at = <utc iso>` (soft delete — keeps audit trail).
+  - Best-effort deletes any chunks tagged `filesystem` or `persistent_filesystem` from local disk (`os.remove`); object-storage chunks left alone (cheap, future cleanup).
+  - Removes the now-empty per-video chunk directory.
+  - Idempotent: dismissing twice (or dismissing an unknown upload_id, or dismissing another user's session) → `200 OK` with `{"already": true}` rather than 404. Avoids the UX disaster of "I clicked the X, did it work?" when another tab raced you.
+- `GET /api/me/pending-uploads` now filters out anything with a `dismissed_at` field — dismissed sessions never reappear.
+
+### Frontend
+- `ResumeAcrossDevicesBanner.js`:
+  - Each row in the expanded list has its own X button (`data-testid="dismiss-session-{upload_id}"`) with a vertical divider separating it from the navigate-to-match click area.
+  - Single-session collapsed banner exposes the X inline next to the caret — saves an extra click to expand-then-dismiss.
+  - `e.stopPropagation()` on the X handler prevents the click from also triggering the row's navigate handler.
+  - Optimistic local state: row is removed from `sessions[]` immediately on success. On API failure, the row is re-shown (rollback) so the user can retry.
+  - Per-row `dismissing` Set prevents double-clicks while the DELETE is in flight (button disabled at 40% opacity).
+
+### Tests (6 new, all pass)
+- `test_dismiss_pending_upload.py`:
+  - Auth required (401/403 without cookie).
+  - Happy path: session disappears from `/api/me/pending-uploads` after DELETE.
+  - Idempotent (calling DELETE twice → both 200, second has `already=true`).
+  - Cross-user isolation (User B's DELETE attempt on User A's session is a no-op).
+  - Unknown upload_id → idempotent success.
+  - Banner component file contains `axios.delete` + `dismiss-session-` testid pattern.
+- Plus all 6 iter84 tests still pass.
+
+### Verified live on preview
+- `GET /api/health/deploy` returns `build=iter85` with all 3 new feature flags.
+- End-to-end Playwright screenshot:
+  - Logged in as `testcoach@demo.com` (14 stale pending uploads).
+  - Expanded the resume banner → all 14 rows visible, each with X button on the right.
+  - Clicked first X → DELETE call fired → row count dropped to 13, banner headline updated to "13 uploads paused — Latest: probe.mp4 (0%) and 12 more".
+  - No console errors. Visual layout clean (vertical divider, hover state).
+
+### Files touched
+- `backend/server.py` (new DELETE endpoint, filter `dismissed_at` from GET, import `PERSISTENT_CHUNK_DIR`, BUILD_VERSION → iter85, 3 new SHIPPED_FEATURES)
+- `frontend/src/pages/components/ResumeAcrossDevicesBanner.js` (per-row X, single-session inline X, optimistic state, rollback on error)
+- `backend/tests/test_dismiss_pending_upload.py` (NEW — 6 cases)
+
+---
+
+
 ## Resume Across Devices (iter84 — May 2026)
 
 Enhancement enabled by iter83's durable chunk storage. The use case: a coach starts uploading an 800 MB game from their laptop at the field. WiFi drops at 60%. They drive home, open the app on their phone — but they have to *remember* which match the upload was tied to before they can find the resume banner. Most coaches just give up and re-upload from scratch from the laptop the next day.
