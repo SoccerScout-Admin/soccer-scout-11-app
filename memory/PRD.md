@@ -1,6 +1,60 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Cross-Device In-App Notifications + 30-Day TTL Sweeper (iter86 — May 2026)
+
+Two wins, both follow-ups to iter85:
+
+### Task 1 — Cross-device upload notifications (P2)
+The existing Web Push pipeline (`services/push_notifications.py`) only reaches devices that explicitly subscribed AND granted permission — most coaches skip that prompt. iter86 adds an **in-app polling** layer so any authenticated tab gets the toast the moment another device's upload finishes processing.
+
+- New collection `user_notifications`: `{id, user_id, type, title, body, deep_link, video_id, match_id, created_at}`.
+- New endpoint **`GET /api/me/notifications/recent?since=<iso>`** in `server.py` — returns up to 20 notifications for the calling user created after `since` (default cutoff: 24h ago, clamped so an ancient `since` doesn't blow up the response).
+- `services/processing.py` now inserts a `user_notifications` row alongside the existing `send_to_user` push call, so both pipelines fire together.
+- New frontend hook **`hooks/useInAppNotifications.js`** mounted in `App.js`:
+  - Polls every 30s once authenticated; first poll fires immediately on auth state change.
+  - Per-device "seen" state tracked in localStorage (capped at 200 ids) — a coach with laptop + phone open simultaneously WANTS both to ping, but one device shouldn't re-fire on every poll.
+  - Fires both `showLocalNotification` (browser-level, no-op if permission denied) AND a sonner `toast.success(...)` (always visible) with an "Open" action that deep-links to `deep_link`.
+  - Stops polling on 401 (user logged out).
+- `<Toaster theme="dark" position="top-right" richColors closeButton />` mounted in `App.js`.
+
+### Task 2 — TTL sweeper for `dismissed_at` rows (P3)
+- New `_dismissed_uploads_ttl_sweeper` background task in `server.py` registered on startup. 5-min stagger then daily cadence.
+- Each tick hard-purges:
+  - `chunked_uploads` with `dismissed_at < now − 30 days`
+  - `user_notifications` with `created_at < now − 30 days`
+- Tunable via module-level constants (`DISMISSED_UPLOADS_TTL_DAYS`, `USER_NOTIFICATIONS_TTL_DAYS`, `TTL_SWEEPER_INTERVAL_SECS`) so tests can monkeypatch shorter horizons.
+- Logs only when something was actually purged — no spam.
+
+### Tests (10 new, all 22 pass)
+- `test_in_app_notifications_and_ttl.py`:
+  - Auth boundary on `/me/notifications/recent`
+  - Empty state for fresh user
+  - Returns inserted notifications
+  - Cross-user isolation
+  - `since` cutoff filters older rows
+  - TTL sweeper purges stale uploads + notifications while keeping fresh
+  - TTL constants sanity check (7-365 day range, daily-to-weekly cadence)
+  - Frontend grep: App.js mounts hook + Toaster, hook calls `/me/notifications/recent` + uses `setInterval` + `localStorage`, processing.py writes to `user_notifications`.
+- All 6 iter85 + 6 iter84 tests still pass.
+
+### Verified live on preview (Playwright)
+- Logged in as `testcoach@demo.com`
+- Seeded a notification row via direct DB insert (`id`, `title`, `body`, `deep_link`)
+- Within ~6s of auth, the hook polled `/api/me/notifications/recent?since=…` (confirmed via request capture)
+- Sonner toast rendered top-right with the exact title + body + "Open" action button
+- `build=iter86` confirmed via `/api/health/deploy` with all 5 new feature flags.
+
+### Files touched
+- `backend/server.py` (new endpoint, TTL sweeper, hooked into startup, BUILD_VERSION → iter86, 5 new SHIPPED_FEATURES, 3 new tunable constants)
+- `backend/services/processing.py` (insert `user_notifications` row alongside `send_to_user`)
+- `frontend/src/hooks/useInAppNotifications.js` (NEW)
+- `frontend/src/App.js` (import + invoke hook, mount `<Toaster />`)
+- `backend/tests/test_in_app_notifications_and_ttl.py` (NEW — 10 cases)
+
+---
+
+
 ## Dismiss Button on Resume Banner (iter85 — May 2026)
 
 A coach with 14 stale "0/85 chunks (0%)" sessions from a flaky-wifi weekend shouldn't have the dashboard banner clutter forever. iter85 adds a per-row X button that hides the session AND best-effort frees any persistent_filesystem chunks on `/app` so disk doesn't grow unbounded across abandoned uploads.

@@ -36,6 +36,8 @@ import ScoutMyListings from './pages/ScoutMyListings';
 import Messages from './pages/Messages';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 import DiskPressureBanner from './components/DiskPressureBanner';
+import { Toaster } from 'sonner';
+import useInAppNotifications from './hooks/useInAppNotifications';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
@@ -120,6 +122,10 @@ const ProtectedRoute = ({ children }) => {
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  // iter86 — cross-device in-app notifications: polls /api/me/notifications/recent
+  // every 30s once the user is authenticated and fires showLocalNotification +
+  // sonner toast for any IDs this device hasn't seen yet.
+  useInAppNotifications(isAuthenticated);
 
   useEffect(() => {
     // Validate the session against the backend on every mount. With cookies, we
@@ -161,6 +167,7 @@ function App() {
       <BrowserRouter>
         <PWAInstallPrompt />
         <DiskPressureBanner />
+        <Toaster theme="dark" position="top-right" richColors closeButton />
         <Routes>
           <Route path="/auth" element={<AuthPage setIsAuthenticated={setIsAuthenticated} />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />

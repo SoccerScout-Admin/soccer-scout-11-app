@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter85"
+BUILD_VERSION = "iter86"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -607,6 +607,12 @@ SHIPPED_FEATURES = [
     "dismiss-pending-upload-endpoint",
     "resume-banner-row-dismiss-buttons",
     "dismiss-frees-persistent-fallback-chunks",
+    # iter86 — in-app cross-device notifications + TTL sweeper
+    "me-notifications-recent-endpoint",
+    "in-app-notification-polling",
+    "processing-complete-fires-user-notification",
+    "dismissed-uploads-30d-ttl-sweeper",
+    "user-notifications-30d-ttl-sweeper",
 ]
 
 def _get_build_sha() -> str:
@@ -1106,6 +1112,47 @@ async def dismiss_my_pending_upload(upload_id: str, current_user: dict = Depends
     )
     logger.info(f"dismiss: upload_id={upload_id} dismissed by user={current_user['id']}, freed {freed_files} local chunk files")
     return {"upload_id": upload_id, "dismissed": True, "freed_chunk_files": freed_files}
+
+
+# ===== iter86 — In-app notifications across devices =====
+#
+# Web Push (services/push_notifications.py) only fires on devices that
+# subscribed AND granted permission. Many coaches don't bother. This
+# endpoint powers a polling fallback: every authenticated tab pulls recent
+# notifications and shows them locally (showLocalNotification + sonner
+# toast), so a coach who's actively using the app on Device B gets a
+# visible signal the moment Device A finishes processing — without any
+# push permission required.
+
+
+@api_router.get("/me/notifications/recent")
+async def list_my_recent_notifications(
+    since: str = "",
+    current_user: dict = Depends(get_current_user),
+):
+    """Return notifications for the current user created after `since` (ISO
+    timestamp). If `since` is empty or unparseable, defaults to 24h ago.
+    Capped at 20 records so a long-idle client doesn't drown the poller.
+
+    Per-device "already seen" filtering happens client-side in
+    localStorage — the server doesn't track which device saw what (a coach
+    using both laptop and phone simultaneously WANTS both to ping)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    if since:
+        try:
+            parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            # Use whichever is more recent — protects against a client sending
+            # an ancient timestamp that would return ~unbounded results.
+            cutoff = max(cutoff, parsed)
+        except ValueError:
+            pass
+
+    cursor = db.user_notifications.find(
+        {"user_id": current_user["id"], "created_at": {"$gte": cutoff.isoformat()}},
+        {"_id": 0},
+    ).sort("created_at", -1).limit(20)
+    notifs = await cursor.to_list(20)
+    return {"count": len(notifs), "notifications": notifs}
 
 
 @api_router.post("/videos/upload/chunk")
@@ -2872,6 +2919,10 @@ async def startup():
     # sparse Mongo query per tick).
     from services.storage import migrate_persistent_chunks_loop
     asyncio.create_task(migrate_persistent_chunks_loop())
+    # iter86 — daily hard-purge of `dismissed_at` chunked_uploads older than 30 days
+    # AND stale user_notifications older than 30 days. Soft-delete forever is
+    # fine until tens of thousands accumulate; this caps the table size.
+    asyncio.create_task(_dismissed_uploads_ttl_sweeper())
     # APScheduler — weekly Coach Pulse blast every Monday 08:00 UTC +
     # email-queue retry every 30 min for quota-deferred sends.
     start_coach_pulse_scheduler()
@@ -2893,6 +2944,43 @@ async def _processing_alerts_loop():
         except Exception as e:
             logger.exception(f"_processing_alerts_loop tick failed (will retry): {e}")
         await asyncio.sleep(3600)  # 1 hour
+
+
+# iter86 — TTL sweeper tunables (module-level so tests can monkeypatch them).
+DISMISSED_UPLOADS_TTL_DAYS = 30
+USER_NOTIFICATIONS_TTL_DAYS = 30
+TTL_SWEEPER_INTERVAL_SECS = 24 * 3600  # daily
+
+
+async def _dismissed_uploads_ttl_sweeper():
+    """Hard-purge `chunked_uploads` rows that were dismissed >30 days ago,
+    and stale `user_notifications` rows >30 days old. Soft-deleting forever
+    is fine until tens of thousands accumulate (banner perf, /me/notifications
+    cursor cost). This bounds the table size.
+
+    Runs daily. Startup stagger so a fresh boot doesn't immediately fire."""
+    await asyncio.sleep(300)  # 5min startup stagger
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            dismiss_cutoff = (now - timedelta(days=DISMISSED_UPLOADS_TTL_DAYS)).isoformat()
+            notif_cutoff = (now - timedelta(days=USER_NOTIFICATIONS_TTL_DAYS)).isoformat()
+
+            uploads_res = await db.chunked_uploads.delete_many({
+                "dismissed_at": {"$exists": True, "$lt": dismiss_cutoff},
+            })
+            notifs_res = await db.user_notifications.delete_many({
+                "created_at": {"$lt": notif_cutoff},
+            })
+            if uploads_res.deleted_count or notifs_res.deleted_count:
+                logger.info(
+                    f"[ttl-sweeper] purged {uploads_res.deleted_count} dismissed uploads "
+                    f"(> {DISMISSED_UPLOADS_TTL_DAYS}d) + {notifs_res.deleted_count} stale "
+                    f"notifications (> {USER_NOTIFICATIONS_TTL_DAYS}d)"
+                )
+        except Exception as e:
+            logger.exception(f"[ttl-sweeper] tick failed (will retry tomorrow): {e}")
+        await asyncio.sleep(TTL_SWEEPER_INTERVAL_SECS)
 
 
 async def _cleanup_stale_temp_files():

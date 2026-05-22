@@ -788,7 +788,26 @@ async def run_auto_processing(
                 match_label = f"{match.get('team_home','?')} vs {match.get('team_away','?')}"
                 title = "Match analysis ready" if final_status == "completed" else "Match analysis finished with issues"
                 body = f"AI tactical breakdown is ready for {match_label}." if final_status == "completed" else f"Some analyses for {match_label} didn't complete — tap to review."
-                await send_to_user(user_id, title, body, url=f"/match/{match['id']}")
+                deep_link = f"/match/{match['id']}"
+                await send_to_user(user_id, title, body, url=deep_link)
+                # iter86 — also write to user_notifications so the in-app
+                # poller on OTHER devices (which didn't necessarily subscribe
+                # to push) shows the same toast + browser notification.
+                try:
+                    import uuid as _uuid
+                    await db.user_notifications.insert_one({
+                        "id": str(_uuid.uuid4()),
+                        "user_id": user_id,
+                        "type": "processing_complete" if final_status == "completed" else "processing_partial",
+                        "title": title,
+                        "body": body,
+                        "deep_link": deep_link,
+                        "video_id": video_id,
+                        "match_id": match["id"],
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                except Exception as notif_err:
+                    logger.info("user_notifications insert skipped: %s", notif_err)
         except Exception as push_err:
             logger.info("push notify skipped: %s", push_err)
 
