@@ -211,8 +211,13 @@ MIGRATE_BATCH = 25                  # max chunks to migrate per pass
 
 
 async def _migrate_one_chunk(video_id: str, chunk_index_str: str, local_path: str, user_id: str) -> bool:
-    """Try to upload a single persistent chunk to object storage. Returns
-    True on success (chunk moved), False on failure (chunk stays local)."""
+    """Upload a single persistent chunk to object storage. Returns True on
+    successful upload (caller is responsible for the DB swap AND for deleting
+    the local file ONLY AFTER the DB swap is committed — iter87 fix for the
+    race that corrupted videos when the pod restarted between os.remove and
+    update_one).
+
+    Does NOT delete the local file — that's the caller's job, post-DB-swap."""
     if not os.path.exists(local_path):
         # File evaporated (manual cleanup or volume detached) — drop the
         # entry so the migration loop doesn't burn cycles on it forever.
@@ -231,13 +236,6 @@ async def _migrate_one_chunk(video_id: str, chunk_index_str: str, local_path: st
     except Exception as e:
         logger.info(f"Migration: storage still rejecting chunk {video_id}/{chunk_index_str}: {str(e)[:80]}")
         return False
-
-    # Success — best-effort delete the local file. Failing to delete leaves
-    # disk pressure but doesn't break correctness; the next pass will retry.
-    try:
-        await run_in_threadpool(os.remove, local_path)
-    except OSError:
-        pass
     return True
 
 
@@ -245,12 +243,22 @@ async def _migrate_collection(coll_name: str) -> int:
     """Walk a collection (`chunked_uploads` or `videos`), find any chunk
     that's still on persistent_filesystem, try to migrate it to object
     storage, and persist the backend/path swap in the same document.
-    Returns the number of chunks moved this pass."""
+    Returns the number of chunks moved this pass.
+
+    iter87 (P0): write-then-update-then-delete ordering. Pre-iter87 the local
+    file was deleted INSIDE _migrate_one_chunk before the DB swap — if the
+    pod restarted between those two steps, the DB still pointed at a deleted
+    file. The video assembler would silently zero-fill the missing chunk,
+    corrupting the mp4 (moov atom missing). Now we:
+      1. Upload the bytes to object storage
+      2. Swap the DB pointer (backend → storage, path → new key)
+      3. ONLY THEN delete the local file
+    A pod restart between any two of these leaves the system in a safe state.
+    """
     coll = db[coll_name]
-    # Find docs that have at least one persistent_filesystem chunk_backend.
     query = {"chunk_backends": {"$exists": True, "$ne": {}}}
     moved = 0
-    cursor = coll.find(query, {"_id": 0}).limit(50)  # cap per-pass to bound work
+    cursor = coll.find(query, {"_id": 0}).limit(50)
     async for doc in cursor:
         backends = doc.get("chunk_backends") or {}
         paths = doc.get("chunk_paths") or {}
@@ -259,7 +267,7 @@ async def _migrate_collection(coll_name: str) -> int:
 
         user_id = doc.get("user_id")
         video_id = doc.get("video_id") or doc.get("id")
-        upload_id = doc.get("upload_id")  # may be None for `videos` docs
+        upload_id = doc.get("upload_id")
         if not user_id or not video_id:
             continue
 
@@ -270,18 +278,39 @@ async def _migrate_collection(coll_name: str) -> int:
             local_path = paths.get(idx_str)
             if not local_path:
                 continue
+
+            # 1. Upload the chunk to object storage
             ok = await _migrate_one_chunk(video_id, idx_str, local_path, user_id)
             if not ok:
-                # Storage still degraded — bail out of this doc; try again next tick.
                 break
+
+            # 2. Swap the DB pointer FIRST — this is the durable record.
             new_path = f"{APP_NAME}/videos/{user_id}/{video_id}_chunk_{int(idx_str):06d}.bin"
-            # Persist the swap immediately so a pod restart mid-migration
-            # doesn't lose track of which chunks have moved.
             filter_ = {"upload_id": upload_id} if upload_id and coll_name == "chunked_uploads" else {"id": video_id}
-            await coll.update_one(filter_, {"$set": {
-                f"chunk_backends.{idx_str}": "storage",
-                f"chunk_paths.{idx_str}": new_path,
-            }})
+            try:
+                await coll.update_one(filter_, {"$set": {
+                    f"chunk_backends.{idx_str}": "storage",
+                    f"chunk_paths.{idx_str}": new_path,
+                }})
+            except Exception as db_err:
+                logger.error(
+                    f"Migration: DB swap failed for {video_id}/{idx_str} after "
+                    f"successful upload — local file PRESERVED so next tick can retry. "
+                    f"err={db_err!r}"
+                )
+                continue  # don't delete the local file; next pass will retry
+
+            # 3. ONLY NOW delete the local file. If the pod restarts between
+            # steps 2 and 3, we leak one ~10MB file (next tick will skip it
+            # since backend is now "storage") but the DB stays consistent.
+            try:
+                await run_in_threadpool(os.remove, local_path)
+            except OSError as rm_err:
+                logger.warning(
+                    f"Migration: post-swap local file delete failed (orphan file, "
+                    f"not a correctness issue) {local_path}: {rm_err}"
+                )
+
             per_doc_moved += 1
             moved += 1
             if moved >= MIGRATE_BATCH:

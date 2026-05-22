@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter86"
+BUILD_VERSION = "iter87"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -613,6 +613,10 @@ SHIPPED_FEATURES = [
     "processing-complete-fires-user-notification",
     "dismissed-uploads-30d-ttl-sweeper",
     "user-notifications-30d-ttl-sweeper",
+    # iter87 — P0 fix: moov atom corruption from migration race
+    "migration-write-then-update-then-delete-ordering",
+    "fail-fast-on-missing-chunk-no-more-zero-fill",
+    "persistent-filesystem-existence-check-in-integrity",
 ]
 
 def _get_build_sha() -> str:

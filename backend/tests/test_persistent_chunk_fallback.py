@@ -131,8 +131,10 @@ def test_read_chunk_data_reads_persistent_filesystem(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_migrate_one_chunk_swaps_backend(monkeypatch, tmp_path):
-    """_migrate_one_chunk: when object storage recovers, the local file gets
-    uploaded AND deleted, and the function returns True."""
+    """_migrate_one_chunk: when object storage recovers, the chunk gets
+    uploaded and the function returns True. iter87 note: the local file is
+    NO LONGER deleted here — the caller (_migrate_collection) handles that
+    AFTER the DB swap so a pod crash between can't lose the chunk."""
     from services import storage as storage_mod
 
     local = tmp_path / "chunk_000003.bin"
@@ -146,7 +148,12 @@ def test_migrate_one_chunk_swaps_backend(monkeypatch, tmp_path):
 
     ok = _run(storage_mod._migrate_one_chunk("vid-mig", "3", str(local), "user-z"))
     assert ok is True
-    assert not local.exists(), "Local chunk should be deleted after successful migration"
+    # iter87: local file MUST survive — caller is responsible for delete-post-swap.
+    assert local.exists(), (
+        "iter87 changed the contract: _migrate_one_chunk must leave the local "
+        "file in place. Deletion is now sequenced after the DB swap in "
+        "_migrate_collection so the moov-atom corruption race can't happen."
+    )
     assert len(calls) == 1
     assert "vid-mig_chunk_000003.bin" in calls[0]["path"]
 

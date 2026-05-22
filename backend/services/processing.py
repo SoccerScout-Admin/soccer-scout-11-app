@@ -221,27 +221,41 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
             chunk_paths = video.get("chunk_paths", {})
             chunk_backends = video.get("chunk_backends", {})
             total_chunks = video.get("total_chunks", len(chunk_paths))
-            chunk_size = video.get("chunk_size", CHUNK_SIZE)
 
             logger.info(f"Assembling full video from {total_chunks} chunks")
             with open(raw_path, 'wb') as f:
+                # iter87 (P0): fail-fast on missing/unreadable chunks instead
+                # of zero-filling. Zero-filling a chunk that contains (or is
+                # adjacent to) the moov atom silently corrupts the mp4 — and
+                # ffmpeg surfaces it as the confusing "moov atom not found"
+                # error instead of the actual root cause (chunk N is missing).
+                # Surface it as a real error so the user gets the right action:
+                # re-upload.
                 for i in range(total_chunks):
                     path = chunk_paths.get(str(i))
-                    if not path:
-                        f.write(b'\x00' * chunk_size)
-                        continue
                     backend = chunk_backends.get(str(i), "storage")
-                    if backend == "filesystem" and not os.path.exists(path):
-                        f.write(b'\x00' * chunk_size)
-                        continue
+                    if not path:
+                        raise RuntimeError(
+                            f"Chunk {i} of {total_chunks} is missing — re-upload required. "
+                            "This is a rare data-loss event; chunks are usually safe even "
+                            "across pod restarts post-iter83."
+                        )
+                    # iter87: also handle persistent_filesystem (iter83) here,
+                    # not just the legacy "filesystem" tag.
+                    if backend in ("filesystem", "persistent_filesystem") and not os.path.exists(path):
+                        raise RuntimeError(
+                            f"Chunk {i} of {total_chunks} ({backend}) was lost — re-upload required. "
+                            f"path={path}"
+                        )
                     chunk_info = {"backend": backend, "path": path}
                     try:
                         data = await read_chunk_data(video["id"], i, chunk_info)
                         f.write(data)
                         del data
                     except Exception as e:
-                        logger.warning(f"  Skipping chunk {i}: {str(e)[:60]}")
-                        f.write(b'\x00' * chunk_size)
+                        raise RuntimeError(
+                            f"Chunk {i} of {total_chunks} unreadable ({backend}): {str(e)[:120]} — re-upload required."
+                        ) from e
 
             raw_size = os.path.getsize(raw_path)
             logger.info(f"Assembled full video: {raw_size/(1024*1024*1024):.2f}GB")
@@ -464,27 +478,32 @@ async def prepare_video_segments_720p(video: dict) -> tuple:
             chunk_paths = video.get("chunk_paths", {})
             chunk_backends = video.get("chunk_backends", {})
             total_chunks = video.get("total_chunks", len(chunk_paths))
-            chunk_size = video.get("chunk_size", CHUNK_SIZE)
 
             logger.info(f"[720p segments] Assembling full video from {total_chunks} chunks")
             with open(raw_path, 'wb') as f:
+                # iter87 (P0): fail-fast on missing/unreadable chunks. See
+                # the matching block in prepare_video_sample for rationale.
                 for i in range(total_chunks):
                     path = chunk_paths.get(str(i))
-                    if not path:
-                        f.write(b'\x00' * chunk_size)
-                        continue
                     backend = chunk_backends.get(str(i), "storage")
-                    if backend == "filesystem" and not os.path.exists(path):
-                        f.write(b'\x00' * chunk_size)
-                        continue
+                    if not path:
+                        raise RuntimeError(
+                            f"Chunk {i} of {total_chunks} is missing — re-upload required."
+                        )
+                    if backend in ("filesystem", "persistent_filesystem") and not os.path.exists(path):
+                        raise RuntimeError(
+                            f"Chunk {i} of {total_chunks} ({backend}) was lost — re-upload required. "
+                            f"path={path}"
+                        )
                     chunk_info = {"backend": backend, "path": path}
                     try:
                         data = await read_chunk_data(video["id"], i, chunk_info)
                         f.write(data)
                         del data
                     except Exception as e:
-                        logger.warning(f"  Skipping chunk {i}: {str(e)[:60]}")
-                        f.write(b'\x00' * chunk_size)
+                        raise RuntimeError(
+                            f"Chunk {i} of {total_chunks} unreadable ({backend}): {str(e)[:120]} — re-upload required."
+                        ) from e
         else:
             data, _ = await run_in_threadpool(get_object_sync, video["storage_path"])
             with open(raw_path, 'wb') as f:
@@ -621,7 +640,9 @@ async def _check_chunk_integrity(video: dict) -> tuple[str, int, int]:
         if not path:
             continue
         backend = chunk_backends.get(str(i), "storage")
-        if backend == "filesystem" and not os.path.exists(path):
+        # iter87: also check persistent_filesystem (iter83) — pre-iter87 a
+        # migration race could leave the DB pointing at a deleted local file.
+        if backend in ("filesystem", "persistent_filesystem") and not os.path.exists(path):
             continue
         available += 1
     if total == 0:

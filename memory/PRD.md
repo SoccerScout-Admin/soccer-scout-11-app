@@ -1,6 +1,62 @@
 # Soccer Scout - Product Requirements Document
 
 
+## P0 — Migration Race Fix + Fail-Fast Assembly (iter87 — May 2026)
+
+Real production bug 2026-05-22, video `40af07ed-5fa7-4ccb-87d5-fb0e3d5917b5` (0.83 GB, 85 chunks, "LFC 2007B Premier vs ACGR 07 MLS NEXT II"). Upload finalized successfully, processing failed with "Video file is incomplete (moov atom missing). Please re-upload — the chunked transfer didn't finalize cleanly."
+
+### Root cause traced
+The iter83 `_migrate_one_chunk` function deleted the local persistent_filesystem file **before** the DB swap (which moved chunk_paths/chunk_backends from local → object-storage). If the pod restarted between those two steps:
+1. Local file `/app/.video_chunks/<vid>/chunk_NNN.bin` was already deleted.
+2. DB still said `backend="persistent_filesystem"`, `path="/app/.video_chunks/..."`.
+3. Next finalize fired (or next pod boot picked up the half-migrated state).
+4. `prepare_video_sample` tried to read the missing file → exception → silently wrote `b'\x00' * chunk_size` (10 MB of zeros) into the assembled mp4.
+5. ffmpeg got a corrupt mp4 → "moov atom not found" → confusing error to the user.
+
+### Three fixes shipped
+
+1. **Migration ordering** (`services/storage.py`):
+   - `_migrate_one_chunk` no longer deletes the local file. Returns True after successful object-storage upload only.
+   - `_migrate_collection` now sequences:
+     - (a) upload to object storage
+     - (b) `update_one({chunk_paths.N: new_key, chunk_backends.N: "storage"})`
+     - (c) **only then** `os.remove(local_path)`
+   - If (b) fails: local file preserved → next tick retries the whole sequence.
+   - If pod crashes between (b) and (c): one ~10 MB orphan file leaks (next tick skips it because backend is now "storage") but the DB stays consistent.
+
+2. **Fail-fast assembly** (`services/processing.py`):
+   - Both `prepare_video_sample` and `prepare_video_segments_720p` now raise `RuntimeError("Chunk N of M is missing/unreadable — re-upload required.")` on the FIRST unreadable chunk.
+   - No more silent `b'\x00' * chunk_size` zero-fills — these were the actual source of the moov-atom corruption.
+   - The `_check_chunk_integrity` early gate (already in place since iter62) now catches the failure cleanly with a user-friendly "Upload incomplete (X of Y chunks, Z%)" message BEFORE ffmpeg even sees the assembly. User gets the right action: re-upload.
+
+3. **`_check_chunk_integrity` honors `persistent_filesystem`**:
+   - Pre-iter87 the file-existence check ran only for `backend == "filesystem"` (legacy). iter83's `persistent_filesystem` backend was missed → a deleted local file was incorrectly counted as "available". Now both backends are checked.
+
+### Tests (8 new, all 56 pass)
+- `test_iter87_migration_race_fix.py`:
+  - `_migrate_one_chunk` no longer calls `os.remove`
+  - `_migrate_collection` calls `update_one` BEFORE `os.remove` (order asserted)
+  - DB-swap failure preserves the local file
+  - `prepare_video_sample` raises on missing `chunk_paths[N]` (no zero-fill)
+  - `prepare_video_sample` raises on missing `persistent_filesystem` file
+  - Grep-level guard: `b'\x00' * chunk_size` zero-fill pattern completely removed from `processing.py`
+  - `_check_chunk_integrity` counts missing `persistent_filesystem` file as unavailable
+  - `_check_chunk_integrity` counts present `persistent_filesystem` file as available
+- Existing iter83 test updated: `_migrate_one_chunk` must now LEAVE the file in place (was the inverse assertion pre-iter87).
+
+### Recovery for the affected video
+The user's stuck video `40af07ed-5fa7-4ccb-87d5-fb0e3d5917b5` lost the moov-atom chunk on production — no recovery possible without the original bytes. They need to re-upload the file. After iter87 deploys, the bug is gone for all future uploads.
+
+### Files touched
+- `backend/services/storage.py` (`_migrate_one_chunk` no longer deletes; `_migrate_collection` sequences upload → swap → delete with explicit failure handling)
+- `backend/services/processing.py` (4 zero-fill sites replaced with `RuntimeError`; `_check_chunk_integrity` honors `persistent_filesystem`)
+- `backend/server.py` (`BUILD_VERSION` → iter87, 3 new SHIPPED_FEATURES)
+- `backend/tests/test_iter87_migration_race_fix.py` (NEW — 8 cases)
+- `backend/tests/test_persistent_chunk_fallback.py` (iter87 contract update for `_migrate_one_chunk`)
+
+---
+
+
 ## Cross-Device In-App Notifications + 30-Day TTL Sweeper (iter86 — May 2026)
 
 Two wins, both follow-ups to iter85:
