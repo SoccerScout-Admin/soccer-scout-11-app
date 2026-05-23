@@ -21,15 +21,21 @@ const VideoAnalysisHeader = ({
   onTryRecovery,
   recovering,
 }) => {
-  // iter88 — only show "Try Recovery" when the failure looks like a missing-
-  // chunk error from iter87's fail-fast assembler. For "AI budget exhausted"
-  // or "invalid mp4" failures, the recovery endpoint can't help and the CTA
-  // would be misleading.
+  // iter89 — broaden the Try Recovery gate. Pre-iter89 only showed when the
+  // error contained "chunk"+("missing"|"unreadable"|"lost") OR "upload
+  // incomplete", but real production errors sometimes look like "Upload
+  // incomplete (1 of 107 chunks, 0.9%)" which DID match — yet the user
+  // reported the button not appearing on production iter88b. Either the
+  // string case match was off OR a CDN cache served a slightly older
+  // bundle. iter89 takes the conservative route: show the button for ANY
+  // chunked-video processing failure. The recovery endpoint already
+  // returns `ready_to_retry: false` cleanly when it can't help, so there's
+  // no risk of false hope — and for the common case (stale chunk pointer
+  // post-pod-restart) the button now reliably surfaces the recovery path.
+  // Still hidden for non-chunked / non-storage errors like AI budget.
   const errLower = (processingStatus?.processing_error || '').toLowerCase();
-  const canTryRecovery = !!onTryRecovery && (
-    (errLower.includes('chunk') && (errLower.includes('missing') || errLower.includes('unreadable') || errLower.includes('lost')))
-    || errLower.includes('upload incomplete')
-  );
+  const isAiBudgetError = errLower.includes('budget') || errLower.includes('quota') || errLower.includes('balance');
+  const canTryRecovery = !!onTryRecovery && !isAiBudgetError;
   return (
   <>
     <header className="sticky top-0 z-50 bg-[#0A0A0A]/95 backdrop-blur-sm border-b border-white/5 px-6 py-3">

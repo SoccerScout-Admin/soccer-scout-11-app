@@ -153,13 +153,27 @@ async def store_chunk(video_id: str, user_id: str, chunk_index: int, data: bytes
             return {"backend": "storage", "path": chunk_path, "size": len(data)}
         except Exception as e:
             storage_breaker.record_failure()
-            logger.warning(f"Object Storage failed, falling back to persistent_filesystem: {str(e)[:80]}")
+            logger.warning(f"Object Storage failed, considering persistent_filesystem fallback: {str(e)[:80]}")
     else:
-        logger.info("Circuit breaker OPEN - using persistent_filesystem directly")
+        logger.info("Circuit breaker OPEN - considering persistent_filesystem directly")
 
-    # iter83: persistent fallback. /app is PV-backed (/dev/nvme0n*) so files
-    # survive pod restarts. Refuse the write if /app is critically low — better
-    # to 503 the client than to OOM the pod by filling /app to 100%.
+    # iter89 — only fall back to /app/.video_chunks when we KNOW /app survives
+    # pod restarts. iter83 assumed it did, but real production showed that
+    # /app on Emergent's hosted pods can be ephemeral — chunks evaporated on
+    # restart and downstream `_check_chunk_integrity` saw 1 of 107 chunks
+    # available. Default safe: refuse the fallback, return 503, let the
+    # client retry (iter82's 20-retry budget gives storage time to recover).
+    # To opt in (e.g. on a deploy with verified PV), set ENABLE_PERSISTENT_CHUNK_FALLBACK=true.
+    if os.environ.get("ENABLE_PERSISTENT_CHUNK_FALLBACK", "").lower() not in ("true", "1", "yes"):
+        logger.error(
+            "Object Storage unavailable AND persistent_filesystem fallback is DISABLED "
+            "(set ENABLE_PERSISTENT_CHUNK_FALLBACK=true on a deploy with a verified PV). "
+            "Returning 503 — client should retry."
+        )
+        raise RuntimeError("storage_unavailable_fallback_disabled")
+
+    # iter83 path — fallback to /app/.video_chunks. Only reached when the
+    # operator has explicitly opted in via the env var above.
     try:
         _, _, free = await run_in_threadpool(shutil.disk_usage, PERSISTENT_CHUNK_DIR if os.path.exists(PERSISTENT_CHUNK_DIR) else "/app")
     except OSError:
@@ -175,6 +189,15 @@ async def store_chunk(video_id: str, user_id: str, chunk_index: int, data: bytes
     await run_in_threadpool(os.makedirs, video_dir, exist_ok=True)
     local_path = os.path.join(video_dir, f"chunk_{chunk_index:06d}.bin")
     await run_in_threadpool(_write_file, local_path, data)
+    # iter89 audit log: any chunk that lands on persistent_filesystem in
+    # production now gets logged at WARN level so we can grep production
+    # logs to measure how often we're hitting the iter83 race risk window.
+    # (No Mongo write — keeping it pure-logging avoids event-loop pollution
+    # in tests and one less write on the upload critical path.)
+    logger.warning(
+        f"Chunk {video_id}/{chunk_index} routed to persistent_filesystem fallback — "
+        f"local file at {local_path}. Background migration will move to storage."
+    )
     return {"backend": "persistent_filesystem", "path": local_path, "size": len(data)}
 
 

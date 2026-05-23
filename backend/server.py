@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter88b"
+BUILD_VERSION = "iter89"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -622,6 +622,11 @@ SHIPPED_FEATURES = [
     "try-recovery-button-on-failed-banner",
     "migrate-one-chunk-3-state-result",
     "chunk-backend-lost-tag-excluded-from-integrity",
+    # iter89 — disable dangerous /app fallback by default, broaden recovery gate
+    "persistent-filesystem-fallback-opt-in-via-env",
+    "try-recovery-button-broadened-to-all-storage-failures",
+    "persistent-fallback-warn-log-audit",
+    "503-retry-after-60s-when-fallback-disabled",
 ]
 
 def _get_build_sha() -> str:
@@ -1221,10 +1226,16 @@ async def upload_chunk(
         except RuntimeError as rerr:
             reason = str(rerr)
             logger.warning(f"Chunk {chunk_index+1}/{total_chunks} rejected: {reason}")
+            # iter89: when persistent_filesystem fallback is disabled, the
+            # only 5xx path is "object storage temporarily unavailable" —
+            # bump Retry-After higher so the iter82 client-side 20-retry
+            # budget doesn't burn through cycles before storage actually
+            # comes back. 60s vs 30s.
+            retry_after = "60" if "fallback_disabled" in reason else "30"
             raise HTTPException(
                 status_code=503,
                 detail="Storage temporarily unavailable. Retry the chunk.",
-                headers={"Retry-After": "30"},
+                headers={"Retry-After": retry_after},
             )
         # Free memory immediately
         del chunk_data

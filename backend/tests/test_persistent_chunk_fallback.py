@@ -51,9 +51,14 @@ def test_persistent_chunk_free_min_is_reasonable():
 
 def test_store_chunk_fallback_writes_to_persistent_dir(monkeypatch, tmp_path):
     """Force object storage to fail. store_chunk must write the chunk under
-    PERSISTENT_CHUNK_DIR, not CHUNK_STORAGE_DIR."""
+    PERSISTENT_CHUNK_DIR, not CHUNK_STORAGE_DIR.
+
+    iter89: requires ENABLE_PERSISTENT_CHUNK_FALLBACK=true since iter89 made
+    the fallback opt-in (the real prod bug 2026-05-23 was that /app on the
+    production deploy isn't actually persistent)."""
     from services import storage as storage_mod
 
+    monkeypatch.setenv("ENABLE_PERSISTENT_CHUNK_FALLBACK", "true")
     fake_persistent = str(tmp_path / "persist")
     monkeypatch.setattr(storage_mod, "PERSISTENT_CHUNK_DIR", fake_persistent)
     # Generous free space so the disk-pressure short-circuit doesn't fire
@@ -80,9 +85,13 @@ def test_store_chunk_fallback_writes_to_persistent_dir(monkeypatch, tmp_path):
 
 def test_store_chunk_raises_when_disk_low(monkeypatch, tmp_path):
     """If /app is critically low, store_chunk must raise RuntimeError (not
-    silently commit and risk filling /app to 100%)."""
+    silently commit and risk filling /app to 100%).
+
+    iter89: requires ENABLE_PERSISTENT_CHUNK_FALLBACK=true to even reach the
+    disk-pressure check (the fallback is opt-in now)."""
     from services import storage as storage_mod
 
+    monkeypatch.setenv("ENABLE_PERSISTENT_CHUNK_FALLBACK", "true")
     fake_persistent = str(tmp_path / "persist")
     os.makedirs(fake_persistent, exist_ok=True)
     monkeypatch.setattr(storage_mod, "PERSISTENT_CHUNK_DIR", fake_persistent)

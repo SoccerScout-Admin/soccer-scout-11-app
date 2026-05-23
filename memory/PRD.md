@@ -1,6 +1,53 @@
 # Soccer Scout - Product Requirements Document
 
 
+## P0 — Disable Dangerous /app Fallback + Broaden Recovery Gate (iter89 — May 2026)
+
+Real production bug 2026-05-23, video `f0fee06a-19e0-4c86-bf76-2899bfe1a8c0` (1.04 GB, 107 chunks). Upload reached 100% client-side, but the production pod cycled mid-upload (multiple "Server restarted detected" + 520s in console). Chunks that landed on `/app/.video_chunks` (iter83's "persistent" PV fallback) **did not survive** — production's `/app` is NOT actually a real PV on Emergent's hosted deploy. Video ended at "Upload incomplete (1 of 107 chunks, 0.9%)" with no Try Recovery button visible because iter88's regex gate was too narrow.
+
+### Two fixes shipped
+
+1. **Persistent-filesystem fallback is now opt-in** (`services/storage.py`):
+   - New env var `ENABLE_PERSISTENT_CHUNK_FALLBACK` (default disabled).
+   - When NOT set (production default), `store_chunk` raises `RuntimeError("storage_unavailable_fallback_disabled")` on object-storage failure instead of writing to `/app/.video_chunks`. The 503 response sets `Retry-After: 60` (vs 30 for other 503s) so iter82's 20-retry client-side budget rides out a typical 5–10min storage outage cleanly.
+   - When SET to "true"/"1"/"yes" (preview, or production with a verified PV), iter83 behavior is restored.
+   - The opt-in design protects against the iter83 root cause: chunks landing on `/app` and evaporating before the migration loop can hoist them to object storage. With this disabled, the only path to durability is object storage itself.
+   - WARN-level log line `"routed to persistent_filesystem fallback"` on every fallback write so operators can `grep` production logs to verify the path isn't being exercised.
+
+2. **Try Recovery button gate broadened** (`pages/components/VideoAnalysisHeader.js`):
+   - Pre-iter89 the button only rendered when the error contained `chunk` + `missing`/`unreadable`/`lost` OR `upload incomplete`. The real production error was `"Upload incomplete (1 of 107 chunks, 0.9%). Re-upload required — AI analysis can't run on a partial file."` — which SHOULD have matched, but the user reported the button not appearing on production iter88b. Likely a CDN cache or minifier edge case.
+   - iter89 takes the conservative route: show the button for ANY chunked-video processing failure EXCEPT AI-budget / quota / balance errors. The recovery endpoint already returns `ready_to_retry: false` cleanly when it can't help, so showing it for "definitely-recoverable" failures has zero downside and surfaces the discovery path universally.
+
+### Tests (8 new, all 41 pass)
+- `test_iter89_safer_fallback.py`:
+  - `store_chunk` raises `storage_unavailable_fallback_disabled` when env var is unset (default)
+  - Fallback dir is NOT created when refused
+  - `store_chunk` uses fallback when env var is "true"
+  - Env var accepts case-insensitive "true"/"1"/"yes"
+  - Recovery button gate uses `!isAiBudgetError` exclusion (not positive regex)
+  - Gate still hides for budget/quota/balance errors
+  - WARN log line present in store_chunk source
+- Existing iter83 fallback tests updated to set `ENABLE_PERSISTENT_CHUNK_FALLBACK=true` (required to exercise the now-opt-in path).
+- Test pollution fix: dropped the in-progress `db.persistent_fallback_audit.insert_one` call inside `store_chunk` — kept pure-logging audit to avoid Motor event-loop pollution across test runs.
+
+### Verified live on preview
+- `GET /api/health/deploy` returns `build=iter89` with all 4 new feature flags.
+- Seeded a video matching the EXACT production error string (`"Upload incomplete (1 of 107 chunks, 0.9%). Re-upload required..."`) → Playwright captured the failed banner with BOTH the new blue "Try Recovery" button AND the red "Retry Processing" button side-by-side. Recovery button now reliably surfaces for the real production failure shape.
+
+### Files touched
+- `backend/services/storage.py` (opt-in fallback via env var, WARN log on fallback write)
+- `backend/server.py` (`Retry-After: 60` for fallback_disabled 503, BUILD_VERSION → iter89, 4 new feature flags)
+- `frontend/src/pages/components/VideoAnalysisHeader.js` (broadened `canTryRecovery` gate)
+- `backend/tests/test_iter89_safer_fallback.py` (NEW — 8 cases)
+- `backend/tests/test_persistent_chunk_fallback.py` (env-var setenv in 2 existing tests)
+
+### ⚠ Action required from operator
+- **Do NOT set `ENABLE_PERSISTENT_CHUNK_FALLBACK=true` on production** until/unless a real PV is provisioned for `/app/.video_chunks` and verified across pod restarts.
+- The stuck video `f0fee06a-19e0-4c86-bf76-2899bfe1a8c0` is unrecoverable (chunks evaporated) — user needs to re-upload. After iter89 deploys, this specific failure shape can't happen again because no chunk will land on ephemeral `/app` storage.
+
+---
+
+
 ## Recovery Endpoint for Stuck Chunked Videos (iter88 — May 2026)
 
 Follow-up to iter87. Even with the migration race fixed, videos already corrupted in production (and any that hit OTHER edge cases of pointer drift between `chunked_uploads` and `videos`) needed a recovery path that doesn't require re-uploading 800 MB.
