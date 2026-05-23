@@ -18,7 +18,6 @@ Behavior contract:
 import os
 import sys
 import uuid
-import bcrypt
 import asyncio
 import requests
 from datetime import datetime, timezone

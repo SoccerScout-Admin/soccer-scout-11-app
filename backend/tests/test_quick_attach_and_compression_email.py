@@ -181,8 +181,7 @@ def test_compression_email_requires_admin():
 def test_compression_email_skips_when_no_email():
     """If the coach has no email on record, the endpoint must skip
     gracefully (NOT raise) and return a reason the admin can show in toast."""
-    headers, payload = _login()
-    admin_user_id = payload.get("user", {}).get("id")
+    headers, _ = _login()
     sentinel = f"sentinel-vid-{uuid.uuid4().hex[:8]}"
 
     # Seed an event tied to a fake user with NO email

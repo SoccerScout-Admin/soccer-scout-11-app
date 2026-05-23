@@ -13,7 +13,6 @@ POST /api/videos/{video_id}/recover-chunks should:
 """
 import os
 import sys
-import asyncio
 import uuid
 from datetime import datetime, timezone
 

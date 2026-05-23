@@ -10,9 +10,6 @@ the backend tag in MongoDB and deleting the local file.
 import os
 import sys
 import asyncio
-import shutil
-import tempfile
-import uuid
 
 _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND not in sys.path:

@@ -19,7 +19,6 @@ Three fixes guarded by these tests:
 import os
 import sys
 import asyncio
-from unittest.mock import patch
 
 _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND not in sys.path:

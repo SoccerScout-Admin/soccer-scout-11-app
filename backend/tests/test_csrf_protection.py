@@ -40,7 +40,7 @@ def session_and_csrf():
     if reg.status_code != 200:
         pytest.skip(f"register failed: {reg.status_code} {reg.text}")
     csrf = session.cookies.get("csrf_token")
-    assert csrf, f"csrf_token cookie missing from jar after register"
+    assert csrf, "csrf_token cookie missing from jar after register"
     return session, csrf
 
 

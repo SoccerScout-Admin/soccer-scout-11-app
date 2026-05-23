@@ -9,8 +9,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from starlette.concurrency import run_in_threadpool
 from db import (
-    db, STORAGE_URL, EMERGENT_KEY, APP_NAME, CHUNK_STORAGE_DIR,
-    PERSISTENT_CHUNK_DIR, PERSISTENT_CHUNK_FREE_MIN_BYTES,
+    db, STORAGE_URL, EMERGENT_KEY, APP_NAME, PERSISTENT_CHUNK_DIR, PERSISTENT_CHUNK_FREE_MIN_BYTES,
 )
 
 logger = logging.getLogger(__name__)

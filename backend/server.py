@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter88"
+BUILD_VERSION = "iter88b"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -1220,7 +1220,6 @@ async def upload_chunk(
             store_result = await store_chunk(video_id, upload["user_id"], chunk_index, chunk_data)
         except RuntimeError as rerr:
             reason = str(rerr)
-            del chunk_data
             logger.warning(f"Chunk {chunk_index+1}/{total_chunks} rejected: {reason}")
             raise HTTPException(
                 status_code=503,

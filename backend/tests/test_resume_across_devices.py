@@ -14,9 +14,7 @@ the other /api/me/* endpoints — see tests/test_cookie_auth_migration.py.
 """
 import os
 import sys
-import asyncio
 import uuid
-import time
 
 import httpx
 

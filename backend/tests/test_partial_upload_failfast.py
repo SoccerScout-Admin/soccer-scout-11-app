@@ -24,7 +24,6 @@ import sys
 import subprocess
 import textwrap
 import asyncio
-from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
 load_dotenv()

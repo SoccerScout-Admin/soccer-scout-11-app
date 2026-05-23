@@ -18,7 +18,6 @@ iter75 fix:
 """
 import os
 import sys
-import uuid
 import subprocess
 import textwrap
 

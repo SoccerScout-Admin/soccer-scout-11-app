@@ -18,7 +18,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from starlette.concurrency import run_in_threadpool
-from db import db, CHUNK_SIZE
+from db import db
 from services.storage import read_chunk_data, get_object_sync
 from services.processing_events import log_event as _log_event
 
