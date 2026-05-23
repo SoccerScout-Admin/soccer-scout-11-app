@@ -358,9 +358,15 @@ const MatchDetail = () => {
       // until the file is small enough to finish in one good window.
       let advice;
       if (status === 503) {
-        // iter82: 503 means object storage was degraded for >15 minutes of
-        // retries. Direct the user at the orange banner above the upload box.
-        advice = '\n\nOur object storage has been slow for a while. Look for the orange "INCOMPLETE UPLOAD WAITING" banner at the top of this page — pick the SAME file there in a few minutes to resume from where you left off.';
+        // iter82/iter89: 503 means object storage was degraded for the full
+        // 20-retry budget (~15 min). Most outages clear in 5-10 min, so a
+        // 15-min exhaustion strongly suggests a real platform-level outage.
+        // Direct the user at the resume banner AND at Emergent support.
+        advice = '\n\nOur object storage has been unavailable for the past ~15 minutes. ' +
+          'This is usually a brief platform-side outage that clears on its own.\n\n' +
+          'What to do:\n' +
+          '1. Wait 30 minutes and look for the orange "INCOMPLETE UPLOAD WAITING" banner at the top of the match page — pick the SAME file there to resume from where you left off (chunks you already delivered are durable).\n' +
+          '2. If this keeps happening, email support@emergent.sh with subject "Object storage 500 errors" and reference your app domain so the platform team can investigate.';
       } else if (file.size > 2 * 1024 ** 3) {
         advice = `\n\nThis is a ${fileSizeGB} GB file. The fastest fix is to compress it BEFORE re-uploading:\n` +
           `1. Open the file in HandBrake (handbrake.fr — free)\n` +
