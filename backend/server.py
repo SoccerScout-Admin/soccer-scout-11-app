@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter87"
+BUILD_VERSION = "iter88"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -617,6 +617,11 @@ SHIPPED_FEATURES = [
     "migration-write-then-update-then-delete-ordering",
     "fail-fast-on-missing-chunk-no-more-zero-fill",
     "persistent-filesystem-existence-check-in-integrity",
+    # iter88 — recovery path for stuck videos
+    "recover-chunks-endpoint",
+    "try-recovery-button-on-failed-banner",
+    "migrate-one-chunk-3-state-result",
+    "chunk-backend-lost-tag-excluded-from-integrity",
 ]
 
 def _get_build_sha() -> str:
@@ -1676,6 +1681,142 @@ async def reprocess_video(video_id: str, current_user: dict = Depends(get_curren
     )
     asyncio.create_task(run_auto_processing(video_id, current_user["id"], only_types=remaining))
     return {"status": "reprocessing_started", "types_to_process": remaining, "already_completed": list(completed)}
+
+
+@api_router.post("/videos/{video_id}/recover-chunks")
+async def recover_chunks(video_id: str, current_user: dict = Depends(get_current_user)):
+    """iter88 — Auto-Retry Migration recovery.
+
+    For videos stuck in `processing_status=failed` with the iter87 error
+    "Chunk N of M missing — re-upload required.", this endpoint:
+
+      1. Syncs the video doc's chunk_paths/chunk_backends FROM the
+         chunked_uploads collection — if migration already swapped a chunk
+         to object storage there but the video doc still has a stale
+         persistent_filesystem pointer, this fixes it without touching
+         storage at all.
+      2. Re-runs migration on every chunk still tagged
+         persistent_filesystem in the video doc, using the same upload →
+         swap-DB → delete-file ordering as the background loop (iter87).
+      3. Re-checks integrity. If `full`, resets `processing_status` to
+         `pending` and clears the error so the existing "Retry Processing"
+         flow can re-run cleanly.
+
+    Returns a summary so the UI can tell the user exactly what happened:
+      - "Recovered 3 chunks from migration, your video is ready to retry."
+      - "1 chunk is permanently lost (storage backed and missing). Please
+         re-upload the file."
+    """
+    video = await db.videos.find_one(
+        {"id": video_id, "user_id": current_user["id"], "is_deleted": False},
+        {"_id": 0},
+    )
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    if not video.get("is_chunked"):
+        raise HTTPException(
+            status_code=400,
+            detail="Recovery only applies to chunked uploads.",
+        )
+
+    from services.storage import _migrate_one_chunk
+    from services.processing import _check_chunk_integrity
+    from db import APP_NAME
+
+    # Step 1: pull the freshest chunk_backends/chunk_paths from chunked_uploads.
+    # The background migration loop updates that collection too, so if a chunk
+    # migrated AFTER finalize, the up-to-date pointer lives there.
+    synced = 0
+    upload = await db.chunked_uploads.find_one(
+        {"video_id": video_id, "user_id": current_user["id"]},
+        {"_id": 0},
+    )
+    if upload:
+        upload_backends = upload.get("chunk_backends") or {}
+        upload_paths = upload.get("chunk_paths") or {}
+        video_backends = video.get("chunk_backends") or {}
+        video_paths = video.get("chunk_paths") or {}
+        sync_set = {}
+        for idx_str, backend in upload_backends.items():
+            if video_backends.get(idx_str) != backend or video_paths.get(idx_str) != upload_paths.get(idx_str):
+                # The chunked_uploads pointer is newer than the video doc — adopt it.
+                if upload_paths.get(idx_str):
+                    sync_set[f"chunk_backends.{idx_str}"] = backend
+                    sync_set[f"chunk_paths.{idx_str}"] = upload_paths[idx_str]
+                    synced += 1
+        if sync_set:
+            await db.videos.update_one({"id": video_id}, {"$set": sync_set})
+            video = await db.videos.find_one({"id": video_id}, {"_id": 0})  # reload
+
+    # Step 2: re-run migration on any chunks still marked persistent_filesystem
+    # in the video doc. Same write-then-update-then-delete ordering as the
+    # background loop.
+    migrated = 0
+    migration_failures = []
+    backends = video.get("chunk_backends") or {}
+    paths = video.get("chunk_paths") or {}
+    for idx_str, backend in list(backends.items()):
+        if backend != "persistent_filesystem":
+            continue
+        local_path = paths.get(idx_str)
+        if not local_path:
+            migration_failures.append({"chunk_index": int(idx_str), "reason": "no_local_path"})
+            continue
+        ok = await _migrate_one_chunk(video_id, idx_str, local_path, current_user["id"])
+        if ok == "retry":
+            migration_failures.append({"chunk_index": int(idx_str), "reason": "storage_still_failing"})
+            continue
+        if ok == "lost":
+            # Mark the chunk as lost in the video doc so the integrity check
+            # correctly reports it as unavailable and the user gets the right
+            # "re-upload required" signal.
+            try:
+                await db.videos.update_one({"id": video_id}, {"$set": {
+                    f"chunk_backends.{idx_str}": "lost",
+                }})
+            except Exception:
+                pass
+            migration_failures.append({"chunk_index": int(idx_str), "reason": "local_file_lost"})
+            continue
+        # ok == "migrated"
+        new_path = f"{APP_NAME}/videos/{current_user['id']}/{video_id}_chunk_{int(idx_str):06d}.bin"
+        try:
+            await db.videos.update_one({"id": video_id}, {"$set": {
+                f"chunk_backends.{idx_str}": "storage",
+                f"chunk_paths.{idx_str}": new_path,
+            }})
+        except Exception as db_err:
+            migration_failures.append({"chunk_index": int(idx_str), "reason": f"db_swap_failed: {db_err!r}"})
+            continue
+        try:
+            os.remove(local_path)
+        except OSError:
+            pass
+        migrated += 1
+
+    # Step 3: re-check integrity and clear the failure state if we're whole again.
+    video = await db.videos.find_one({"id": video_id}, {"_id": 0})  # reload final state
+    integrity, available, total = await _check_chunk_integrity(video)
+    ready_to_retry = integrity == "full"
+    if ready_to_retry:
+        await db.videos.update_one({"id": video_id}, {"$set": {
+            "processing_status": "pending",
+            "processing_error": None,
+            "processing_progress": 0,
+        }})
+
+    return {
+        "video_id": video_id,
+        "synced_from_uploads": synced,
+        "migrated_to_storage": migrated,
+        "migration_failures": migration_failures,
+        "integrity": integrity,
+        "available_chunks": available,
+        "total_chunks": total,
+        "ready_to_retry": ready_to_retry,
+    }
+
 
 @api_router.post("/videos/{video_id}/start-analysis")
 async def start_analysis(video_id: str, current_user: dict = Depends(get_current_user)):

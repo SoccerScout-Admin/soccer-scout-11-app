@@ -147,7 +147,7 @@ def test_migrate_one_chunk_swaps_backend(monkeypatch, tmp_path):
     monkeypatch.setattr(storage_mod, "put_object_with_retry", _fake_put)
 
     ok = _run(storage_mod._migrate_one_chunk("vid-mig", "3", str(local), "user-z"))
-    assert ok is True
+    assert ok == "migrated"
     # iter87: local file MUST survive — caller is responsible for delete-post-swap.
     assert local.exists(), (
         "iter87 changed the contract: _migrate_one_chunk must leave the local "
@@ -171,18 +171,19 @@ def test_migrate_one_chunk_keeps_file_on_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(storage_mod, "put_object_with_retry", _fake_fail)
 
     ok = _run(storage_mod._migrate_one_chunk("vid-keep", "5", str(local), "user-k"))
-    assert ok is False
+    assert ok == "retry"
     assert local.exists(), "Local chunk must NOT be deleted when migration fails"
 
 
 def test_migrate_one_chunk_drops_missing_file(tmp_path):
     """If the local file was wiped externally (manual cleanup / volume detach),
-    return True so the loop drops the dead entry instead of looping forever."""
+    return 'lost' so the caller can mark the chunk_backend as 'lost' instead
+    of fabricating a fake storage pointer."""
     from services import storage as storage_mod
 
     nonexistent = str(tmp_path / "doesnotexist.bin")
     ok = _run(storage_mod._migrate_one_chunk("vid-gone", "9", nonexistent, "user-g"))
-    assert ok is True
+    assert ok == "lost"
 
 
 def test_migrate_interval_is_short_enough():

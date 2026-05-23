@@ -1,6 +1,57 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Recovery Endpoint for Stuck Chunked Videos (iter88 — May 2026)
+
+Follow-up to iter87. Even with the migration race fixed, videos already corrupted in production (and any that hit OTHER edge cases of pointer drift between `chunked_uploads` and `videos`) needed a recovery path that doesn't require re-uploading 800 MB.
+
+### Backend
+- New endpoint **`POST /api/videos/{video_id}/recover-chunks`** in `server.py`:
+  1. **Sync from `chunked_uploads`**: For each chunk index where the video doc's `chunk_backends[i]` / `chunk_paths[i]` disagree with the `chunked_uploads` collection's version, adopt the upload doc's pointer. The background migration loop updates `chunked_uploads` first, so a stale video doc is the most common recovery case.
+  2. **Re-run migration** on any remaining `persistent_filesystem` chunks using the same iter87 ordering (upload → swap DB → delete local file).
+  3. **Re-check integrity**. If `full`, reset `processing_status` to `pending` and clear `processing_error` so the existing "Retry Processing" flow can run cleanly.
+- Returns a structured summary: `synced_from_uploads`, `migrated_to_storage`, `migration_failures[]`, `integrity`, `available_chunks`, `total_chunks`, `ready_to_retry`.
+- 400 for non-chunked videos, 404 for unknown video ids, cookie-auth gated.
+
+### `_migrate_one_chunk` 3-state result (iter88 fix on top of iter83/iter87)
+The bool return was lossy — when the local file was gone, it returned `True` ("drop entry") which caused `_migrate_collection` to write a **fake storage pointer** for an object that doesn't exist. Future integrity checks then incorrectly counted that chunk as available. New contract:
+- `"migrated"` — upload succeeded; caller swaps DB pointer, then deletes file.
+- `"retry"` — storage still failing or local file unreadable; caller preserves everything for next tick.
+- `"lost"` — local file gone, no other copy; caller writes `chunk_backends[i] = "lost"` so the integrity check excludes it.
+- `_check_chunk_integrity` honors the new `"lost"` tag (always counted unavailable).
+- Existing iter83 + iter87 tests updated to assert the new string contract.
+
+### Frontend
+- `VideoAnalysisHeader.js`: new blue **"Try Recovery"** button (`data-testid="try-recovery-btn"`) appears alongside the existing red "Retry Processing" button, gated by a `canTryRecovery` derived flag that ONLY fires when the error mentions "chunk" + ("missing" / "lost" / "unreadable") OR "upload incomplete" — so AI-budget / invalid-mp4 failures don't show a misleading CTA.
+- `VideoAnalysis.js`: new `handleTryRecovery` handler with `recovering` flight state. On `ready_to_retry`, auto-fires `handleReprocess` so the user doesn't need a second click. On failure, the alert points them at "Delete & re-upload".
+
+### Tests (6 new, all 31 pass)
+- `test_recover_chunks.py`:
+  - Auth required (401/403 anonymous)
+  - 404 for unknown video
+  - 400 for non-chunked legacy video
+  - Happy path: stale video doc pointer synced from chunked_uploads → integrity full → processing_status reset → ready_to_retry=true
+  - Unrecoverable path: when both chunked_uploads and storage are out (and local file is gone), returns `ready_to_retry=false` and leaves `processing_status=failed` so the user knows to re-upload
+  - Frontend grep: header gates button on `canTryRecovery` with chunk/missing/lost keywords; VideoAnalysis wires `handleTryRecovery` to the `/recover-chunks` endpoint.
+- Plus all 8 iter87 tests and all iter83 tests updated for the 3-state contract.
+
+### Verified live on preview
+- Build endpoint returns `iter88` with all 4 new feature flags (`recover-chunks-endpoint`, `try-recovery-button-on-failed-banner`, `migrate-one-chunk-3-state-result`, `chunk-backend-lost-tag-excluded-from-integrity`).
+- Seeded a stuck video matching the production failure shape → Playwright captured the failed banner with the "Try Recovery" button next to "Retry Processing" → endpoint call via curl returned `synced_from_uploads=1`, `integrity=full`, `ready_to_retry=true`, `processing_status=pending`, error cleared.
+
+### Files touched
+- `backend/server.py` (new `/recover-chunks` endpoint, BUILD_VERSION → iter88, 4 new feature flags)
+- `backend/services/storage.py` (3-state `_migrate_one_chunk`, `_migrate_collection` handles `"lost"` via `chunk_backends.X = "lost"`)
+- `backend/services/processing.py` (`_check_chunk_integrity` excludes `backend == "lost"`)
+- `backend/tests/test_recover_chunks.py` (NEW — 6 cases)
+- `backend/tests/test_persistent_chunk_fallback.py` (3-state contract update)
+- `backend/tests/test_iter87_migration_race_fix.py` (3-state contract update)
+- `frontend/src/pages/VideoAnalysis.js` (`handleTryRecovery`, `recovering` state, prop wiring)
+- `frontend/src/pages/components/VideoAnalysisHeader.js` (new prop signature, derived `canTryRecovery` gate, blue button)
+
+---
+
+
 ## P0 — Migration Race Fix + Fail-Fast Assembly (iter87 — May 2026)
 
 Real production bug 2026-05-22, video `40af07ed-5fa7-4ccb-87d5-fb0e3d5917b5` (0.83 GB, 85 chunks, "LFC 2007B Premier vs ACGR 07 MLS NEXT II"). Upload finalized successfully, processing failed with "Video file is incomplete (moov atom missing). Please re-upload — the chunked transfer didn't finalize cleanly."

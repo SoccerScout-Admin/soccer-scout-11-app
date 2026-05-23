@@ -18,7 +18,19 @@ const VideoAnalysisHeader = ({
   onReprocess,
   onAddRoster,
   onRunAnyway,
-}) => (
+  onTryRecovery,
+  recovering,
+}) => {
+  // iter88 — only show "Try Recovery" when the failure looks like a missing-
+  // chunk error from iter87's fail-fast assembler. For "AI budget exhausted"
+  // or "invalid mp4" failures, the recovery endpoint can't help and the CTA
+  // would be misleading.
+  const errLower = (processingStatus?.processing_error || '').toLowerCase();
+  const canTryRecovery = !!onTryRecovery && (
+    (errLower.includes('chunk') && (errLower.includes('missing') || errLower.includes('unreadable') || errLower.includes('lost')))
+    || errLower.includes('upload incomplete')
+  );
+  return (
   <>
     <header className="sticky top-0 z-50 bg-[#0A0A0A]/95 backdrop-blur-sm border-b border-white/5 px-6 py-3">
       <div className="max-w-[1400px] mx-auto flex items-center justify-between">
@@ -122,10 +134,20 @@ const VideoAnalysisHeader = ({
               </p>
             </div>
           </div>
-          <button data-testid="retry-processing-btn" onClick={onReprocess}
-            className="flex-shrink-0 px-4 py-2 rounded-full bg-[#EF4444]/10 text-[#EF4444] text-xs font-medium hover:bg-[#EF4444]/20 transition-colors">
-            {processingStatus.completed_types?.length > 0 ? 'Resume Failed' : 'Retry Processing'}
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {canTryRecovery && (
+              <button data-testid="try-recovery-btn"
+                onClick={onTryRecovery}
+                disabled={recovering}
+                className="px-4 py-2 rounded-full bg-[#007AFF]/10 text-[#007AFF] text-xs font-medium hover:bg-[#007AFF]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                {recovering ? 'Recovering…' : 'Try Recovery'}
+              </button>
+            )}
+            <button data-testid="retry-processing-btn" onClick={onReprocess}
+              className="px-4 py-2 rounded-full bg-[#EF4444]/10 text-[#EF4444] text-xs font-medium hover:bg-[#EF4444]/20 transition-colors">
+              {processingStatus.completed_types?.length > 0 ? 'Resume Failed' : 'Retry Processing'}
+            </button>
+          </div>
         </div>
       </div>
     )}
@@ -168,6 +190,7 @@ const VideoAnalysisHeader = ({
       </div>
     )}
   </>
-);
+  );
+};
 
 export default VideoAnalysisHeader;

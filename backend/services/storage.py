@@ -210,33 +210,41 @@ MIGRATE_INTERVAL_SECS = 30          # how often the loop wakes up
 MIGRATE_BATCH = 25                  # max chunks to migrate per pass
 
 
-async def _migrate_one_chunk(video_id: str, chunk_index_str: str, local_path: str, user_id: str) -> bool:
-    """Upload a single persistent chunk to object storage. Returns True on
-    successful upload (caller is responsible for the DB swap AND for deleting
-    the local file ONLY AFTER the DB swap is committed — iter87 fix for the
-    race that corrupted videos when the pod restarted between os.remove and
-    update_one).
+async def _migrate_one_chunk(video_id: str, chunk_index_str: str, local_path: str, user_id: str) -> str:
+    """Upload a single persistent chunk to object storage. Returns one of
+    three states (iter88 — replacing the iter83/iter87 bool):
 
-    Does NOT delete the local file — that's the caller's job, post-DB-swap."""
+      - "migrated": upload succeeded. Caller should swap the DB pointer
+                    (chunk_backends → "storage", chunk_paths → new key)
+                    and THEN delete the local file. (iter87 ordering.)
+      - "retry":    storage still rejecting OR the local file isn't readable
+                    right now. Caller should preserve everything and try
+                    again next tick.
+      - "lost":     local file is gone AND we have no other copy. Caller
+                    should mark chunk_backends as "lost" so integrity
+                    correctly reports the chunk as unavailable instead of
+                    silently writing a fake "storage" pointer (iter88 fix
+                    for the recovery-endpoint test that exposed this).
+
+    Does NOT delete the local file — that's the caller's job, post-DB-swap.
+    """
     if not os.path.exists(local_path):
-        # File evaporated (manual cleanup or volume detached) — drop the
-        # entry so the migration loop doesn't burn cycles on it forever.
-        logger.warning(f"Persistent chunk file missing, dropping backend entry: {local_path}")
-        return True
+        logger.warning(f"Persistent chunk file missing, marking lost: {local_path}")
+        return "lost"
 
     try:
         data = await run_in_threadpool(_read_file, local_path)
     except Exception as e:
         logger.warning(f"Could not read persistent chunk {local_path}: {e}")
-        return False
+        return "retry"
 
     target_key = f"{APP_NAME}/videos/{user_id}/{video_id}_chunk_{int(chunk_index_str):06d}.bin"
     try:
         await put_object_with_retry(target_key, data, "application/octet-stream", max_retries=3)
     except Exception as e:
         logger.info(f"Migration: storage still rejecting chunk {video_id}/{chunk_index_str}: {str(e)[:80]}")
-        return False
-    return True
+        return "retry"
+    return "migrated"
 
 
 async def _migrate_collection(coll_name: str) -> int:
@@ -254,6 +262,10 @@ async def _migrate_collection(coll_name: str) -> int:
       2. Swap the DB pointer (backend → storage, path → new key)
       3. ONLY THEN delete the local file
     A pod restart between any two of these leaves the system in a safe state.
+
+    iter88: 3-state result. The "lost" case (local file gone, no other
+    copy) writes backend="lost" instead of fabricating a fake storage
+    pointer that the integrity check would happily count as available.
     """
     coll = db[coll_name]
     query = {"chunk_backends": {"$exists": True, "$ne": {}}}
@@ -279,14 +291,33 @@ async def _migrate_collection(coll_name: str) -> int:
             if not local_path:
                 continue
 
-            # 1. Upload the chunk to object storage
-            ok = await _migrate_one_chunk(video_id, idx_str, local_path, user_id)
-            if not ok:
+            # 1. Try to upload
+            result = await _migrate_one_chunk(video_id, idx_str, local_path, user_id)
+            filter_ = {"upload_id": upload_id} if upload_id and coll_name == "chunked_uploads" else {"id": video_id}
+
+            if result == "retry":
+                # Storage still degraded — bail out of this doc; try again next tick.
                 break
 
+            if result == "lost":
+                # Drop the persistent_filesystem pointer so future integrity
+                # checks correctly count this chunk as unavailable instead
+                # of silently writing a fake storage pointer.
+                try:
+                    await coll.update_one(filter_, {"$set": {
+                        f"chunk_backends.{idx_str}": "lost",
+                    }})
+                    logger.warning(
+                        f"Migration: chunk {video_id}/{idx_str} marked LOST "
+                        f"(local file gone). Re-upload required for this video."
+                    )
+                except Exception as db_err:
+                    logger.error(f"Migration: failed to mark chunk lost: {db_err!r}")
+                continue
+
+            # result == "migrated"
             # 2. Swap the DB pointer FIRST — this is the durable record.
             new_path = f"{APP_NAME}/videos/{user_id}/{video_id}_chunk_{int(idx_str):06d}.bin"
-            filter_ = {"upload_id": upload_id} if upload_id and coll_name == "chunked_uploads" else {"id": video_id}
             try:
                 await coll.update_one(filter_, {"$set": {
                     f"chunk_backends.{idx_str}": "storage",

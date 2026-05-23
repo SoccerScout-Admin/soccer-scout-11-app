@@ -637,9 +637,13 @@ async def _check_chunk_integrity(video: dict) -> tuple[str, int, int]:
     available = 0
     for i in range(total):
         path = chunk_paths.get(str(i))
+        backend = chunk_backends.get(str(i), "storage")
+        # iter88: chunks tagged "lost" by the migration loop are unrecoverable —
+        # never count them as available no matter what chunk_paths says.
+        if backend == "lost":
+            continue
         if not path:
             continue
-        backend = chunk_backends.get(str(i), "storage")
         # iter87: also check persistent_filesystem (iter83) — pre-iter87 a
         # migration race could leave the DB pointing at a deleted local file.
         if backend in ("filesystem", "persistent_filesystem") and not os.path.exists(path):

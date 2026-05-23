@@ -89,6 +89,48 @@ const VideoAnalysis = () => {
     }
   }, [videoId, match, navigate]);
 
+  // iter88 — "Try Recovery" handler for failed videos where missing chunks
+  // might still be sitting on the PV (e.g. the iter83 migration race left a
+  // stale pointer in the video doc while the chunked_uploads doc already
+  // has the correct object-storage key). Calls /recover-chunks which:
+  //   1. Syncs chunk pointers from chunked_uploads → videos
+  //   2. Re-runs migration on any persistent_filesystem chunks
+  //   3. Resets processing_status if integrity is back to "full"
+  // Then automatically reprocesses if recovery succeeded.
+  const [recovering, setRecovering] = useState(false);
+  const handleTryRecovery = useCallback(async () => {
+    if (recovering) return;
+    setRecovering(true);
+    try {
+      const res = await axios.post(
+        `${API}/videos/${videoId}/recover-chunks`, {},
+        { headers: getAuthHeader() },
+      );
+      const r = res.data || {};
+      if (r.ready_to_retry) {
+        const summary = [];
+        if (r.synced_from_uploads) summary.push(`${r.synced_from_uploads} pointer${r.synced_from_uploads === 1 ? '' : 's'} synced`);
+        if (r.migrated_to_storage) summary.push(`${r.migrated_to_storage} chunk${r.migrated_to_storage === 1 ? '' : 's'} migrated to object storage`);
+        const detail = summary.length ? ` (${summary.join(', ')})` : '';
+        alert(`Recovery succeeded${detail}. Starting analysis now…`);
+        // Kick off reprocess immediately — user shouldn't have to click again.
+        await handleReprocess?.();
+        await refetchProcessingStatus?.();
+      } else {
+        const missing = r.total_chunks - r.available_chunks;
+        alert(
+          `Recovery couldn't restore the upload — ${missing} of ${r.total_chunks} `
+          + `chunk${missing === 1 ? ' is' : 's are'} permanently missing from object storage and the local PV.\n\n`
+          + 'Click "Delete & re-upload" below to upload the file fresh.'
+        );
+      }
+    } catch (err) {
+      alert('Recovery failed: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setRecovering(false);
+    }
+  }, [videoId, recovering, handleReprocess, refetchProcessingStatus]);
+
   const [activeTab, setActiveTab] = useState('overview');
   const [analyzing, setAnalyzing] = useState(false);
   const [annotationMode, setAnnotationMode] = useState(null);
@@ -380,6 +422,8 @@ const VideoAnalysis = () => {
         onReprocess={handleReprocess}
         onAddRoster={handleAddRoster}
         onRunAnyway={handleRunAnyway}
+        onTryRecovery={handleTryRecovery}
+        recovering={recovering}
       />
 
       <main className="max-w-[1400px] mx-auto px-6 py-6">

@@ -61,7 +61,7 @@ def test_migration_no_longer_deletes_file_inside_migrate_one_chunk(monkeypatch, 
     monkeypatch.setattr(os, "remove", _spy_remove)
 
     ok = _run(storage_mod._migrate_one_chunk("vid-x", "0", str(local), "user-x"))
-    assert ok is True
+    assert ok == "migrated"
     assert remove_calls == [], (
         f"_migrate_one_chunk called os.remove({remove_calls}) — iter87 moved this "
         "delete to _migrate_collection so it happens AFTER the DB swap. Calling "
