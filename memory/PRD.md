@@ -1,6 +1,43 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Global Storage Outage Banner (iter91 — May 2026)
+
+After the 2026-05-23 → 2026-05-24 21+ hour Emergent Object Storage outage, even the iter90 pre-flight modal still required the user to ATTEMPT an upload before discovering the problem. iter91 mounts a proactive banner on every authenticated page so users see the outage the moment they log in.
+
+### Frontend
+- New component `components/StorageOutageBanner.js`:
+  - Polls `/api/health/storage` every 60s (uses the iter90 endpoint).
+  - When `healthy === false`, renders a thin yellow strip at the top of the page (`#F59E0B` palette — distinct from the red disk-pressure banner so users can tell them apart).
+  - Banner text: "STORAGE DEGRADED — Emergent Object Storage is currently failing (PUT returned 500). Uploads are paused — we'll resume automatically when it recovers. Existing videos and clips load normally."
+  - Dismiss button (`data-testid="storage-outage-banner-dismiss"`) lets users hide it for the rest of their session.
+  - When storage RECOVERS (`healthy === true`), the dismissed state auto-resets so a future outage gets a fresh banner.
+- Mounted in `App.js` next to `DiskPressureBanner` and `Toaster`.
+
+### Tests (7 new)
+- `test_iter91_storage_outage_banner.py`:
+  - Banner file exists
+  - Polls `/health/storage` with `setInterval` ≤ 60s
+  - Renders only when storage is unhealthy
+  - Has dismiss button with proper `data-testid`
+  - On recovery, calls `setDismissed(false)` so future outages re-render
+  - App.js mounts the banner
+  - Uses yellow palette (visually distinct from red disk-pressure banner)
+
+### Verified live on preview during the active 2026-05-24 outage
+- Banner appears within ~5s of login on `https://scout-lens.preview.emergentagent.com/dashboard`.
+- Text reads: "STORAGE DEGRADED — Emergent Object Storage is currently failing (PUT returned 500). Uploads are paused — we'll resume automatically when it recovers. Existing videos and clips load normally."
+- Sits cleanly above the navigation header. Other UI (Match Library, Coach Pulse, existing videos) is fully usable.
+
+### Files touched
+- `frontend/src/components/StorageOutageBanner.js` (NEW)
+- `frontend/src/App.js` (import + mount)
+- `backend/server.py` (`BUILD_VERSION` → iter91, 1 new feature flag)
+- `backend/tests/test_iter91_storage_outage_banner.py` (NEW — 7 cases)
+
+---
+
+
 ## Pre-Flight Storage Probe — Fail-Fast During Outages (iter90 — May 2026)
 
 After the 2026-05-23 production object-storage outage where every PUT returned HTTP 500 for >1h and forced users to burn ~15 min of client retries before getting an error, iter90 adds a pre-flight probe so the UI can refuse to start the upload instantly with a friendly modal instead.

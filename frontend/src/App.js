@@ -36,6 +36,7 @@ import ScoutMyListings from './pages/ScoutMyListings';
 import Messages from './pages/Messages';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 import DiskPressureBanner from './components/DiskPressureBanner';
+import StorageOutageBanner from './components/StorageOutageBanner';
 import { Toaster } from 'sonner';
 import useInAppNotifications from './hooks/useInAppNotifications';
 
@@ -167,6 +168,7 @@ function App() {
       <BrowserRouter>
         <PWAInstallPrompt />
         <DiskPressureBanner />
+        <StorageOutageBanner />
         <Toaster theme="dark" position="top-right" richColors closeButton />
         <Routes>
           <Route path="/auth" element={<AuthPage setIsAuthenticated={setIsAuthenticated} />} />
