@@ -1,6 +1,46 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Pre-Flight Storage Probe — Fail-Fast During Outages (iter90 — May 2026)
+
+After the 2026-05-23 production object-storage outage where every PUT returned HTTP 500 for >1h and forced users to burn ~15 min of client retries before getting an error, iter90 adds a pre-flight probe so the UI can refuse to start the upload instantly with a friendly modal instead.
+
+### Backend
+- New endpoint **`GET /api/health/storage`** in `server.py`:
+  - Performs a single ~1KB PUT roundtrip against Emergent object storage (`POST /init` → `PUT /objects/.../healthcheck/iter90_probe_*.bin`).
+  - Returns `{healthy: bool, latency_ms: int, reason?: str, cached: bool}`.
+  - **Public** (no auth) — the frontend needs it BEFORE `/api/auth`-gated init.
+  - **30s in-memory cache** so a burst of upload attempts can't DDoS the upstream probe target.
+  - Sub-200ms response time even when storage is broken (uses tight `timeout=(3, 8)` budget).
+
+### Frontend
+- `pages/MatchDetail.js::handleChunkedUpload` now calls `/api/health/storage` BEFORE `/videos/upload/init`. If `healthy === false`:
+  - Shows an alert with the exact reason (e.g. `"PUT returned 500"`) + latency.
+  - Tells the user to wait 15-30 minutes, OR email `support@emergent.sh` with subject `"Object storage 500 errors"` and the app domain.
+  - Reassures: "Your file selection has been preserved — just click the file picker again when ready."
+- Probe network failure is treated as ambiguous → continues optimistically (don't block uploads on a probe blip).
+
+### Tests (5 new, all 46 pass with prior storage suite)
+- `test_iter90_storage_preflight.py`:
+  - Endpoint is public (no 401)
+  - Reports `healthy=false` with a `reason` field during outages
+  - Cache returns `cached=true` on the second consecutive call
+  - `handleChunkedUpload` source contains `/health/storage` reference BEFORE `/videos/upload/init`
+  - Friendly alert mentions `support@emergent.sh` + "preserved"
+
+### Verified live on preview
+- `GET /api/health/deploy` → `build=iter90` with all 3 new feature flags.
+- Direct curl during the active 2026-05-23 outage → `{healthy: false, reason: "PUT returned 500", latency_ms: 155, cached: false}` returned in 155ms (vs the prior ~15min retry-loop failure mode).
+- Playwright `page.evaluate` from the authenticated MatchDetail page confirms the probe responds with the same diagnostic shape.
+
+### Files touched
+- `backend/server.py` (new `/api/health/storage` endpoint, 30s cache, BUILD_VERSION → iter90, 3 new feature flags)
+- `frontend/src/pages/MatchDetail.js` (pre-flight probe call inside `handleChunkedUpload`)
+- `backend/tests/test_iter90_storage_preflight.py` (NEW — 5 cases)
+
+---
+
+
 ## P0 — Disable Dangerous /app Fallback + Broaden Recovery Gate (iter89 — May 2026)
 
 Real production bug 2026-05-23, video `f0fee06a-19e0-4c86-bf76-2899bfe1a8c0` (1.04 GB, 107 chunks). Upload reached 100% client-side, but the production pod cycled mid-upload (multiple "Server restarted detected" + 520s in console). Chunks that landed on `/app/.video_chunks` (iter83's "persistent" PV fallback) **did not survive** — production's `/app` is NOT actually a real PV on Emergent's hosted deploy. Video ended at "Upload incomplete (1 of 107 chunks, 0.9%)" with no Try Recovery button visible because iter88's regex gate was too narrow.

@@ -306,6 +306,34 @@ const MatchDetail = () => {
 
   const handleChunkedUpload = async (file) => {
     setUploading(true);
+    setUploadStatus('Checking object storage…');
+    // iter90 — pre-flight storage probe. Real production outage 2026-05-23
+    // had Emergent's object storage backend returning 500 on every PUT for
+    // >1h. Pre-iter90 we'd init the upload anyway, start the chunk loop,
+    // and burn the full ~15-minute client retry budget before alerting the
+    // user. Now we probe first and fail FAST with a friendly modal so the
+    // user can come back later instead of wasting 15 minutes.
+    try {
+      const probe = await axios.get(`${API}/health/storage`, { timeout: 15000 });
+      if (probe.data && probe.data.healthy === false) {
+        setUploading(false);
+        setUploadStatus('');
+        alert(
+          `We can't start your upload right now — object storage is degraded.\n\n` +
+          `Reason: ${probe.data.reason || 'unknown'} (latency ${probe.data.latency_ms || '?'}ms)\n\n` +
+          `What to do:\n` +
+          `1. Wait 15-30 minutes and try again. Most platform outages clear quickly.\n` +
+          `2. If this persists for more than an hour, email support@emergent.sh ` +
+          `with subject "Object storage 500 errors" and your app domain.\n\n` +
+          `Your file selection has been preserved — just click the file picker again when ready.`
+        );
+        return;
+      }
+    } catch (probeErr) {
+      // Probe network error itself — assume storage is reachable from backend
+      // even if our client can't hit /api/health/storage. Don't block.
+      console.warn('Storage probe failed (continuing optimistically):', probeErr);
+    }
     setUploadStatus('Initializing upload...');
     try {
       const initResponse = await axios.post(`${API}/videos/upload/init`, {

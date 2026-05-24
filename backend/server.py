@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter89"
+BUILD_VERSION = "iter90"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -627,6 +627,10 @@ SHIPPED_FEATURES = [
     "try-recovery-button-broadened-to-all-storage-failures",
     "persistent-fallback-warn-log-audit",
     "503-retry-after-60s-when-fallback-disabled",
+    # iter90 — pre-flight storage probe to fail-fast on outages
+    "storage-health-probe-endpoint",
+    "client-preflight-storage-check",
+    "storage-probe-30s-cache",
 ]
 
 def _get_build_sha() -> str:
@@ -697,6 +701,86 @@ async def deploy_health():
 @app.get("/health")
 async def root_health_check():
     return {"status": "healthy", "service": "soccer-scout-api", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+# ===== iter90 — Object Storage pre-flight probe =====
+#
+# Real production bug 2026-05-23: Emergent's object storage backend went
+# fully unavailable for >1h, returning 500 on every PUT and GET. With
+# iter89's correct refusal to fall back to ephemeral /app, every chunk
+# upload 503'd and the iter82 client burned its full 20-retry budget
+# (~15 min) before alerting the user — three separate times. This probe
+# lets the frontend fail FAST with a friendly modal BEFORE the 15-minute
+# loop. The probe is a single ~1KB PUT roundtrip cached for 30s.
+
+import time as _time_for_probe  # noqa: E402
+
+_STORAGE_PROBE_CACHE = {"at": 0.0, "result": None}
+_STORAGE_PROBE_TTL_SECS = 30
+
+
+async def _probe_object_storage(now_ts: float) -> dict:
+    """Single-shot health probe: init → PUT ~1KB → return result.
+    Doesn't do a GET roundtrip — if PUT succeeds we trust the read path
+    (the real outage broke both, but PUT alone is sufficient signal and
+    half the latency)."""
+    import asyncio as _asyncio
+    import requests as _requests
+    from db import STORAGE_URL, EMERGENT_KEY, APP_NAME
+
+    def _sync():
+        sess = _requests.Session()
+        try:
+            r = sess.post(f"{STORAGE_URL}/init",
+                          json={"emergent_key": EMERGENT_KEY}, timeout=(3, 5))
+            if r.status_code != 200:
+                return {"healthy": False, "reason": f"init returned {r.status_code}",
+                        "latency_ms": int((_time_for_probe.time() - now_ts) * 1000)}
+            key = r.json().get("storage_key")
+            if not key:
+                return {"healthy": False, "reason": "init returned no storage_key",
+                        "latency_ms": int((_time_for_probe.time() - now_ts) * 1000)}
+            r = sess.put(
+                f"{STORAGE_URL}/objects/{APP_NAME}/healthcheck/iter90_probe_{int(now_ts)}.bin",
+                headers={"X-Storage-Key": key, "Content-Type": "application/octet-stream"},
+                data=b"probe" * 200,  # ~1KB
+                timeout=(3, 8),
+            )
+            if r.status_code == 200:
+                return {"healthy": True, "latency_ms": int((_time_for_probe.time() - now_ts) * 1000)}
+            return {"healthy": False, "reason": f"PUT returned {r.status_code}",
+                    "latency_ms": int((_time_for_probe.time() - now_ts) * 1000)}
+        except Exception as e:
+            return {"healthy": False, "reason": f"{type(e).__name__}: {str(e)[:80]}",
+                    "latency_ms": int((_time_for_probe.time() - now_ts) * 1000)}
+
+    return await _asyncio.get_event_loop().run_in_executor(None, _sync)
+
+
+@api_router.get("/health/storage")
+async def storage_health_probe():
+    """Real probe of Emergent Object Storage. Caches the result for 30s so
+    a burst of upload attempts can't DDoS the upstream. Public endpoint —
+    no auth — because the frontend needs to check this BEFORE init (which
+    is also auth'd, but checking here means we can tell the user instantly
+    that an upload would fail).
+
+    Returns:
+      {healthy: true, latency_ms: 50, cached: false}
+      OR
+      {healthy: false, reason: "PUT returned 500", latency_ms: 87, cached: false}
+    """
+    import time as _time
+    now = _time.time()
+    cached = _STORAGE_PROBE_CACHE["result"]
+    if cached and (now - _STORAGE_PROBE_CACHE["at"]) < _STORAGE_PROBE_TTL_SECS:
+        return {**cached, "cached": True}
+
+    result = await _probe_object_storage(now)
+    _STORAGE_PROBE_CACHE["at"] = now
+    _STORAGE_PROBE_CACHE["result"] = result
+    return {**result, "cached": False}
+
 
 # ===== Heartbeat =====
 
