@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter93"
+BUILD_VERSION = "iter94"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -639,6 +639,12 @@ SHIPPED_FEATURES = [
     "resume-all-button-on-banner",
     # iter93 — storage cleanup report for support escalation
     "storage-cleanup-report-endpoint",
+    # iter94 — storage cleanup UI + proactive leak tracking
+    "storage-cleanup-admin-ui",
+    "mark-orphan-chunks-endpoint",
+    "weekly-storage-growth-audit",
+    "storage-growth-trend-history",
+    "copy-support-email-draft",
 ]
 
 def _get_build_sha() -> str:
@@ -906,6 +912,219 @@ async def storage_cleanup_report(current_user: dict = Depends(get_current_user))
         ),
     }
 
+
+# ============================================================================
+# iter94 — Proactive leak prevention
+# Storage cleanup UI + orphan-path persistence so when Emergent ships DELETE
+# we can sweep instantly. Plus a weekly storage-growth audit so the user can
+# see trends without re-running the full report.
+# ============================================================================
+
+@api_router.post("/admin/storage-cleanup/mark-orphans")
+async def storage_cleanup_mark_orphans(current_user: dict = Depends(get_current_user)):
+    """Materialize the current orphan-chunk inventory into the `orphan_chunks`
+    collection so we have an immutable ledger of paths that are SAFE TO DELETE
+    once Emergent ships a DELETE API.
+
+    Idempotent: re-runs `upsert` keyed on (user_id, path). The `marked_at`
+    field is set on first insert and never changes; `last_seen_at` updates
+    every run so we can tell which orphans are still around.
+
+    Returns counts: `{newly_marked, refreshed, total_marked_now}`.
+    """
+    uid = current_user["id"]
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Re-run the same collection logic as `/storage-cleanup/report` but persist
+    # each (path, bucket, size_est) tuple to MongoDB.
+    paths_seen: list[dict] = []
+
+    async def _collect_v(doc: dict, label: str):
+        cp = doc.get("chunk_paths") or {}
+        cb = doc.get("chunk_backends") or {}
+        for idx_str, path in cp.items():
+            if cb.get(idx_str) != "storage":
+                continue
+            size_est = doc.get("chunk_sizes", {}).get(idx_str) or 10 * 1024 * 1024
+            paths_seen.append({"path": path, "bucket": label, "size_estimate": size_est})
+
+    async for s in db.chunked_uploads.find(
+        {"user_id": uid, "dismissed_at": {"$exists": True}},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
+    ):
+        await _collect_v(s, "dismissed")
+
+    async for v in db.videos.find(
+        {"user_id": uid, "processing_status": "failed"},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "is_deleted": 1},
+    ):
+        await _collect_v(v, "deleted" if v.get("is_deleted") else "failed")
+
+    async for v in db.videos.find(
+        {"user_id": uid, "chunk_backends": {"$exists": True}},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
+    ):
+        cp = v.get("chunk_paths") or {}
+        cb = v.get("chunk_backends") or {}
+        for idx_str, backend in cb.items():
+            if backend == "lost":
+                fake_path = cp.get(idx_str)
+                if fake_path:
+                    paths_seen.append({"path": fake_path, "bucket": "lost", "size_estimate": 10 * 1024 * 1024})
+
+    newly_marked = 0
+    refreshed = 0
+    for entry in paths_seen:
+        res = await db.orphan_chunks.update_one(
+            {"user_id": uid, "path": entry["path"]},
+            {
+                "$setOnInsert": {
+                    "id": str(uuid.uuid4()),
+                    "user_id": uid,
+                    "path": entry["path"],
+                    "size_estimate": entry["size_estimate"],
+                    "marked_at": now_iso,
+                    "purged_at": None,
+                },
+                "$set": {"last_seen_at": now_iso, "bucket": entry["bucket"]},
+            },
+            upsert=True,
+        )
+        if res.upserted_id is not None:
+            newly_marked += 1
+        else:
+            refreshed += 1
+
+    total = await db.orphan_chunks.count_documents({"user_id": uid, "purged_at": None})
+    logger.info(
+        f"[storage-cleanup] user={uid} marked {newly_marked} new orphan paths "
+        f"({refreshed} already tracked, {total} total awaiting purge)"
+    )
+    return {
+        "newly_marked": newly_marked,
+        "refreshed": refreshed,
+        "total_marked_now": total,
+        "generated_at": now_iso,
+    }
+
+
+@api_router.get("/admin/storage-cleanup/audit-history")
+async def storage_cleanup_audit_history(
+    days: int = 90,
+    current_user: dict = Depends(get_current_user),
+):
+    """Return the user's weekly storage-growth audits for the last N days.
+
+    Each entry: `{recorded_at, total_orphan_chunks, total_estimated_gb, by_bucket{}}`.
+    Powers a sparkline / trend chart in the admin UI so the user can see
+    whether orphan accumulation is still growing post-fix.
+    """
+    days = max(7, min(365, days))
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    audits = await db.storage_growth_audits.find(
+        {"user_id": current_user["id"], "recorded_at": {"$gte": cutoff}},
+        {"_id": 0},
+    ).sort("recorded_at", 1).to_list(length=500)
+    return {"days": days, "audits": audits}
+
+
+# Weekly storage-growth audit — runs as a startup background task.
+STORAGE_AUDIT_INTERVAL_SECS = 7 * 24 * 3600  # weekly
+STORAGE_AUDIT_STARTUP_STAGGER_SECS = 600  # 10min after boot
+
+
+async def _storage_growth_audit_loop():
+    """Once a week, snapshot every active user's orphan-chunk totals into
+    `storage_growth_audits` so the admin UI can render a trend line.
+
+    Cheap: one aggregate per user; no scan of chunk bytes themselves.
+    Startup stagger so a fresh boot doesn't fire immediately."""
+    await asyncio.sleep(STORAGE_AUDIT_STARTUP_STAGGER_SECS)
+    while True:
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            # Active users = anyone who has touched chunked_uploads or videos
+            # in the last 90 days. Tight bound so we don't audit dormant accts.
+            users_with_data = set()
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+            async for u in db.chunked_uploads.find(
+                {"created_at": {"$gte": cutoff}}, {"_id": 0, "user_id": 1}
+            ):
+                if u.get("user_id"):
+                    users_with_data.add(u["user_id"])
+            async for v in db.videos.find(
+                {"created_at": {"$gte": cutoff}}, {"_id": 0, "user_id": 1}
+            ):
+                if v.get("user_id"):
+                    users_with_data.add(v["user_id"])
+
+            audited = 0
+            for uid in users_with_data:
+                snapshot = await _compute_orphan_snapshot(uid)
+                await db.storage_growth_audits.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "user_id": uid,
+                    "recorded_at": now_iso,
+                    "total_orphan_chunks": snapshot["total_chunks"],
+                    "total_estimated_bytes": snapshot["total_bytes"],
+                    "total_estimated_gb": round(snapshot["total_bytes"] / (1024 ** 3), 2),
+                    "by_bucket": snapshot["by_bucket"],
+                })
+                audited += 1
+            if audited:
+                logger.info(f"[storage-audit] weekly snapshot recorded for {audited} active users")
+        except Exception as e:
+            logger.exception(f"[storage-audit] tick failed (will retry next week): {e}")
+        await asyncio.sleep(STORAGE_AUDIT_INTERVAL_SECS)
+
+
+async def _compute_orphan_snapshot(uid: str) -> dict:
+    """Lightweight version of the report endpoint — returns just counts +
+    bytes per bucket. Used by the weekly audit loop."""
+    by_bucket = {"dismissed_sessions": 0, "failed_videos": 0, "deleted_videos": 0, "lost_chunks": 0}
+    total_chunks = 0
+    total_bytes = 0
+
+    def _tally(doc, bucket_key: str):
+        nonlocal total_chunks, total_bytes
+        cp = doc.get("chunk_paths") or {}
+        cb = doc.get("chunk_backends") or {}
+        sizes = doc.get("chunk_sizes", {})
+        for idx_str in cp:
+            if cb.get(idx_str) != "storage":
+                continue
+            sz = sizes.get(idx_str) or 10 * 1024 * 1024
+            by_bucket[bucket_key] += 1
+            total_chunks += 1
+            total_bytes += sz
+
+    async for s in db.chunked_uploads.find(
+        {"user_id": uid, "dismissed_at": {"$exists": True}},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
+    ):
+        _tally(s, "dismissed_sessions")
+    async for v in db.videos.find(
+        {"user_id": uid, "processing_status": "failed"},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "is_deleted": 1},
+    ):
+        _tally(v, "deleted_videos" if v.get("is_deleted") else "failed_videos")
+    async for v in db.videos.find(
+        {"user_id": uid, "chunk_backends": {"$exists": True}},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
+    ):
+        cp = v.get("chunk_paths") or {}
+        cb = v.get("chunk_backends") or {}
+        for idx_str, backend in cb.items():
+            if backend == "lost" and cp.get(idx_str):
+                by_bucket["lost_chunks"] += 1
+                total_chunks += 1
+                total_bytes += 10 * 1024 * 1024
+
+    return {
+        "total_chunks": total_chunks,
+        "total_bytes": total_bytes,
+        "by_bucket": by_bucket,
+    }
 
 
 # ===== Heartbeat =====
@@ -3289,6 +3508,9 @@ async def startup():
     # AND stale user_notifications older than 30 days. Soft-delete forever is
     # fine until tens of thousands accumulate; this caps the table size.
     asyncio.create_task(_dismissed_uploads_ttl_sweeper())
+    # iter94 — weekly storage-growth audit so the admin UI can show
+    # whether orphan accumulation is still climbing post-fix.
+    asyncio.create_task(_storage_growth_audit_loop())
     # APScheduler — weekly Coach Pulse blast every Monday 08:00 UTC +
     # email-queue retry every 30 min for quota-deferred sends.
     start_coach_pulse_scheduler()

@@ -1,6 +1,59 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Storage Cleanup UI + Proactive Leak Tracking (iter94 — May 2026)
+
+Follow-up to iter93. The cleanup-report endpoint was working but invisible to the user (curl-only). iter94 surfaces the inventory in a dedicated admin page **and** ships proactive leak prevention so the user has both a recovery path *and* a way to watch for regression.
+
+### Backend
+- **`POST /api/admin/storage-cleanup/mark-orphans`** in `server.py`:
+  - Materializes the live orphan inventory into a new `orphan_chunks` collection (`{id, user_id, path, bucket, size_estimate, marked_at, last_seen_at, purged_at}`).
+  - Idempotent via `upsert` keyed on `(user_id, path)` — `marked_at` is set once via `$setOnInsert`, `last_seen_at` + `bucket` refresh on every run via `$set` (no $setOnInsert/$set field conflicts).
+  - Returns `{newly_marked, refreshed, total_marked_now, generated_at}`.
+  - Purpose: when Emergent ships a DELETE API, we have a ledger of paths to sweep instantly. Until then it's an audit trail of orphans currently awaiting purge.
+- **`GET /api/admin/storage-cleanup/audit-history?days=90`** in `server.py`:
+  - Returns weekly storage-growth snapshots so the user can see whether orphan accumulation is still climbing.
+  - Reads from `storage_growth_audits`, clamped to last 7-365 days, sorted oldest→newest.
+- **`_storage_growth_audit_loop` background task** in `server.py`:
+  - Weekly (cadence `STORAGE_AUDIT_INTERVAL_SECS = 7*24*3600`, startup stagger 10min).
+  - Iterates active users (any `chunked_uploads` or `videos` activity in last 90 days) and writes `{user_id, recorded_at, total_orphan_chunks, total_estimated_bytes, total_estimated_gb, by_bucket{}}` per user.
+  - Uses lightweight `_compute_orphan_snapshot(uid)` helper — counts only, no `chunk_paths` listing → cheap.
+  - Wired into `@app.on_event("startup")` next to the iter86 TTL sweeper.
+
+### Frontend
+- New page **`pages/AdminStorageCleanup.js`** mounted at `/admin/storage-cleanup`:
+  - "Why is my storage full?" explainer at the top (yellow callout) — answers the user's exact pending question.
+  - 3 stat cards: Orphan chunks count · Wasted storage (GB) · Buckets affected.
+  - **"Copy email to support"** button: drafts the exact mailto: with `user_id` + per-bucket totals filled in, opens default mail client AND writes the full body to clipboard (so paste-into-web-mail works too).
+  - **"Mark as ready for purge"** button: hits `/mark-orphans`, shows `✓ Marked N new paths` result.
+  - Per-bucket breakdown rows with color coding (yellow for dismissed, orange for failed, red for deleted, gray for lost).
+  - Recharts line graph of `audit-history` for the 90-day trend.
+- Wired into `App.js` (import + route under `<ProtectedRoute>`).
+- Discoverable from the existing Admin Processing Events page via a new "Storage cleanup" pill button in the header.
+
+### Tests (10 new, all 35 pass with iter90-93)
+- `test_iter94_storage_cleanup_ui_and_audit.py`:
+  - `/mark-orphans` requires auth + empty-state for fresh user
+  - Persists to `orphan_chunks` with correct shape + idempotent (re-run returns `refreshed`, not `newly_marked`)
+  - Cross-user isolation (User B can't mark User A's chunks)
+  - `/audit-history` requires auth + empty-state + filters by days + cross-user isolation
+  - Frontend grep guards: page file exists, calls all 3 endpoints, has required testids, mailto targets `support@emergent.sh`
+  - App.js mounts route
+
+### Verified live on preview
+- `GET /api/health/deploy` → `build=iter94` with all 5 new feature flags.
+- Playwright screenshot on `/admin/storage-cleanup` shows: 1,041 orphan chunks (~10.16 GB) in the test coach's Failed videos bucket, with both action buttons enabled. Orange iter91 storage outage banner still rendering above the new page.
+
+### Files touched
+- `backend/server.py` (mark-orphans + audit-history endpoints, audit loop, startup wiring, BUILD_VERSION → iter94, 5 new feature flags)
+- `frontend/src/pages/AdminStorageCleanup.js` (NEW)
+- `frontend/src/App.js` (import + route)
+- `frontend/src/pages/AdminProcessingEvents.js` (header pill linking to /admin/storage-cleanup)
+- `backend/tests/test_iter94_storage_cleanup_ui_and_audit.py` (NEW — 10 cases)
+
+---
+
+
 ## Storage Cleanup Report — Answering "How is storage full?" (iter93 — May 2026)
 
 User received this from Emergent Support on 2026-05-24: *"Root cause: your account has reached its object-storage capacity limit. Generic 500 is masking a 'storage limit reached'."* User pushed back: *"How is storage full if no upload has ever completed?"*

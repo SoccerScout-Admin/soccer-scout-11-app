@@ -196,6 +196,13 @@ const AdminProcessingEvents = () => {
             Processing Pipeline Health
           </h1>
           <div className="ml-auto flex items-center gap-2">
+            <button
+              data-testid="link-to-storage-cleanup"
+              onClick={() => navigate('/admin/storage-cleanup')}
+              className="text-[11px] tracking-wider uppercase text-[#FBBF24] hover:text-[#F59E0B] border border-[#FBBF24]/40 hover:border-[#FBBF24] px-3 py-1.5 transition-colors"
+            >
+              Storage cleanup
+            </button>
             <select data-testid="day-range-select" value={days} onChange={(e) => setDays(Number(e.target.value))}
               className="bg-[#141414] border border-white/10 text-white text-xs px-3 py-1.5">
               <option value={1}>Last 24h</option>

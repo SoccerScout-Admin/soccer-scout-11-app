@@ -27,6 +27,7 @@ import CoachNetwork from './pages/CoachNetwork';
 import MentionsInbox from './pages/MentionsInbox';
 import AdminUsers from './pages/AdminUsers';
 import AdminProcessingEvents from './pages/AdminProcessingEvents';
+import AdminStorageCleanup from './pages/AdminStorageCleanup';
 import AdminClaim from './pages/AdminClaim';
 import AdminScouts from './pages/AdminScouts';
 import ScoutBrowse from './pages/ScoutBrowse';
@@ -289,6 +290,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <AdminProcessingEvents />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/storage-cleanup"
+            element={
+              <ProtectedRoute>
+                <AdminStorageCleanup />
               </ProtectedRoute>
             }
           />
