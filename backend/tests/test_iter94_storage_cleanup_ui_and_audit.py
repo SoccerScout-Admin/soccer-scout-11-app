@@ -113,7 +113,7 @@ def test_mark_orphans_persists_and_is_idempotent():
                 {"user_id": uid, "path": "soccer-analysis/iter94/0.bin"}, {"_id": 0}
             )
             assert doc is not None
-            assert doc["bucket"] == "dismissed"
+            assert doc["bucket"] == "dismissed_sessions"  # iter95 — bucket keys now used as-is
             assert doc["size_estimate"] == 10 * 1024 * 1024
             assert doc["marked_at"] is not None
             assert doc["last_seen_at"] is not None

@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter94"
+BUILD_VERSION = "iter95"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -645,6 +645,11 @@ SHIPPED_FEATURES = [
     "weekly-storage-growth-audit",
     "storage-growth-trend-history",
     "copy-support-email-draft",
+    # iter95 — broaden orphan detection to catch the actual leak sources
+    "orphan-bucket-abandoned-uploads",
+    "orphan-bucket-completed-uploads-without-video",
+    "orphan-bucket-stuck-videos",
+    "shared-orphan-bucket-collector",
 ]
 
 def _get_build_sha() -> str:
@@ -826,9 +831,20 @@ async def storage_cleanup_report(current_user: dict = Depends(get_current_user))
 
     Categories returned:
       - dismissed_sessions: chunked_uploads with `dismissed_at` set
+      - abandoned_uploads: chunked_uploads stuck in_progress/initialized for
+        >6h with no dismiss (pod restart killed the client mid-upload but the
+        chunks landed; user never came back). iter95 — most common leak path
+        in production.
+      - completed_uploads_without_video: chunked_uploads with status=completed
+        whose video record was never created or has been hard-deleted from
+        videos collection. Pure orphan: the upload finalized but nothing
+        consumes it. iter95.
       - failed_videos: videos with processing_status=failed (kept around for
         recovery via iter88 endpoint, but storage chunks are reclaimable
         once the user has either re-uploaded or formally given up)
+      - stuck_videos: videos in processing_status pending/processing for >2h
+        (ffmpeg OOM-killed the pod before the failure state could be written).
+        iter95.
       - deleted_videos: videos with is_deleted=true
       - lost_chunks: chunks where chunk_backends[i] == "lost"
 
@@ -838,60 +854,7 @@ async def storage_cleanup_report(current_user: dict = Depends(get_current_user))
     `for path in paths: storage.delete(path)` on the backend.
     """
     uid = current_user["id"]
-    buckets = {
-        "dismissed_sessions": [],
-        "failed_videos": [],
-        "deleted_videos": [],
-        "lost_chunks": [],
-    }
-    total_chunks = 0
-    total_bytes = 0
-
-    def _collect(doc: dict, bucket: list, label: str):
-        """Pull every storage-backed chunk path from a doc into the bucket."""
-        nonlocal total_chunks, total_bytes
-        cp = doc.get("chunk_paths") or {}
-        cb = doc.get("chunk_backends") or {}
-        for idx_str, path in cp.items():
-            if cb.get(idx_str) != "storage":
-                continue
-            size_est = doc.get("chunk_sizes", {}).get(idx_str) or 10 * 1024 * 1024
-            bucket.append({"path": path, "size_estimate": size_est, "bucket": label})
-            total_chunks += 1
-            total_bytes += size_est
-
-    # 1. Dismissed sessions (user explicitly waved off)
-    async for s in db.chunked_uploads.find(
-        {"user_id": uid, "dismissed_at": {"$exists": True}},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "upload_id": 1},
-    ):
-        _collect(s, buckets["dismissed_sessions"], "dismissed")
-
-    # 2. Failed videos (processing_status=failed AND NOT awaiting recovery)
-    async for v in db.videos.find(
-        {"user_id": uid, "processing_status": "failed"},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "id": 1, "is_deleted": 1},
-    ):
-        target = buckets["deleted_videos"] if v.get("is_deleted") else buckets["failed_videos"]
-        _collect(v, target, "deleted" if v.get("is_deleted") else "failed")
-
-    # 3. "lost" chunk tags from iter88 — these point at nothing (file was
-    # already gone) but the storage path might still exist from before the
-    # loss event.
-    async for v in db.videos.find(
-        {"user_id": uid, "chunk_backends": {"$exists": True}},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "id": 1},
-    ):
-        cp = v.get("chunk_paths") or {}
-        cb = v.get("chunk_backends") or {}
-        for idx_str, backend in cb.items():
-            if backend == "lost":
-                # The path stored when it was on storage might still exist
-                fake_path = cp.get(idx_str)
-                if fake_path:
-                    buckets["lost_chunks"].append({"path": fake_path, "size_estimate": 10 * 1024 * 1024, "bucket": "lost"})
-                    total_chunks += 1
-                    total_bytes += 10 * 1024 * 1024
+    buckets, total_chunks, total_bytes = await _collect_all_orphan_buckets(uid, capture_paths=True)
 
     return {
         "user_id": uid,
@@ -911,6 +874,142 @@ async def storage_cleanup_report(current_user: dict = Depends(get_current_user))
             "and attach this report. They can purge the listed paths server-side."
         ),
     }
+
+
+# iter95 — abandonment thresholds for the orphan-bucket detector.
+# An upload that hasn't been touched in 6+ hours is realistically never coming
+# back; a video stuck in "processing" for 2+ hours has been OOM-killed mid-job
+# (typical ffmpeg pass on this app finishes well under 30 min).
+_ABANDONED_UPLOAD_THRESHOLD_HOURS = 6
+_STUCK_VIDEO_THRESHOLD_HOURS = 2
+
+# All bucket keys the report/snapshot/mark-orphans endpoints share.
+_ORPHAN_BUCKET_KEYS = [
+    "dismissed_sessions",
+    "abandoned_uploads",
+    "completed_uploads_without_video",
+    "failed_videos",
+    "stuck_videos",
+    "deleted_videos",
+    "lost_chunks",
+]
+
+
+async def _collect_all_orphan_buckets(uid: str, capture_paths: bool):
+    """Single source of truth for the orphan-bucket logic.
+
+    When `capture_paths=True` returns (buckets_dict_of_lists, total_chunks,
+    total_bytes) — used by the report endpoint that needs per-path detail.
+    When `capture_paths=False` returns (buckets_dict_of_int_counts,
+    total_chunks, total_bytes) — used by the weekly audit snapshot.
+    """
+    if capture_paths:
+        buckets = {k: [] for k in _ORPHAN_BUCKET_KEYS}
+    else:
+        buckets = {k: 0 for k in _ORPHAN_BUCKET_KEYS}
+    total_chunks = 0
+    total_bytes = 0
+
+    def _collect(doc: dict, bucket_key: str):
+        nonlocal total_chunks, total_bytes
+        cp = doc.get("chunk_paths") or {}
+        cb = doc.get("chunk_backends") or {}
+        sizes = doc.get("chunk_sizes", {})
+        for idx_str, path in cp.items():
+            if cb.get(idx_str) != "storage":
+                continue
+            size_est = sizes.get(idx_str) or 10 * 1024 * 1024
+            if capture_paths:
+                buckets[bucket_key].append({"path": path, "size_estimate": size_est, "bucket": bucket_key})
+            else:
+                buckets[bucket_key] += 1
+            total_chunks += 1
+            total_bytes += size_est
+
+    now = datetime.now(timezone.utc)
+    abandon_cutoff = (now - timedelta(hours=_ABANDONED_UPLOAD_THRESHOLD_HOURS)).isoformat()
+    stuck_cutoff = (now - timedelta(hours=_STUCK_VIDEO_THRESHOLD_HOURS)).isoformat()
+
+    # 1. Dismissed chunked_uploads (user explicitly waved off)
+    async for s in db.chunked_uploads.find(
+        {"user_id": uid, "dismissed_at": {"$exists": True}},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
+    ):
+        _collect(s, "dismissed_sessions")
+
+    # 2. iter95 — abandoned in-progress chunked_uploads (no dismiss, no completion, stale)
+    async for s in db.chunked_uploads.find(
+        {
+            "user_id": uid,
+            "status": {"$in": ["in_progress", "initialized", "uploading"]},
+            "dismissed_at": {"$exists": False},
+            "created_at": {"$lt": abandon_cutoff},
+        },
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
+    ):
+        _collect(s, "abandoned_uploads")
+
+    # 3. iter95 — completed chunked_uploads with no matching live video record
+    # Gather completed upload sessions then check whether the video they
+    # finalized into still exists (or was hard-deleted).
+    completed_sessions = []
+    async for s in db.chunked_uploads.find(
+        {"user_id": uid, "status": "completed"},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "video_id": 1},
+    ):
+        completed_sessions.append(s)
+    if completed_sessions:
+        vid_ids = [s.get("video_id") for s in completed_sessions if s.get("video_id")]
+        existing_vids = set()
+        if vid_ids:
+            async for v in db.videos.find(
+                {"id": {"$in": vid_ids}}, {"_id": 0, "id": 1}
+            ):
+                existing_vids.add(v["id"])
+        for s in completed_sessions:
+            if s.get("video_id") and s["video_id"] not in existing_vids:
+                _collect(s, "completed_uploads_without_video")
+
+    # 4. Failed videos — split between alive (recoverable) and is_deleted
+    async for v in db.videos.find(
+        {"user_id": uid, "processing_status": "failed"},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "is_deleted": 1},
+    ):
+        _collect(v, "deleted_videos" if v.get("is_deleted") else "failed_videos")
+
+    # 5. iter95 — stuck videos (ffmpeg OOM'd the pod before failure could write)
+    async for v in db.videos.find(
+        {
+            "user_id": uid,
+            "processing_status": {"$in": ["pending", "processing"]},
+            "created_at": {"$lt": stuck_cutoff},
+            "is_deleted": {"$ne": True},
+        },
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
+    ):
+        _collect(v, "stuck_videos")
+
+    # 6. "lost" chunk tags from iter88 — these point at nothing (file was
+    # already gone) but the storage path might still exist from before the
+    # loss event.
+    async for v in db.videos.find(
+        {"user_id": uid, "chunk_backends": {"$exists": True}},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
+    ):
+        cp = v.get("chunk_paths") or {}
+        cb = v.get("chunk_backends") or {}
+        for idx_str, backend in cb.items():
+            if backend == "lost" and cp.get(idx_str):
+                if capture_paths:
+                    buckets["lost_chunks"].append(
+                        {"path": cp[idx_str], "size_estimate": 10 * 1024 * 1024, "bucket": "lost_chunks"}
+                    )
+                else:
+                    buckets["lost_chunks"] += 1
+                total_chunks += 1
+                total_bytes += 10 * 1024 * 1024
+
+    return buckets, total_chunks, total_bytes
 
 
 # ============================================================================
@@ -935,42 +1034,11 @@ async def storage_cleanup_mark_orphans(current_user: dict = Depends(get_current_
     uid = current_user["id"]
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    # Re-run the same collection logic as `/storage-cleanup/report` but persist
-    # each (path, bucket, size_est) tuple to MongoDB.
+    buckets, _, _ = await _collect_all_orphan_buckets(uid, capture_paths=True)
     paths_seen: list[dict] = []
-
-    async def _collect_v(doc: dict, label: str):
-        cp = doc.get("chunk_paths") or {}
-        cb = doc.get("chunk_backends") or {}
-        for idx_str, path in cp.items():
-            if cb.get(idx_str) != "storage":
-                continue
-            size_est = doc.get("chunk_sizes", {}).get(idx_str) or 10 * 1024 * 1024
-            paths_seen.append({"path": path, "bucket": label, "size_estimate": size_est})
-
-    async for s in db.chunked_uploads.find(
-        {"user_id": uid, "dismissed_at": {"$exists": True}},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
-    ):
-        await _collect_v(s, "dismissed")
-
-    async for v in db.videos.find(
-        {"user_id": uid, "processing_status": "failed"},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "is_deleted": 1},
-    ):
-        await _collect_v(v, "deleted" if v.get("is_deleted") else "failed")
-
-    async for v in db.videos.find(
-        {"user_id": uid, "chunk_backends": {"$exists": True}},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
-    ):
-        cp = v.get("chunk_paths") or {}
-        cb = v.get("chunk_backends") or {}
-        for idx_str, backend in cb.items():
-            if backend == "lost":
-                fake_path = cp.get(idx_str)
-                if fake_path:
-                    paths_seen.append({"path": fake_path, "bucket": "lost", "size_estimate": 10 * 1024 * 1024})
+    for bucket_key, entries in buckets.items():
+        for e in entries:
+            paths_seen.append({"path": e["path"], "bucket": bucket_key, "size_estimate": e["size_estimate"]})
 
     newly_marked = 0
     refreshed = 0
@@ -1081,45 +1149,7 @@ async def _storage_growth_audit_loop():
 async def _compute_orphan_snapshot(uid: str) -> dict:
     """Lightweight version of the report endpoint — returns just counts +
     bytes per bucket. Used by the weekly audit loop."""
-    by_bucket = {"dismissed_sessions": 0, "failed_videos": 0, "deleted_videos": 0, "lost_chunks": 0}
-    total_chunks = 0
-    total_bytes = 0
-
-    def _tally(doc, bucket_key: str):
-        nonlocal total_chunks, total_bytes
-        cp = doc.get("chunk_paths") or {}
-        cb = doc.get("chunk_backends") or {}
-        sizes = doc.get("chunk_sizes", {})
-        for idx_str in cp:
-            if cb.get(idx_str) != "storage":
-                continue
-            sz = sizes.get(idx_str) or 10 * 1024 * 1024
-            by_bucket[bucket_key] += 1
-            total_chunks += 1
-            total_bytes += sz
-
-    async for s in db.chunked_uploads.find(
-        {"user_id": uid, "dismissed_at": {"$exists": True}},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
-    ):
-        _tally(s, "dismissed_sessions")
-    async for v in db.videos.find(
-        {"user_id": uid, "processing_status": "failed"},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "is_deleted": 1},
-    ):
-        _tally(v, "deleted_videos" if v.get("is_deleted") else "failed_videos")
-    async for v in db.videos.find(
-        {"user_id": uid, "chunk_backends": {"$exists": True}},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
-    ):
-        cp = v.get("chunk_paths") or {}
-        cb = v.get("chunk_backends") or {}
-        for idx_str, backend in cb.items():
-            if backend == "lost" and cp.get(idx_str):
-                by_bucket["lost_chunks"] += 1
-                total_chunks += 1
-                total_bytes += 10 * 1024 * 1024
-
+    by_bucket, total_chunks, total_bytes = await _collect_all_orphan_buckets(uid, capture_paths=False)
     return {
         "total_chunks": total_chunks,
         "total_bytes": total_bytes,

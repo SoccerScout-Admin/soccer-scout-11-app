@@ -1,6 +1,46 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Broaden Orphan Detection — Catch What iter93 Missed (iter95 — May 2026)
+
+Production screenshot from the user on soccerscout11.com showed the iter94 cleanup page reporting **"✓ No orphan chunks detected. Your storage is clean"** — but the user has been hitting object-storage capacity for weeks across many failed uploads. Investigation revealed the iter93/94 endpoint was checking only 4 buckets and missing the actual common leak sources (our own PRD.md iter93 investigation notes already named them — preview DB had 30 GB across THREE bucket types but only ONE was caught).
+
+### Three new buckets shipped
+The shared `_collect_all_orphan_buckets(uid, capture_paths)` helper in `server.py` now catches:
+- **`abandoned_uploads`**: chunked_uploads with `status` in `{in_progress, initialized, uploading}`, no `dismissed_at`, and `created_at` > 6 hours ago. The most common production leak: the user opens a 3 GB upload, wifi blips, pod restarts, they never come back, all chunks already landed in object storage.
+- **`completed_uploads_without_video`**: chunked_uploads with `status="completed"` whose `video_id` no longer matches a row in the `videos` collection. Pure orphan — the upload finalized but nothing consumes those chunks anymore.
+- **`stuck_videos`**: videos in `processing_status` `{pending, processing}` with `created_at` > 2 hours ago. ffmpeg OOM-killed the pod mid-processing → status never moved to "failed" → iter93 didn't catch them.
+
+### Architecture cleanup
+- Single `_collect_all_orphan_buckets(uid, capture_paths)` helper now drives THREE call sites that previously duplicated the logic: the report endpoint, the mark-orphans endpoint, and the weekly audit snapshot. `capture_paths=True` returns per-path lists for the report; `capture_paths=False` returns just counts for the audit. No more drift between the three.
+- New abandonment thresholds are module-level constants (`_ABANDONED_UPLOAD_THRESHOLD_HOURS=6`, `_STUCK_VIDEO_THRESHOLD_HOURS=2`) so future tuning is one-line.
+
+### Frontend
+- `pages/AdminStorageCleanup.js` `BUCKET_LABELS` + `BUCKET_COLOR` extended for the 3 new keys with distinct palette (purple for abandoned, sky for completed-without-video, pink for stuck).
+
+### Tests (10 new, all 27 storage-cleanup tests pass)
+- `test_iter95_orphan_buckets_expanded.py`:
+  - Report shape includes all 7 buckets
+  - Abandoned uploads caught when >6h stale; SKIPPED when fresh; SKIPPED when dismissed (dedup'd into dismissed_sessions instead)
+  - Completed-uploads-without-video caught when no matching video; SKIPPED when video record still exists
+  - Stuck videos caught when processing >2h; SKIPPED when fresh
+  - mark-orphans persists all 3 new bucket types correctly
+  - Frontend bucket labels present
+- Updated iter94 test: `orphan_chunks.bucket` now uses the bucket key directly (`"dismissed_sessions"` instead of the old short `"dismissed"`) — cleaner and consistent with the 7-bucket model.
+
+### Verified live on preview
+- Same testcoach@demo.com user that showed `1,041 chunks (~10.16 GB)` under iter94 now shows **`2,006 chunks (~19.56 GB)` across 2 buckets** under iter95 — `965 chunks (~10 GB) in Abandoned in-progress uploads` are now visible and reclaimable. Exactly matches what the iter93 PRD investigation predicted.
+- `GET /api/health/deploy` → `build=iter95` with all 4 new feature flags.
+
+### Files touched
+- `backend/server.py` (new shared helper, 3 new bucket detectors, BUILD_VERSION → iter95, 4 new feature flags)
+- `frontend/src/pages/AdminStorageCleanup.js` (`BUCKET_LABELS` + `BUCKET_COLOR` extended)
+- `backend/tests/test_iter95_orphan_buckets_expanded.py` (NEW — 10 cases)
+- `backend/tests/test_iter94_storage_cleanup_ui_and_audit.py` (1-line update for new bucket-key convention)
+
+---
+
+
 ## Storage Cleanup UI + Proactive Leak Tracking (iter94 — May 2026)
 
 Follow-up to iter93. The cleanup-report endpoint was working but invisible to the user (curl-only). iter94 surfaces the inventory in a dedicated admin page **and** ships proactive leak prevention so the user has both a recovery path *and* a way to watch for regression.

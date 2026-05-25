@@ -26,14 +26,20 @@ import { API, getAuthHeader } from '../App';
 
 const BUCKET_LABELS = {
   dismissed_sessions: 'Dismissed paused uploads',
+  abandoned_uploads: 'Abandoned in-progress uploads (>6h stale)',
+  completed_uploads_without_video: 'Completed uploads with no video record',
   failed_videos: 'Failed videos (recoverable)',
+  stuck_videos: 'Stuck videos (processing >2h, OOM-killed)',
   deleted_videos: 'Deleted videos',
   lost_chunks: 'Lost chunks (already gone)',
 };
 
 const BUCKET_COLOR = {
   dismissed_sessions: '#FBBF24',
+  abandoned_uploads: '#A855F7',
+  completed_uploads_without_video: '#0EA5E9',
   failed_videos: '#F97316',
+  stuck_videos: '#EC4899',
   deleted_videos: '#DC2626',
   lost_chunks: '#888888',
 };
