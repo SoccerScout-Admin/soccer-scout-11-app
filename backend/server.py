@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter91"
+BUILD_VERSION = "iter92"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -633,6 +633,10 @@ SHIPPED_FEATURES = [
     "storage-probe-30s-cache",
     # iter91 — global storage outage banner
     "global-storage-outage-banner",
+    # iter92 — bulk resume picker
+    "bulk-resume-modal",
+    "me-pending-uploads-exposes-file-size-bytes",
+    "resume-all-button-on-banner",
 ]
 
 def _get_build_sha() -> str:
@@ -1136,6 +1140,7 @@ async def list_my_pending_uploads(current_user: dict = Depends(get_current_user)
             "match_label": match_label,
             "match_date": m.get("date"),
             "filename": s.get("filename"),
+            "file_size": file_size,
             "file_size_gb": round(file_size / (1024 ** 3), 2),
             "chunks_received": uploaded,
             "total_chunks": total,

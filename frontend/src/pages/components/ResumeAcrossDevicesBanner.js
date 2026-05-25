@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API, getAuthHeader } from '../../App';
-import { CaretRight, Laptop, Clock, X } from '@phosphor-icons/react';
+import { CaretRight, Laptop, Clock, X, Stack } from '@phosphor-icons/react';
+import BulkResumeModal from './BulkResumeModal';
 
 /**
  * iter84 — Resume Across Devices banner.
@@ -29,17 +30,17 @@ const ResumeAcrossDevicesBanner = () => {
   const [expanded, setExpanded] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [dismissing, setDismissing] = useState(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+
+  const refetch = () => {
+    axios.get(`${API}/me/pending-uploads`, { headers: getAuthHeader() })
+      .then((res) => { setSessions(res.data?.sessions || []); setLoaded(true); })
+      .catch(() => setLoaded(true));
+  };
 
   useEffect(() => {
-    let cancelled = false;
-    axios.get(`${API}/me/pending-uploads`, { headers: getAuthHeader() })
-      .then((res) => {
-        if (cancelled) return;
-        setSessions(res.data?.sessions || []);
-        setLoaded(true);
-      })
-      .catch(() => { if (!cancelled) setLoaded(true); /* silent — banner just hides */ });
-    return () => { cancelled = true; };
+    refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleDismiss = async (e, uploadId) => {
@@ -72,6 +73,7 @@ const ResumeAcrossDevicesBanner = () => {
     : `Latest: ${first.filename} (${first.progress_pct}%) and ${total - 1} more`;
 
   return (
+    <>
     <div data-testid="resume-across-devices-banner"
       className="mb-6 bg-gradient-to-r from-[#0A1A2E] via-[#0A0F1A] to-[#0A0A0A] border border-[#007AFF]/40">
       <div className="flex items-stretch">
@@ -93,6 +95,18 @@ const ResumeAcrossDevicesBanner = () => {
               total > 1 && expanded ? 'rotate-90' : ''
             }`} />
         </button>
+        {/* iter92: Resume All button for the multi-session case so the user
+            can finish all pending uploads in one go via a single multi-file
+            picker, instead of navigating to N different matches. */}
+        {total > 1 && (
+          <button data-testid="resume-all-btn"
+            onClick={(e) => { e.stopPropagation(); setBulkOpen(true); }}
+            title="Resume all paused uploads at once via a single multi-file picker"
+            className="px-4 border-l border-[#007AFF]/15 flex items-center gap-2 text-[#007AFF] text-xs font-bold tracking-wide uppercase hover:bg-[#007AFF]/10 transition-colors flex-shrink-0">
+            <Stack size={16} weight="bold" />
+            <span className="hidden sm:inline">Resume all</span>
+          </button>
+        )}
         {/* Inline dismiss for the single-session case — otherwise the user
             has to expand a 1-row "list" just to find the X. */}
         {total === 1 && (
@@ -139,6 +153,13 @@ const ResumeAcrossDevicesBanner = () => {
         </div>
       )}
     </div>
+    <BulkResumeModal
+      open={bulkOpen}
+      onClose={() => setBulkOpen(false)}
+      sessions={sessions}
+      onAllComplete={() => { refetch(); }}
+    />
+    </>
   );
 };
 

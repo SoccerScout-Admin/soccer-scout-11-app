@@ -1,6 +1,48 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Bulk Resume Picker — Finish N Paused Uploads at Once (iter92 — May 2026)
+
+After the 2026-05-23 → 24 Object Storage outage left a user with 13 paused uploads, the iter84 "Continue where you left off" banner let them resume one match at a time. iter92 collapses that 13-trip workflow into one multi-file picker.
+
+### Backend
+- `GET /api/me/pending-uploads` now also returns `file_size` (raw bytes) alongside `file_size_gb` — the frontend needs exact byte matching to avoid cross-routing files. (A coach with two different `game.mp4` files from different matches must not have them route to the wrong session.)
+
+### Frontend
+- New `pages/components/BulkResumeModal.js`:
+  - Single `<input type="file" multiple>` lets the user pick all files at once.
+  - For each picked File, matches to a pending session by `filename === f.name && file_size === f.size`. Each session can only match ONE file (no duplicates).
+  - Matched files queue with status `queued`, then transition through `initializing → uploading → done` (or `retrying`, `waiting-storage`, `failed`).
+  - Unmatched files surface in a yellow warning block so the user knows which ones to fix.
+  - Uploads run sequentially (one file at a time) so we don't slam the storage layer with parallel chunk floods.
+  - Each file's chunks use the SAME iter82 retry budget (20 retries, 60s max backoff, distinct messaging for 503 vs other 5xx) — no new pipeline that could regress iter80/89 safety.
+  - Per-file progress bar + status icon (Spinner / CheckCircle / WarningCircle).
+- `pages/components/ResumeAcrossDevicesBanner.js`:
+  - New "Resume All" button (`data-testid="resume-all-btn"`) on the multi-session banner that opens the modal.
+  - Banner refetches the pending-uploads list when the modal closes so completed sessions disappear immediately.
+
+### Tests (6 new, all 18 pass with prior iter90/91)
+- `test_iter92_bulk_resume.py`:
+  - `/api/me/pending-uploads` includes `file_size` in bytes (exact, not the GB-rounded value)
+  - Modal component file exists with all required testids
+  - Modal matches by BOTH filename AND `file_size` (the exact-byte guard)
+  - Modal uses the existing `/videos/upload/init` + `/videos/upload/chunk` pipeline
+  - Modal handles 503 with a `waiting-storage` status + iter82-style 60s-max backoff
+  - Banner renders the "Resume All" button only when `total > 1`
+
+### Verified live on preview
+- Build = `iter92`, feature count = 111.
+- Playwright captured the modal opening from the resume banner with: "BULK RESUME — Finish all paused uploads at once", file picker dropzone, "Pick 13 files from your device — we'll match each one to its waiting session by filename + exact byte size", Cancel + close buttons. iter91 yellow outage banner remained visible above — both work together.
+
+### Files touched
+- `backend/server.py` (added `file_size` bytes to `/me/pending-uploads`, BUILD_VERSION → iter92, 3 new feature flags)
+- `frontend/src/pages/components/BulkResumeModal.js` (NEW)
+- `frontend/src/pages/components/ResumeAcrossDevicesBanner.js` (Resume All button, refactored fetch, modal mount)
+- `backend/tests/test_iter92_bulk_resume.py` (NEW — 6 cases)
+
+---
+
+
 ## Global Storage Outage Banner (iter91 — May 2026)
 
 After the 2026-05-23 → 2026-05-24 21+ hour Emergent Object Storage outage, even the iter90 pre-flight modal still required the user to ATTEMPT an upload before discovering the problem. iter91 mounts a proactive banner on every authenticated page so users see the outage the moment they log in.
