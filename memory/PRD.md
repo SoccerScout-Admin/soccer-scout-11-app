@@ -1,6 +1,45 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Storage Cleanup Report — Answering "How is storage full?" (iter93 — May 2026)
+
+User received this from Emergent Support on 2026-05-24: *"Root cause: your account has reached its object-storage capacity limit. Generic 500 is masking a 'storage limit reached'."* User pushed back: *"How is storage full if no upload has ever completed?"*
+
+### Investigation findings (cited by user response)
+1. **Emergent Object Storage API does NOT expose DELETE**. `OPTIONS /objects/{path}` returns `Allow: PUT, GET, HEAD`. Tried multiple delete variants — all return HTTP 405. Confirmed: there is no public way for an app to reclaim storage.
+2. **Every failed/dismissed upload's chunks accumulate forever**. Preview DB sample alone showed:
+   - 5 `chunked_uploads` with `status=completed`: 1057 chunks (~10 GB)
+   - 7 `chunked_uploads` with `status=in_progress`: 965 chunks (~10 GB)
+   - 1041 chunks tied to videos in `processing_status=failed` (~10 GB)
+   - Total per-user storage: ~30 GB just from in-band bookkeeping
+3. **Production with 50+ attempts over many days** could easily accumulate 100+ GB.
+
+### Shipped: cleanup-report endpoint
+New **`GET /api/admin/storage-cleanup/report`** in `server.py`:
+- Cookie-authed (user can only see their own data).
+- Walks `chunked_uploads` for sessions with `dismissed_at`.
+- Walks `videos` for `processing_status=failed`, splits by `is_deleted` (deleted_videos vs failed_videos buckets).
+- Walks `videos` for any chunk with `chunk_backends[i] == "lost"`.
+- Returns JSON: `{summary: {total_orphan_chunks, total_estimated_bytes, total_estimated_gb, by_bucket: {...}}, buckets: {dismissed_sessions: [...], failed_videos: [...], deleted_videos: [...], lost_chunks: [...]}, instructions: "..."}`.
+- Instructions string explicitly explains the no-DELETE-API limitation and tells the user to email `support@emergent.sh` with the report attached.
+
+### Tests (7 new, all pass)
+- `test_iter93_storage_cleanup_report.py`:
+  - Auth required
+  - Empty for fresh user (with all 4 buckets present + instructions text)
+  - Dismissed sessions collected with all 3 chunk paths
+  - Failed videos collected
+  - Deleted videos go into a SEPARATE bucket from failed (different purge priority)
+  - Cross-user isolation
+  - Instructions text mentions DELETE limitation + support email
+
+### Files touched
+- `backend/server.py` (new `/api/admin/storage-cleanup/report` endpoint, BUILD_VERSION → iter93, 1 new feature flag)
+- `backend/tests/test_iter93_storage_cleanup_report.py` (NEW — 7 cases)
+
+---
+
+
 ## Bulk Resume Picker — Finish N Paused Uploads at Once (iter92 — May 2026)
 
 After the 2026-05-23 → 24 Object Storage outage left a user with 13 paused uploads, the iter84 "Continue where you left off" banner let them resume one match at a time. iter92 collapses that 13-trip workflow into one multi-file picker.

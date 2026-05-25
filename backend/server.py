@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter92"
+BUILD_VERSION = "iter93"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -637,6 +637,8 @@ SHIPPED_FEATURES = [
     "bulk-resume-modal",
     "me-pending-uploads-exposes-file-size-bytes",
     "resume-all-button-on-banner",
+    # iter93 — storage cleanup report for support escalation
+    "storage-cleanup-report-endpoint",
 ]
 
 def _get_build_sha() -> str:
@@ -786,6 +788,124 @@ async def storage_health_probe():
     _STORAGE_PROBE_CACHE["at"] = now
     _STORAGE_PROBE_CACHE["result"] = result
     return {**result, "cached": False}
+
+
+# ===== iter93 — Object Storage cleanup report =====
+#
+# Real production incident 2026-05-24: Emergent Support told the user
+# "your account hit its object-storage capacity limit" — but the user has
+# NEVER successfully completed an upload + analysis cycle. So how is it
+# full?
+#
+# Investigation found:
+#   • Emergent Object Storage exposes `Allow: PUT, GET, HEAD` — there is
+#     NO DELETE endpoint exposed to the app. Users cannot reclaim storage.
+#   • Every failed upload, paused session, dismissed video, and re-tried
+#     migration leaves chunks behind in object storage forever.
+#   • Across iter80-iter88 the user accumulated ~10-30 GB of orphan
+#     chunks per major upload attempt.
+#
+# This endpoint generates a report — a JSON inventory of every chunk in
+# object storage that is SAFE TO DELETE per the app's own state. The user
+# can email this report to support@emergent.sh asking for a one-time
+# server-side purge (until Emergent ships a DELETE API).
+
+
+@api_router.get("/admin/storage-cleanup/report")
+async def storage_cleanup_report(current_user: dict = Depends(get_current_user)):
+    """Inventory of every storage-backed chunk that is SAFE TO DELETE per
+    the app's own bookkeeping. Categorized by reason so the user (or
+    Emergent staff doing a manual purge) can choose which buckets to
+    actually wipe.
+
+    Categories returned:
+      - dismissed_sessions: chunked_uploads with `dismissed_at` set
+      - failed_videos: videos with processing_status=failed (kept around for
+        recovery via iter88 endpoint, but storage chunks are reclaimable
+        once the user has either re-uploaded or formally given up)
+      - deleted_videos: videos with is_deleted=true
+      - lost_chunks: chunks where chunk_backends[i] == "lost"
+
+    Admin-only (any authenticated user can run this for their OWN data —
+    matches the iter85 dismiss pattern). Returns chunk PATHS, not file
+    bytes — Emergent's storage staff can run the equivalent of
+    `for path in paths: storage.delete(path)` on the backend.
+    """
+    uid = current_user["id"]
+    buckets = {
+        "dismissed_sessions": [],
+        "failed_videos": [],
+        "deleted_videos": [],
+        "lost_chunks": [],
+    }
+    total_chunks = 0
+    total_bytes = 0
+
+    def _collect(doc: dict, bucket: list, label: str):
+        """Pull every storage-backed chunk path from a doc into the bucket."""
+        nonlocal total_chunks, total_bytes
+        cp = doc.get("chunk_paths") or {}
+        cb = doc.get("chunk_backends") or {}
+        for idx_str, path in cp.items():
+            if cb.get(idx_str) != "storage":
+                continue
+            size_est = doc.get("chunk_sizes", {}).get(idx_str) or 10 * 1024 * 1024
+            bucket.append({"path": path, "size_estimate": size_est, "bucket": label})
+            total_chunks += 1
+            total_bytes += size_est
+
+    # 1. Dismissed sessions (user explicitly waved off)
+    async for s in db.chunked_uploads.find(
+        {"user_id": uid, "dismissed_at": {"$exists": True}},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "upload_id": 1},
+    ):
+        _collect(s, buckets["dismissed_sessions"], "dismissed")
+
+    # 2. Failed videos (processing_status=failed AND NOT awaiting recovery)
+    async for v in db.videos.find(
+        {"user_id": uid, "processing_status": "failed"},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "id": 1, "is_deleted": 1},
+    ):
+        target = buckets["deleted_videos"] if v.get("is_deleted") else buckets["failed_videos"]
+        _collect(v, target, "deleted" if v.get("is_deleted") else "failed")
+
+    # 3. "lost" chunk tags from iter88 — these point at nothing (file was
+    # already gone) but the storage path might still exist from before the
+    # loss event.
+    async for v in db.videos.find(
+        {"user_id": uid, "chunk_backends": {"$exists": True}},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "id": 1},
+    ):
+        cp = v.get("chunk_paths") or {}
+        cb = v.get("chunk_backends") or {}
+        for idx_str, backend in cb.items():
+            if backend == "lost":
+                # The path stored when it was on storage might still exist
+                fake_path = cp.get(idx_str)
+                if fake_path:
+                    buckets["lost_chunks"].append({"path": fake_path, "size_estimate": 10 * 1024 * 1024, "bucket": "lost"})
+                    total_chunks += 1
+                    total_bytes += 10 * 1024 * 1024
+
+    return {
+        "user_id": uid,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "summary": {
+            "total_orphan_chunks": total_chunks,
+            "total_estimated_bytes": total_bytes,
+            "total_estimated_gb": round(total_bytes / (1024 ** 3), 2),
+            "by_bucket": {k: len(v) for k, v in buckets.items()},
+        },
+        "buckets": buckets,
+        "instructions": (
+            "Emergent Object Storage's public API does NOT expose a DELETE method "
+            "(Allow: PUT, GET, HEAD as of 2026-05-24). To reclaim this storage, "
+            "email support@emergent.sh with subject "
+            "'Manual purge requested — orphan chunks from failed/dismissed uploads' "
+            "and attach this report. They can purge the listed paths server-side."
+        ),
+    }
+
 
 
 # ===== Heartbeat =====
