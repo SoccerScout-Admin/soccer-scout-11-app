@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter95"
+BUILD_VERSION = "iter96"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -650,6 +650,11 @@ SHIPPED_FEATURES = [
     "orphan-bucket-completed-uploads-without-video",
     "orphan-bucket-stuck-videos",
     "shared-orphan-bucket-collector",
+    # iter96 — weekly storage-growth digest email
+    "weekly-storage-growth-digest-email",
+    "storage-digest-opt-out-preference",
+    "send-storage-digest-now-endpoint",
+    "growth-threshold-1gb-trigger",
 ]
 
 def _get_build_sha() -> str:
@@ -1139,6 +1144,11 @@ async def _storage_growth_audit_loop():
                     "by_bucket": snapshot["by_bucket"],
                 })
                 audited += 1
+                # iter96 — fire a digest email if growth crossed the threshold
+                try:
+                    await _maybe_send_storage_digest(uid, snapshot, now_iso)
+                except Exception as digest_err:
+                    logger.exception(f"[storage-audit] digest send failed for {uid}: {digest_err}")
             if audited:
                 logger.info(f"[storage-audit] weekly snapshot recorded for {audited} active users")
         except Exception as e:
@@ -1155,6 +1165,207 @@ async def _compute_orphan_snapshot(uid: str) -> dict:
         "total_bytes": total_bytes,
         "by_bucket": by_bucket,
     }
+
+
+# iter96 — Weekly storage-growth digest email
+# When orphan storage grows >= 1 GB between snapshots, fire a Resend email
+# pointing the user at /admin/storage-cleanup so they can act before the
+# quota gets eaten silently. Opt-out via users.storage_digest_opt_out=true.
+STORAGE_DIGEST_THRESHOLD_GB = 1.0
+
+
+_BUCKET_HUMAN_LABELS = {
+    "dismissed_sessions": "Dismissed paused uploads",
+    "abandoned_uploads": "Abandoned in-progress uploads",
+    "completed_uploads_without_video": "Completed uploads with no video record",
+    "failed_videos": "Failed videos",
+    "stuck_videos": "Stuck videos (ffmpeg OOM-killed)",
+    "deleted_videos": "Deleted videos",
+    "lost_chunks": "Lost chunks",
+}
+
+
+async def _maybe_send_storage_digest(uid: str, snapshot: dict, now_iso: str) -> Optional[dict]:
+    """Send a digest if storage grew >= threshold since last snapshot.
+
+    Rules:
+      - User must have an email on file (skip silently if not).
+      - User must not have `storage_digest_opt_out=True`.
+      - Current orphan storage must be >= threshold (no point alerting on
+        100 MB of fluff).
+      - Either no prior snapshot (first send), OR delta_gb >= threshold.
+
+    Returns the send-result dict or None if skipped.
+    """
+    user = await db.users.find_one(
+        {"id": uid}, {"_id": 0, "email": 1, "name": 1, "storage_digest_opt_out": 1}
+    )
+    if not user or not user.get("email"):
+        return None
+    if user.get("storage_digest_opt_out") is True:
+        return None
+
+    current_gb = round(snapshot["total_bytes"] / (1024 ** 3), 2)
+    if current_gb < STORAGE_DIGEST_THRESHOLD_GB:
+        return None
+
+    # Most recent prior snapshot (the one we just inserted is at `now_iso`)
+    prior = await db.storage_growth_audits.find_one(
+        {"user_id": uid, "recorded_at": {"$lt": now_iso}},
+        {"_id": 0, "total_estimated_gb": 1, "recorded_at": 1},
+        sort=[("recorded_at", -1)],
+    )
+    prior_gb = (prior or {}).get("total_estimated_gb", 0.0)
+    delta_gb = round(current_gb - prior_gb, 2)
+
+    is_first_send = prior is None
+    if not is_first_send and delta_gb < STORAGE_DIGEST_THRESHOLD_GB:
+        # No meaningful growth → skip
+        return None
+
+    # Build email
+    from services.email_queue import send_or_queue
+    base_url = (os.environ.get("PUBLIC_APP_URL")
+                or os.environ.get("REACT_APP_BACKEND_URL", "")).rstrip("/")
+    cleanup_link = f"{base_url}/admin/storage-cleanup" if base_url else "/admin/storage-cleanup"
+
+    top_buckets = sorted(
+        snapshot["by_bucket"].items(), key=lambda kv: kv[1], reverse=True
+    )[:3]
+    top_buckets = [(k, v) for k, v in top_buckets if v > 0]
+    bucket_rows = "".join(
+        f'<tr><td style="padding:6px 12px;color:#A3A3A3;">{_BUCKET_HUMAN_LABELS.get(k, k)}</td>'
+        f'<td style="padding:6px 12px;text-align:right;color:#FBBF24;font-weight:bold;">{v} chunks</td></tr>'
+        for k, v in top_buckets
+    ) or '<tr><td colspan="2" style="padding:6px 12px;color:#666;">—</td></tr>'
+
+    delta_label = "First measurement" if is_first_send else f"+{delta_gb} GB this week"
+    headline = (
+        f"Your Soccer Scout storage has accumulated <strong>~{current_gb} GB</strong> of "
+        f"reclaimable orphan chunks ({snapshot['total_chunks']:,} chunks total)."
+    )
+
+    coach_name = user.get("name") or "there"
+    html = f"""<html><body style="margin:0;padding:24px;background:#0A0A0A;color:#E5E5E5;font-family:Inter,sans-serif;">
+  <table style="max-width:600px;margin:0 auto;width:100%;border-collapse:collapse;background:#141414;border:1px solid #222;">
+    <tr><td style="padding:24px;">
+      <p style="margin:0 0 12px;font-size:11px;letter-spacing:0.25em;color:#FBBF24;text-transform:uppercase;font-weight:bold;">
+        Storage Quota Alert
+      </p>
+      <h1 style="margin:0 0 16px;font-size:22px;font-weight:bold;color:#FFFFFF;">
+        Hi {coach_name},
+      </h1>
+      <p style="margin:0 0 20px;font-size:14px;line-height:1.6;color:#E5E5E5;">
+        {headline}
+      </p>
+      <table style="width:100%;background:#0A0A0A;border:1px solid #222;margin-bottom:20px;">
+        <tr><td style="padding:12px;border-bottom:1px solid #222;">
+          <p style="margin:0 0 4px;font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:#666;">Growth</p>
+          <p style="margin:0;font-size:24px;font-weight:bold;color:#FBBF24;">{delta_label}</p>
+        </td></tr>
+        <tr><td style="padding:0;">
+          <table style="width:100%;font-size:13px;">
+            <tr><th style="padding:8px 12px;text-align:left;color:#666;font-weight:normal;text-transform:uppercase;font-size:10px;letter-spacing:0.2em;">Top sources</th>
+                <th style="padding:8px 12px;text-align:right;color:#666;font-weight:normal;"></th></tr>
+            {bucket_rows}
+          </table>
+        </td></tr>
+      </table>
+      <p style="margin:0 0 16px;font-size:13px;color:#A3A3A3;line-height:1.6;">
+        These chunks come from uploads that failed, were dismissed, or got pod-killed mid-finalize.
+        Because Emergent's object storage API exposes no DELETE endpoint, the app can't reclaim
+        them — you'll need to email support to free the quota.
+      </p>
+      <p style="margin:0 0 24px;text-align:center;">
+        <a href="{cleanup_link}"
+           style="display:inline-block;background:#FBBF24;color:#000;padding:14px 28px;
+                  font-weight:bold;text-decoration:none;font-size:14px;">
+          OPEN STORAGE CLEANUP →
+        </a>
+      </p>
+      <p style="margin:0;padding-top:20px;border-top:1px solid #222;font-size:11px;color:#666;line-height:1.5;">
+        Don't want these alerts? Toggle "Weekly storage digest" off on
+        <a href="{cleanup_link}" style="color:#7DD3FC;">the Storage Cleanup page</a>.
+        We only send when growth crosses {STORAGE_DIGEST_THRESHOLD_GB} GB so you won't get noise.
+      </p>
+    </td></tr>
+  </table>
+</body></html>"""
+
+    subject = f"Storage Quota Alert: {delta_label}"
+    result = await send_or_queue(
+        to_email=user["email"],
+        subject=subject,
+        html=html,
+        kind="storage_growth_digest",
+        metadata={
+            "user_id": uid,
+            "current_gb": current_gb,
+            "delta_gb": delta_gb,
+            "is_first_send": is_first_send,
+            "total_chunks": snapshot["total_chunks"],
+        },
+    )
+
+    # Stamp the snapshot so the admin UI can show "Last digest sent" status
+    await db.storage_growth_audits.update_one(
+        {"user_id": uid, "recorded_at": now_iso},
+        {"$set": {"digest_sent_at": now_iso, "digest_status": result.get("status")}},
+    )
+    return result
+
+
+@api_router.post("/admin/storage-cleanup/send-digest-now")
+async def storage_cleanup_send_digest_now(current_user: dict = Depends(get_current_user)):
+    """Manual one-shot trigger — useful for verifying the email pipeline
+    without waiting a week for the audit loop."""
+    uid = current_user["id"]
+    snapshot = await _compute_orphan_snapshot(uid)
+    # Pretend this is the most recent snapshot so _maybe_send_storage_digest
+    # computes delta against the prior real one.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.storage_growth_audits.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_id": uid,
+        "recorded_at": now_iso,
+        "total_orphan_chunks": snapshot["total_chunks"],
+        "total_estimated_bytes": snapshot["total_bytes"],
+        "total_estimated_gb": round(snapshot["total_bytes"] / (1024 ** 3), 2),
+        "by_bucket": snapshot["by_bucket"],
+        "triggered_manually": True,
+    })
+    result = await _maybe_send_storage_digest(uid, snapshot, now_iso)
+    if result is None:
+        return {
+            "status": "skipped",
+            "reason": (
+                f"No meaningful growth (current: {round(snapshot['total_bytes'] / (1024 ** 3), 2)} GB, "
+                f"threshold: {STORAGE_DIGEST_THRESHOLD_GB} GB) or user opted out / no email on file."
+            ),
+        }
+    return {"status": result.get("status"), "queue_id": result.get("queue_id")}
+
+
+@api_router.post("/me/preferences/storage-digest")
+async def set_storage_digest_preference(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    """Opt out of (or back in to) the weekly storage-growth digest email."""
+    opt_out = bool(body.get("opt_out", False))
+    await db.users.update_one(
+        {"id": current_user["id"]},
+        {"$set": {"storage_digest_opt_out": opt_out}},
+    )
+    return {"opt_out": opt_out}
+
+
+@api_router.get("/me/preferences/storage-digest")
+async def get_storage_digest_preference(current_user: dict = Depends(get_current_user)):
+    user = await db.users.find_one(
+        {"id": current_user["id"]}, {"_id": 0, "storage_digest_opt_out": 1}
+    )
+    return {"opt_out": bool((user or {}).get("storage_digest_opt_out", False))}
 
 
 # ===== Heartbeat =====

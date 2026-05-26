@@ -1,6 +1,50 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Weekly Storage-Growth Digest Email (iter96 — May 2026)
+
+Follow-up to iter95. The cleanup UI was perfectly accurate but reactive — the user had to remember to visit `/admin/storage-cleanup` to know their quota was being eaten. iter96 turns silent quota loss into an inbox signal you can't miss.
+
+### Backend
+- New helper **`_maybe_send_storage_digest(uid, snapshot, now_iso)`** in `server.py` runs after every weekly audit snapshot insert. Sends an HTML email via the iter72 `email_queue` pipeline (gets open-pixel tracking + Resend retry budget for free) when:
+  - Current orphan storage ≥ `STORAGE_DIGEST_THRESHOLD_GB = 1.0` GB, AND
+  - Either this is the FIRST snapshot (`is_first_send=True`), OR delta vs prior snapshot ≥ 1 GB.
+- Email rendered with the dark Soccer Scout theme — orange "STORAGE QUOTA ALERT" header, delta GB headline, top-3 bucket rollup, CTA button → `${PUBLIC_APP_URL}/admin/storage-cleanup`, plus a footer pointing at the opt-out toggle.
+- `kind="storage_growth_digest"` so the existing iter72 admin email-audit log surfaces opens.
+- The audit snapshot row gets `digest_sent_at` + `digest_status` stamped so the trend UI can show "last digest fired" markers.
+- Wired into existing `_storage_growth_audit_loop` — no new background task to manage.
+- New endpoint **`POST /api/admin/storage-cleanup/send-digest-now`** — manual one-shot trigger. Inserts a manual snapshot (`triggered_manually=true`), computes delta against the most recent prior snapshot, fires the digest if rules pass. Returns `{status: "sent" | "quota_deferred" | "skipped", queue_id, reason}`.
+- New endpoints **`GET / POST /api/me/preferences/storage-digest`** for per-user opt-out (default OFF — opt-out, not opt-in, since the user explicitly asked for this signal).
+
+### Frontend
+- `pages/AdminStorageCleanup.js` new "Weekly storage digest" section:
+  - ON/OFF toggle (`data-testid="toggle-digest-btn"`) with green ✓ when active, optimistic with rollback on API failure.
+  - "Send me a test digest now" button (`data-testid="send-test-digest-btn"`) calls the manual trigger so the user can verify the email pipeline in seconds instead of waiting a week.
+  - Result line shows whether the digest was sent / queued / skipped / errored — gives the user a clear feedback loop.
+- Send button is disabled when opt-out is ON, so the toggle state stays consistent with what the user can actually trigger.
+
+### Tests (10 new, all 37 storage-cleanup tests pass)
+- `test_iter96_storage_growth_digest.py`:
+  - Opt-out preference round-trip (GET / POST) + auth boundary
+  - `send-digest-now` skipped when below threshold + sends when current ≥ 1 GB (verifies `email_queue` row shape with `kind="storage_growth_digest"`)
+  - `send-digest-now` respects opt-out
+  - `send-digest-now` skipped when prior snapshot is same total (no meaningful growth)
+  - Auth required
+  - Email HTML contains GB total + CTA link + iter72 open-pixel injection
+  - Frontend grep guard for testids + endpoint references
+
+### Verified live on preview
+- `GET /api/health/deploy` → `build=iter96` with 4 new feature flags.
+- Playwright screenshot of `/admin/storage-cleanup` shows the new digest section with toggle, "Send me a test digest now" button, and the iter95 trend chart now populated with two datapoints (the audit snapshot from the iter94 weekly job + the manual test snapshot seeded by pytest).
+
+### Files touched
+- `backend/server.py` (`_maybe_send_storage_digest`, `send-digest-now` endpoint, preference endpoints, audit-loop wiring, BUILD_VERSION → iter96, 4 new feature flags)
+- `frontend/src/pages/AdminStorageCleanup.js` (digest preferences section + handlers + state)
+- `backend/tests/test_iter96_storage_growth_digest.py` (NEW — 10 cases)
+
+---
+
+
 ## Broaden Orphan Detection — Catch What iter93 Missed (iter95 — May 2026)
 
 Production screenshot from the user on soccerscout11.com showed the iter94 cleanup page reporting **"✓ No orphan chunks detected. Your storage is clean"** — but the user has been hitting object-storage capacity for weeks across many failed uploads. Investigation revealed the iter93/94 endpoint was checking only 4 buckets and missing the actual common leak sources (our own PRD.md iter93 investigation notes already named them — preview DB had 30 GB across THREE bucket types but only ONE was caught).

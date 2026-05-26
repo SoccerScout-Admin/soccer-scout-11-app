@@ -65,16 +65,21 @@ const AdminStorageCleanup = () => {
   const [markBusy, setMarkBusy] = useState(false);
   const [markResult, setMarkResult] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [digestOptOut, setDigestOptOut] = useState(false);
+  const [digestBusy, setDigestBusy] = useState(false);
+  const [digestResult, setDigestResult] = useState(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [r, a] = await Promise.all([
+      const [r, a, pref] = await Promise.all([
         axios.get(`${API}/admin/storage-cleanup/report`, { headers: getAuthHeader() }),
         axios.get(`${API}/admin/storage-cleanup/audit-history?days=90`, { headers: getAuthHeader() }),
+        axios.get(`${API}/me/preferences/storage-digest`, { headers: getAuthHeader() }),
       ]);
       setReport(r.data);
       setAudits(a.data.audits || []);
+      setDigestOptOut(!!pref.data.opt_out);
     } catch (err) {
       console.error('Failed to load storage cleanup data', err);
     } finally {
@@ -100,6 +105,39 @@ const AdminStorageCleanup = () => {
       setMarkBusy(false);
     }
   };
+
+  const handleToggleDigest = async () => {
+    const next = !digestOptOut;
+    setDigestOptOut(next);
+    try {
+      await axios.post(
+        `${API}/me/preferences/storage-digest`,
+        { opt_out: next },
+        { headers: getAuthHeader() },
+      );
+    } catch (err) {
+      setDigestOptOut(!next);  // rollback
+      alert('Could not save preference: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  const handleSendDigestNow = async () => {
+    setDigestBusy(true);
+    setDigestResult(null);
+    try {
+      const r = await axios.post(
+        `${API}/admin/storage-cleanup/send-digest-now`,
+        {},
+        { headers: getAuthHeader() },
+      );
+      setDigestResult(r.data);
+    } catch (err) {
+      setDigestResult({ status: 'error', reason: err.response?.data?.detail || err.message });
+    } finally {
+      setDigestBusy(false);
+    }
+  };
+
 
   const handleCopySupportEmail = async () => {
     if (!report) return;
@@ -259,6 +297,61 @@ Thank you,
               {markResult?.error && (
                 <p className="text-xs text-[#EF4444] mt-3">Error: {markResult.error}</p>
               )}
+            </section>
+
+            {/* iter96 — Weekly digest email preferences */}
+            <section data-testid="digest-preferences-section" className="bg-[#141414] border border-white/10 p-5 mb-6">
+              <h2 className="text-sm font-bold tracking-[0.2em] uppercase text-[#E5E5E5] mb-4">
+                Weekly storage digest
+              </h2>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div className="flex-1">
+                  <p className="text-sm text-[#E5E5E5] mb-1">
+                    Email alert when orphan storage grows ≥ 1 GB in a week
+                  </p>
+                  <p className="text-xs text-[#666] leading-relaxed">
+                    Turns silent quota loss into an inbox signal. Only fires on meaningful growth — no weekly spam.
+                  </p>
+                </div>
+                <label className="flex items-center gap-3 cursor-pointer select-none">
+                  <span className={`text-xs uppercase tracking-wider ${digestOptOut ? 'text-[#666]' : 'text-[#10B981]'}`}>
+                    {digestOptOut ? 'OFF' : 'ON'}
+                  </span>
+                  <button
+                    data-testid="toggle-digest-btn"
+                    onClick={handleToggleDigest}
+                    role="switch"
+                    aria-checked={!digestOptOut}
+                    className={`relative w-12 h-6 transition-colors ${digestOptOut ? 'bg-[#333]' : 'bg-[#10B981]'}`}
+                  >
+                    <span
+                      className={`absolute top-0.5 ${digestOptOut ? 'left-0.5' : 'left-6'} w-5 h-5 bg-white transition-all`}
+                    />
+                  </button>
+                </label>
+              </div>
+              <div className="mt-4 pt-4 border-t border-white/5">
+                <button
+                  data-testid="send-test-digest-btn"
+                  onClick={handleSendDigestNow}
+                  disabled={digestBusy || digestOptOut}
+                  className="text-xs tracking-wider uppercase border border-[#7DD3FC] text-[#7DD3FC] hover:bg-[#7DD3FC]/10 px-4 py-2 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  {digestBusy ? 'Sending…' : 'Send me a test digest now'}
+                </button>
+                {digestResult && (
+                  <p
+                    data-testid="digest-send-result"
+                    className={`text-xs mt-3 ${digestResult.status === 'sent' || digestResult.status === 'quota_deferred' ? 'text-[#10B981]' : 'text-[#A3A3A3]'}`}
+                  >
+                    {digestResult.status === 'sent' && '✓ Digest sent — check your inbox.'}
+                    {digestResult.status === 'quota_deferred' && '⏳ Queued — will retry within the hour.'}
+                    {digestResult.status === 'skipped' && `Skipped: ${digestResult.reason}`}
+                    {digestResult.status === 'error' && `Error: ${digestResult.reason}`}
+                    {digestResult.status === 'failed' && `Failed: ${digestResult.reason || 'unknown'}`}
+                  </p>
+                )}
+              </div>
             </section>
 
             {/* Bucket breakdown */}
