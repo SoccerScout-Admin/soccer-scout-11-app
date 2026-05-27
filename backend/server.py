@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter97"
+BUILD_VERSION = "iter98"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -660,6 +660,11 @@ SHIPPED_FEATURES = [
     "ffmpeg-memory-guards-threads1-bufsize",
     "rapid-oom-cycle-detection-2-attempts-5min",
     "pod-cycling-yellow-warning-banner",
+    # iter98 — async analysis generation to dodge Cloudflare 100s edge timeout
+    "async-analysis-generate-202",
+    "async-analysis-generate-trimmed-202",
+    "analysis-status-polling-frontend",
+    "pending-analysis-row-placeholder",
 ]
 
 def _get_build_sha() -> str:
@@ -2547,14 +2552,59 @@ async def start_analysis(video_id: str, current_user: dict = Depends(get_current
 
 @api_router.post("/analysis/generate")
 async def generate_analysis(input: AnalysisRequest, current_user: dict = Depends(get_current_user)):
-    """Manual single analysis generation"""
-    video = await db.videos.find_one({"id": input.video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0})
+    """iter98 — Manual single analysis generation, now ASYNC.
+
+    Returns 202 immediately with a `pending` analysis row. The actual ffmpeg
+    + Gemini work runs in a background task. The frontend polls
+    `/api/analysis/video/{video_id}` and sees `status` flip pending→completed
+    (or `failed`). This avoids the Cloudflare-edge 100s HTTP timeout that
+    surfaced as confusing HTTP 520 errors on 1+ GB videos (real production
+    bug 2026-05-27 video f0673397, 1.04 GB / 1:47:48).
+    """
+    video = await db.videos.find_one(
+        {"id": input.video_id, "user_id": current_user["id"], "is_deleted": False},
+        {"_id": 0},
+    )
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    match = await db.matches.find_one({"id": video["match_id"]}, {"_id": 0})
+    # Replace any prior in-flight analysis of the same type so the frontend
+    # doesn't see a stale `completed` row alongside the new `pending` one.
+    await db.analyses.delete_many({
+        "video_id": input.video_id, "user_id": current_user["id"],
+        "analysis_type": input.analysis_type,
+    })
 
-    # Fetch roster for richer prompts
+    analysis_id = str(uuid.uuid4())
+    placeholder = {
+        "id": analysis_id,
+        "video_id": input.video_id,
+        "match_id": video["match_id"],
+        "user_id": current_user["id"],
+        "analysis_type": input.analysis_type,
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.analyses.insert_one(dict(placeholder))
+
+    asyncio.create_task(_run_generate_analysis(
+        analysis_id=analysis_id,
+        video=video,
+        user_id=current_user["id"],
+        analysis_type=input.analysis_type,
+    ))
+    return JSONResponse(
+        status_code=202,
+        content={"analysis_id": analysis_id, "status": "pending"},
+    )
+
+
+async def _run_generate_analysis(
+    analysis_id: str, video: dict, user_id: str, analysis_type: str,
+):
+    """Background worker for `/analysis/generate`. Captures ffmpeg + Gemini
+    failures on the analysis row instead of surfacing them as HTTP 520s."""
+    match = await db.matches.find_one({"id": video["match_id"]}, {"_id": 0})
     roster = await db.players.find({"match_id": video["match_id"]}, {"_id": 0}).to_list(100)
     roster_context = ""
     if roster:
@@ -2567,42 +2617,43 @@ async def generate_analysis(input: AnalysisRequest, current_user: dict = Depends
 
         chat = LlmChat(
             api_key=EMERGENT_KEY,
-            session_id=f"analysis-{input.video_id}",
-            system_message="You are an expert soccer analyst. You will receive video samples from multiple points throughout the match. Analyze the full match based on these samples and provide detailed tactical insights."
+            session_id=f"analysis-{video['id']}",
+            system_message="You are an expert soccer analyst. You will receive video samples from multiple points throughout the match. Analyze the full match based on these samples and provide detailed tactical insights.",
         ).with_model("gemini", "gemini-3.1-pro-preview")
-
         video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
-
         prompts = {
             "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis.{roster_context}",
             "player_performance": f"Analyze individual player performances in this match between {match['team_home']} and {match['team_away']}.{roster_context}",
-            "highlights": f"Identify key moments and highlights from this match between {match['team_home']} and {match['team_away']}.{roster_context}"
+            "highlights": f"Identify key moments and highlights from this match between {match['team_home']} and {match['team_away']}.{roster_context}",
         }
-        prompt = prompts.get(input.analysis_type, prompts["tactical"])
+        prompt = prompts.get(analysis_type, prompts["tactical"])
         response = await chat.send_message(UserMessage(text=prompt, file_contents=[video_file]))
 
-        # Delete old analysis of same type
-        await db.analyses.delete_many({"video_id": input.video_id, "user_id": current_user["id"], "analysis_type": input.analysis_type})
-
-        analysis_id = str(uuid.uuid4())
-        analysis_doc = {
-            "id": analysis_id,
-            "video_id": input.video_id,
-            "match_id": video["match_id"],
-            "user_id": current_user["id"],
-            "analysis_type": input.analysis_type,
-            "content": response,
-            "status": "completed",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.analyses.insert_one(analysis_doc)
-        return {"analysis_id": analysis_id, "content": response, "status": "completed"}
+        await db.analyses.update_one(
+            {"id": analysis_id},
+            {"$set": {
+                "content": response,
+                "status": "completed",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        logger.info(f"[generate_analysis] analysis_id={analysis_id} completed ({analysis_type})")
     except Exception as e:
-        logger.error(f"Analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+        logger.exception(f"[generate_analysis] analysis_id={analysis_id} failed: {e}")
+        await db.analyses.update_one(
+            {"id": analysis_id},
+            {"$set": {
+                "status": "failed",
+                "error": str(e)[:500],
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
     finally:
         if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 # ===== Analysis (read endpoints moved to routes/analysis.py) =====
 # AI generation endpoints stay below because they depend on the auto-processing pipeline.
@@ -3186,12 +3237,58 @@ class TrimmedAnalysisRequest(BaseModel):
 
 @api_router.post("/analysis/generate-trimmed")
 async def generate_trimmed_analysis(input: TrimmedAnalysisRequest, current_user: dict = Depends(get_current_user)):
-    """Generate analysis on a trimmed section of video"""
-    video = await db.videos.find_one({"id": input.video_id, "user_id": current_user["id"], "is_deleted": False}, {"_id": 0})
+    """iter98 — Generate analysis on a trimmed section of video. ASYNC.
+
+    Same async pattern as /analysis/generate — returns 202 with a placeholder
+    `pending` analysis row so Cloudflare can't time out the request even on
+    1+ GB sources. Frontend polls /api/analysis/video/{id}.
+    """
+    video = await db.videos.find_one(
+        {"id": input.video_id, "user_id": current_user["id"], "is_deleted": False},
+        {"_id": 0},
+    )
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
-    match = await db.matches.find_one({"id": video["match_id"]}, {"_id": 0})
 
+    await db.analyses.delete_many({
+        "video_id": input.video_id, "user_id": current_user["id"],
+        "analysis_type": input.analysis_type,
+    })
+
+    analysis_id = str(uuid.uuid4())
+    placeholder = {
+        "id": analysis_id,
+        "video_id": input.video_id,
+        "match_id": video["match_id"],
+        "user_id": current_user["id"],
+        "analysis_type": input.analysis_type,
+        "status": "pending",
+        "trim_start": input.trim_start,
+        "trim_end": input.trim_end,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.analyses.insert_one(dict(placeholder))
+
+    asyncio.create_task(_run_generate_trimmed_analysis(
+        analysis_id=analysis_id,
+        video=video,
+        user_id=current_user["id"],
+        analysis_type=input.analysis_type,
+        trim_start=input.trim_start,
+        trim_end=input.trim_end,
+    ))
+    return JSONResponse(
+        status_code=202,
+        content={"analysis_id": analysis_id, "status": "pending"},
+    )
+
+
+async def _run_generate_trimmed_analysis(
+    analysis_id: str, video: dict, user_id: str, analysis_type: str,
+    trim_start, trim_end,
+):
+    """Background worker for /analysis/generate-trimmed."""
+    match = await db.matches.find_one({"id": video["match_id"]}, {"_id": 0})
     roster = await db.players.find({"match_id": video["match_id"]}, {"_id": 0}).to_list(100)
     roster_context = ""
     if roster:
@@ -3200,51 +3297,52 @@ async def generate_trimmed_analysis(input: TrimmedAnalysisRequest, current_user:
 
     tmp_path = None
     try:
-        tmp_path = await prepare_video_sample(video, trim_start=input.trim_start, trim_end=input.trim_end)
+        tmp_path = await prepare_video_sample(video, trim_start=trim_start, trim_end=trim_end)
 
         chat = LlmChat(
             api_key=EMERGENT_KEY,
-            session_id=f"trim-{input.video_id}-{input.analysis_type}",
-            system_message="You are an expert soccer analyst. Analyze the provided video segment and provide detailed insights."
+            session_id=f"trim-{video['id']}-{analysis_type}",
+            system_message="You are an expert soccer analyst. Analyze the provided video segment and provide detailed insights.",
         ).with_model("gemini", "gemini-3.1-pro-preview")
-
         video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
         trim_label = ""
-        if input.trim_start is not None or input.trim_end is not None:
-            s = int(input.trim_start or 0)
-            e = int(input.trim_end or 0)
+        if trim_start is not None or trim_end is not None:
+            s = int(trim_start or 0)
+            e = int(trim_end or 0)
             trim_label = f" (analyzing from {s//60}:{s%60:02d} to {e//60}:{e%60:02d})"
-
         prompts = {
             "tactical": f"Analyze this soccer match segment{trim_label} between {match['team_home']} and {match['team_away']}. Provide tactical analysis.{roster_context}",
             "player_performance": f"Analyze player performances in this segment{trim_label} between {match['team_home']} and {match['team_away']}.{roster_context}",
             "highlights": f"Identify key moments in this segment{trim_label} between {match['team_home']} and {match['team_away']}.{roster_context}",
         }
-        prompt = prompts.get(input.analysis_type, prompts["tactical"])
+        prompt = prompts.get(analysis_type, prompts["tactical"])
         response = await chat.send_message(UserMessage(text=prompt, file_contents=[video_file]))
 
-        await db.analyses.delete_many({"video_id": input.video_id, "user_id": current_user["id"], "analysis_type": input.analysis_type})
-
-        analysis_doc = {
-            "id": str(uuid.uuid4()),
-            "video_id": input.video_id,
-            "match_id": video["match_id"],
-            "user_id": current_user["id"],
-            "analysis_type": input.analysis_type,
-            "content": response,
-            "status": "completed",
-            "trim_start": input.trim_start,
-            "trim_end": input.trim_end,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.analyses.insert_one(analysis_doc)
-        return {"analysis_id": analysis_doc["id"], "content": response, "status": "completed"}
+        await db.analyses.update_one(
+            {"id": analysis_id},
+            {"$set": {
+                "content": response,
+                "status": "completed",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        logger.info(f"[generate_trimmed_analysis] analysis_id={analysis_id} completed ({analysis_type})")
     except Exception as e:
-        logger.error(f"Trimmed analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)[:200]}")
+        logger.exception(f"[generate_trimmed_analysis] analysis_id={analysis_id} failed: {e}")
+        await db.analyses.update_one(
+            {"id": analysis_id},
+            {"$set": {
+                "status": "failed",
+                "error": str(e)[:500],
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
     finally:
         if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 # Mount Teams router (new module)

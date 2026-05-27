@@ -138,9 +138,15 @@ def test_iter75_max_attempts_constant_preserved():
 
 def test_build_version_bumped_to_iter97():
     src = open("/app/backend/server.py").read()
-    assert 'BUILD_VERSION = "iter97"' in src
+    # iter97 features must still be shipped (this is the contract — version
+    # number itself moves forward with future iterations).
     assert "aggressive-tier-threshold-800mb" in src
     assert "rapid-oom-cycle-detection-2-attempts-5min" in src
+    # BUILD_VERSION must be at least iter97 (numerically — string compare works
+    # for iter97, iter98, iter99 but bricks at iter100; explicit guard)
+    m = re.search(r'BUILD_VERSION\s*=\s*"iter(\d+)"', src)
+    assert m, "BUILD_VERSION constant not found"
+    assert int(m.group(1)) >= 97
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +159,9 @@ def test_deploy_endpoint_advertises_iter97_features():
             r = await c.get("/api/health/deploy")
             assert r.status_code == 200
             body = r.json()
-            assert body["build"] == "iter97"
+            # Build version is at least iter97 (forward-compatible)
+            m = re.match(r'iter(\d+)', body["build"] or "")
+            assert m and int(m.group(1)) >= 97, f"build must be >= iter97, got {body['build']}"
             features = set(body["features"])
             assert "aggressive-tier-threshold-800mb" in features
             assert "ffmpeg-memory-guards-threads1-bufsize" in features

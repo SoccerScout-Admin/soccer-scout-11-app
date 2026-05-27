@@ -1,6 +1,71 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Async Analysis Generation — Dodge the Cloudflare 100s Edge Timeout (iter98 — May 2026)
+
+Real production bug 2026-05-27, video `f0673397` (1.04 GB, post-iter97 upload):
+The full pipeline worked — chunks uploaded, ffmpeg ran on the iter97 safe tier, Gemini generated timeline markers (Goals 2, Shots 2, Saves 1, Fouls 1, etc.). User clicked "Regenerate" for the overview/tactical analysis → got an "AI Generation Failed — Request failed with status code 520" toast.
+
+### Root cause
+`/api/analysis/generate` and `/api/analysis/generate-trimmed` were **synchronous blocking** endpoints. The handler ran:
+1. `prepare_video_sample()` — assembles chunks → ffmpeg downsamples to 180p/5fps → 5-15 min on a 1 GB source
+2. `chat.send_message()` — uploads to Gemini File API + waits for the full LLM response → 3-10 min
+
+Total time often >100s, which is **Cloudflare's HTTP edge timeout**. Cloudflare returns HTTP 520 to the client, but the pod keeps running and eventually writes the result. The user sees a misleading failure even though the work succeeds. The frontend timeout was set to 300s/600s, but Cloudflare cuts the connection before that.
+
+### Fix
+Both endpoints converted to the **202 Accepted + background task + polling** pattern that the iter63 `/process` endpoint already uses:
+
+1. Endpoint validates auth + video ownership (fast).
+2. Deletes any prior analysis of the same `(video_id, analysis_type)` pair (avoids stale `completed` rows alongside the new `pending` one).
+3. Inserts a placeholder row with `status="pending"`.
+4. Kicks off `asyncio.create_task(_run_generate_analysis(...))` for the actual ffmpeg + Gemini work.
+5. Returns `JSONResponse(status_code=202, content={analysis_id, status: "pending"})` — well under 5s, never near Cloudflare's 100s limit.
+
+The background worker:
+- Wraps the entire pipeline in `try / except / finally`.
+- On success: updates the SAME `analysis_id` row with `status="completed"` + `content` + `completed_at`.
+- On failure: updates the SAME row with `status="failed"` + truncated `error` (first 500 chars).
+- Always unlinks the tmp_path in `finally` (no orphan files even on crash).
+
+### Frontend
+`pages/VideoAnalysis.js` now has a `pollAnalysisStatus(analysisId)` helper:
+- 5-second polling interval, max 25 minutes (300 attempts).
+- Reads `/api/analysis/video/{video_id}` (existing endpoint, no new surface).
+- Refreshes the `analyses` state on every tick so partial progress is visible.
+- Resolves on `status === "completed"`, throws on `status === "failed"` (with the captured error from the worker), retries silently on 5xx.
+- `handleGenerateAnalysis` and `handleTrimmedAnalysis` POST timeout dropped from 300s/600s to 30s (just enough for the 202 ack).
+
+### Tests (9 new, 59/59 across iter75 + iter93→98)
+- `test_iter98_async_analysis_generation.py`:
+  - Both endpoints return 202 in <5s with a `pending` placeholder row in MongoDB
+  - Trim params (`trim_start`, `trim_end`) preserved on the placeholder
+  - Re-calling with the same `analysis_type` deletes the old row (no stale `completed` row)
+  - Background task DOES write back to the same `analysis_id` with `status="failed"` when the work blows up (verified within 20s)
+  - Auth + 404 boundaries on both endpoints
+  - Frontend grep guards: `pollAnalysisStatus` helper exists, references `/analysis/video/`, treats 202 as success, POST timeouts dropped to 30s
+  - Build endpoint advertises iter98 feature flags
+
+### Verified live on preview
+- `GET /api/health/deploy` → `build=iter98` with all 4 new feature flags.
+- Dashboard renders cleanly, no console errors.
+
+### Files touched
+- `backend/server.py` (both endpoints → 202+task pattern, new `_run_generate_analysis` + `_run_generate_trimmed_analysis` workers, BUILD_VERSION → iter98, 4 new feature flags)
+- `frontend/src/pages/VideoAnalysis.js` (`pollAnalysisStatus` helper, both handlers now treat 202 + poll)
+- `backend/tests/test_iter98_async_analysis_generation.py` (NEW — 9 cases)
+- `backend/tests/test_iter97_pod_oom_cycle_remediation.py` (loosened the build-version assertion to forward-compatible regex so future bumps don't break this suite)
+
+### Recovery for the affected video
+Once iter98 deploys to production:
+- Re-click "Regenerate" on video `f0673397` for whichever analysis type was failing.
+- You'll see the analysis card flip to "Generating…" (pending) immediately — no toast.
+- The card will update to "Completed" within the actual processing window (5-25 min for 1 GB).
+- If the background task does fail for a different reason (e.g., budget exhaustion), the analysis card surfaces the actual error inline instead of a misleading 520.
+
+---
+
+
 ## Pod-OOM-Cycle Remediation for Sub-2GB Videos (iter97 — May 2026)
 
 Real production bug 2026-05-27, video `1140ed3a` (1.04 GB, 1:47:48 1080p30 HandBrake-compressed from 10 GB source). Upload finished cleanly post-iter95. Processing got stuck at 0% with the iter63 "Server restarted — processing resumed automatically" banner reappearing every few seconds — pod was OOM-killing within seconds of ffmpeg starting. The iter75 guard would have caught it but only after 3 cycles (~30 min of user pain).

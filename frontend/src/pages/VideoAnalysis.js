@@ -149,16 +149,47 @@ const VideoAnalysis = () => {
   const [selectedClips, setSelectedClips] = useState([]);
   const [downloadingZip, setDownloadingZip] = useState(false);
 
+  // iter98 — Poll an in-flight analysis row until status flips to completed/failed.
+  // The backend now returns 202 immediately so Cloudflare can't time out the
+  // request (was causing HTTP 520 on 1+ GB videos). Up to 25 min of polling
+  // covers the worst case for 800 MB+ videos.
+  const pollAnalysisStatus = async (analysisId) => {
+    const POLL_INTERVAL_MS = 5000;
+    const MAX_ATTEMPTS = 300;  // 25 min
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      try {
+        const res = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
+        setAnalyses(res.data);
+        const row = (res.data || []).find((a) => a.id === analysisId);
+        if (row?.status === 'completed') return row;
+        if (row?.status === 'failed') {
+          throw new Error(row.error || 'Analysis failed.');
+        }
+      } catch (err) {
+        if (err.response?.status >= 500) continue;  // transient — retry
+        throw err;
+      }
+    }
+    throw new Error('Analysis taking longer than expected — refresh in a few minutes.');
+  };
+
   const handleGenerateAnalysis = async (type) => {
     setAnalyzing(true);
     try {
       const res = await axios.post(
         `${API}/analysis/generate`,
         { video_id: videoId, analysis_type: type },
-        { headers: getAuthHeader(), timeout: 300000 }
+        { headers: getAuthHeader(), timeout: 30000 }
       );
-      const analysesRes = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
-      setAnalyses(analysesRes.data);
+      // iter98 — 202 Accepted with placeholder; poll for completion
+      const analysisId = res.data?.analysis_id;
+      if (res.status === 202 && analysisId) {
+        await pollAnalysisStatus(analysisId);
+      } else {
+        const analysesRes = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
+        setAnalyses(analysesRes.data);
+      }
     } catch (err) {
       console.error('Analysis failed:', err);
       const errMsg = err.response?.data?.detail || err.message || 'Analysis failed.';
@@ -176,16 +207,21 @@ const VideoAnalysis = () => {
   const handleTrimmedAnalysis = async (type) => {
     setAnalyzing(true);
     try {
-      await axios.post(
+      const res = await axios.post(
         `${API}/analysis/generate-trimmed`,
         { video_id: videoId, analysis_type: type, trim_start: trimStart || null, trim_end: trimEnd || null },
-        { headers: getAuthHeader(), timeout: 600000 }
+        { headers: getAuthHeader(), timeout: 30000 }
       );
-      const analysesRes = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
-      setAnalyses(analysesRes.data);
+      const analysisId = res.data?.analysis_id;
+      if (res.status === 202 && analysisId) {
+        await pollAnalysisStatus(analysisId);
+      } else {
+        const analysesRes = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
+        setAnalyses(analysesRes.data);
+      }
       setShowTrimPanel(false);
     } catch (err) {
-      alert(err.response?.data?.detail || 'Trimmed analysis failed.');
+      alert(err.response?.data?.detail || err.message || 'Trimmed analysis failed.');
     } finally {
       setAnalyzing(false);
     }
