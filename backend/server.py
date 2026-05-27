@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter96"
+BUILD_VERSION = "iter97"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -655,6 +655,11 @@ SHIPPED_FEATURES = [
     "storage-digest-opt-out-preference",
     "send-storage-digest-now-endpoint",
     "growth-threshold-1gb-trigger",
+    # iter97 — pod-OOM-cycle remediation for sub-2GB videos
+    "aggressive-tier-threshold-800mb",
+    "ffmpeg-memory-guards-threads1-bufsize",
+    "rapid-oom-cycle-detection-2-attempts-5min",
+    "pod-cycling-yellow-warning-banner",
 ]
 
 def _get_build_sha() -> str:
@@ -3456,7 +3461,8 @@ async def resume_interrupted_processing():
             {"processing_status": {"$in": ["processing", "queued"]}},
             {"_id": 0, "id": 1, "user_id": 1, "is_chunked": 1, "total_chunks": 1,
              "chunk_paths": 1, "chunk_backends": 1, "file_size_bytes": 1,
-             "resume_attempts": 1, "processing_progress": 1, "filename": 1}
+             "resume_attempts": 1, "processing_progress": 1, "filename": 1,
+             "last_resume_at": 1}
         ).to_list(100)
 
         if not stuck_videos:
@@ -3520,18 +3526,37 @@ async def resume_interrupted_processing():
             # A successful previous attempt that crossed >0% indicates the
             # pipeline IS able to make progress; in that case we keep
             # resuming so iter63's retry-at-240p tier can still kick in.
+            #
+            # iter97 — Rapid-cycle detection. If 2 OOM-cycles happen within
+            # 5 min (which is unambiguously a memory loop, not real work),
+            # fail fast at attempt 2 instead of waiting for attempt 3 ≈ 30 min
+            # of pain. Compare current resume timestamp to last_resume_at.
             prior_attempts = int(video.get("resume_attempts") or 0)
             prior_progress = int(video.get("processing_progress") or 0)
-            if prior_attempts >= _MAX_RESUME_ATTEMPTS and prior_progress == 0:
+            prior_resume_at = video.get("last_resume_at")
+            rapid_loop = False
+            if prior_attempts >= 2 and prior_progress == 0 and prior_resume_at:
+                try:
+                    prior_dt = datetime.fromisoformat(prior_resume_at)
+                    if prior_dt.tzinfo is None:
+                        prior_dt = prior_dt.replace(tzinfo=timezone.utc)
+                    if (datetime.now(timezone.utc) - prior_dt).total_seconds() < 300:
+                        rapid_loop = True
+                except (TypeError, ValueError):
+                    pass
+
+            if rapid_loop or (prior_attempts >= _MAX_RESUME_ATTEMPTS and prior_progress == 0):
                 size_gb = round((video.get("file_size_bytes") or 0) / (1024 ** 3), 2) or None
+                cycle_label = "twice in <5min" if rapid_loop else f"{prior_attempts}×"
                 msg = (
-                    f"Processing failed {prior_attempts}× without making any progress. "
+                    f"Processing failed {cycle_label} without making any progress. "
                     "Source file is too heavy for our encoding pod — re-compress with "
                     "HandBrake (Fast 720p30 / CQ 28) and re-upload."
                 )
                 logger.warning(
                     f"Pod-OOM-loop detected for {video_id} "
-                    f"(resume_attempts={prior_attempts}, progress=0). Marking failed."
+                    f"(resume_attempts={prior_attempts}, progress=0, rapid={rapid_loop}). "
+                    "Marking failed."
                 )
                 await db.videos.update_one(
                     {"id": video_id},
@@ -3578,9 +3603,14 @@ async def resume_interrupted_processing():
                 # Bump the resume counter BEFORE kicking off the new attempt
                 # so we count THIS resume even if the pod dies before
                 # run_auto_processing can record progress.
+                # iter97 — also stamp `last_resume_at` so the rapid-cycle
+                # detector above can tell whether 2 OOMs happened within 5 min.
                 await db.videos.update_one(
                     {"id": video_id},
-                    {"$inc": {"resume_attempts": 1}},
+                    {
+                        "$inc": {"resume_attempts": 1},
+                        "$set": {"last_resume_at": datetime.now(timezone.utc).isoformat()},
+                    },
                 )
                 logger.info(
                     f"Resuming processing for video {video_id}: {remaining} "

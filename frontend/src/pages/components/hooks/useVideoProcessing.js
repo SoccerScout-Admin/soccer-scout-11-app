@@ -19,6 +19,11 @@ export const useVideoProcessing = (videoId, onAnalysesRefresh, onMarkersRefresh)
   const [processingStatus, setProcessingStatus] = useState(null);
   const [serverBootId, setServerBootId] = useState(null);
   const [serverRestarted, setServerRestarted] = useState(false);
+  // iter97 — track multiple restart events. If we see 2+ within ~5min the
+  // pod is in an OOM-cycle and the header shows a yellow "may not finish"
+  // warning so the user isn't stuck staring at "Processing..." for 30 min.
+  const [restartCount, setRestartCount] = useState(0);
+  const [firstRestartAt, setFirstRestartAt] = useState(null);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -30,6 +35,8 @@ export const useVideoProcessing = (videoId, onAnalysesRefresh, onMarkersRefresh)
         if (serverBootId && serverBootId !== data.server_boot_id) {
           console.log('Server restarted detected — boot_id changed');
           setServerRestarted(true);
+          setRestartCount((c) => c + 1);
+          if (!firstRestartAt) setFirstRestartAt(Date.now());
           const res = await axios.get(`${API}/analysis/video/${videoId}`, { headers: getAuthHeader() });
           onAnalysesRefresh?.(res.data);
         }
@@ -40,7 +47,7 @@ export const useVideoProcessing = (videoId, onAnalysesRefresh, onMarkersRefresh)
       console.error('Failed to fetch processing status:', err);
       return null;
     }
-  }, [videoId, serverBootId, onAnalysesRefresh]);
+  }, [videoId, serverBootId, firstRestartAt, onAnalysesRefresh]);
 
   // Initial fetch on mount
   useEffect(() => {
@@ -83,9 +90,19 @@ export const useVideoProcessing = (videoId, onAnalysesRefresh, onMarkersRefresh)
   const isProcessed = !!processingStatus && processingStatus.processing_status === 'completed';
   const processingFailed = !!processingStatus && processingStatus.processing_status === 'failed';
 
+  // iter97 — Pod-cycle detection. If 2+ server restarts happen within 5 min,
+  // ffmpeg is OOM-killing the pod repeatedly and the iter97 backend guard
+  // will mark the video failed within the next minute. Surface a yellow
+  // "trying smaller settings, may not finish" warning ahead of that so the
+  // user knows the system is going to ask them to re-compress soon.
+  const isPodCycling = restartCount >= 2 && firstRestartAt &&
+    (Date.now() - firstRestartAt) < 5 * 60 * 1000;
+
   return {
     processingStatus,
     serverRestarted,
+    restartCount,
+    isPodCycling,
     isProcessing,
     isProcessed,
     processingFailed,

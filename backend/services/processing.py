@@ -273,7 +273,15 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
         # loop only escalates on transient failures (OOM, timeout) — NOT on
         # deterministic ones like moov-atom-missing or invalid-data, where
         # retrying with smaller settings won't change the outcome.
-        if video_size_gb > 2:
+        # iter97 — Aggressive-tier threshold lowered from 2 GB to 800 MB.
+        # Production bug 2026-05-27 video 1140ed3a (1.04 GB / 1:47:48 / 1080p30):
+        # File landed in the <2 GB tier → started at 360p/12fps → pod OOM'd
+        # within seconds of ffmpeg starting (the iter75 guard only catches it
+        # after 3 attempts ≈ 30 min). Lowering to 800 MB means any video
+        # large enough to risk OOM jumps straight to the safe 180p/5fps tier.
+        # Quality loss is acceptable for Gemini AI analysis — it just needs to
+        # see motion + spatial layout, not pretty pixels.
+        if video_size_gb > 0.8:
             tiers = [
                 ("scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2", "5", "40", 1800, "180p/5fps/crf40"),
                 ("scale=240:135:force_original_aspect_ratio=decrease,pad=240:135:(ow-iw)/2:(oh-ih)/2", "3", "45", 900,  "135p/3fps/crf45 [retry-1]"),
@@ -289,6 +297,12 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
         user_id_for_log = video.get("user_id", "unknown")
         for tier_idx, (scale_filter, fps, crf, tier_timeout, label) in enumerate(tiers):
             ffmpeg_cmd = ["ffmpeg", "-y"]
+            # iter97 — Memory guards. -threads 1 prevents libx264 from spawning
+            # 8 worker threads each with their own frame buffers. -bufsize and
+            # -max_muxing_queue_size cap mux-side memory growth. -fflags
+            # +discardcorrupt skips bad packets instead of buffering them
+            # waiting for a clean GOP boundary.
+            ffmpeg_cmd += ["-threads", "1", "-fflags", "+discardcorrupt"]
             if trim_start is not None and trim_start > 0:
                 ffmpeg_cmd += ["-ss", str(int(trim_start))]
             ffmpeg_cmd += ["-i", raw_path]
@@ -305,6 +319,8 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
                 "-c:a", "aac",
                 "-b:a", "32k",
                 "-ac", "1",
+                "-bufsize", "16M",
+                "-max_muxing_queue_size", "256",
                 "-movflags", "+faststart",
                 clip_path,
             ]

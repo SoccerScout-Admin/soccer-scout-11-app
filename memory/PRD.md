@@ -1,6 +1,58 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Pod-OOM-Cycle Remediation for Sub-2GB Videos (iter97 — May 2026)
+
+Real production bug 2026-05-27, video `1140ed3a` (1.04 GB, 1:47:48 1080p30 HandBrake-compressed from 10 GB source). Upload finished cleanly post-iter95. Processing got stuck at 0% with the iter63 "Server restarted — processing resumed automatically" banner reappearing every few seconds — pod was OOM-killing within seconds of ffmpeg starting. The iter75 guard would have caught it but only after 3 cycles (~30 min of user pain).
+
+### Root cause
+File landed in the pre-iter97 `<2 GB` ffmpeg tier (`360p/12fps/crf35`). For a constrained production pod with multiple memory pressures (Python + Motor + FastAPI + ffmpeg + decoded frame buffers), 360p downsampling from a 1080p30 source for 107 minutes spiked above the cgroup limit and the kernel OOM-killed the whole pod. The iter75 guard correctly waited for `resume_attempts >= 3` before failing, but in practice that meant the user watched a misleading "Server restarted" banner for 30+ minutes before getting an actionable failure UI.
+
+### Four fixes shipped
+
+**1. Aggressive-tier threshold lowered 2 GB → 800 MB** (`backend/services/processing.py`):
+Any video >0.8 GB now starts at the safe `180p/5fps/crf40` preset instead of `360p/12fps`. Quality drop is invisible to Gemini AI analysis — it needs to see motion + spatial layout, not pretty pixels. Memory peak drops from ~3× input frame size (1080p × decoder buffer) to ~1× output frame size (180p tiny).
+
+**2. ffmpeg memory guards** (same file):
+Added `-threads 1` (prevents libx264 from spawning 8 worker threads each with their own frame buffers), `-bufsize 16M` (bounds the rate-controller buffer), `-max_muxing_queue_size 256` (caps muxer-side memory growth), and `-fflags +discardcorrupt` (skips bad packets instead of buffering them waiting for clean GOP boundaries).
+
+**3. Rapid-cycle detection** (`backend/server.py::resume_interrupted_processing`):
+New `last_resume_at` timestamp stamped on each resume. If `resume_attempts >= 2` AND the two cycles happened within 5 min AND progress is still 0%, that's unambiguously an OOM loop — fail-fast NOW instead of waiting for attempt 3 (≈10-15 more min of pain). Falls through to the original iter75 3-attempt safety net for slow-progress videos that aren't in a rapid cycle.
+
+**4. Yellow "may not finish" banner** (`frontend/src/pages/components/hooks/useVideoProcessing.js` + `VideoAnalysisHeader.js`):
+The hook now tracks `restartCount` + `firstRestartAt`. When 2+ boot_id changes happen within 5 min, `isPodCycling` flips on. The processing banner switches from blue "Server restarted — resumed" to YELLOW "This file is too heavy for our encoder — we may have to ask you to re-compress" with HandBrake guidance and a yellow progress bar. The user is told what's coming about 60s before the iter97 backend guard actually fires.
+
+### Tests (10 new, all 50 pass with iter75 + iter93→97)
+- `test_iter97_pod_oom_cycle_remediation.py`:
+  - Threshold dropped to 0.8 GB (old `> 2` removed)
+  - ffmpeg cmd has `-threads 1`, `-max_muxing_queue_size`, `-bufsize`, `+discardcorrupt`
+  - Rapid-cycle detection: `last_resume_at` referenced, 300s window, attempt-2 trigger
+  - Mongo projection includes `last_resume_at: 1`
+  - Frontend hook exposes `isPodCycling` + `restartCount` with 5-min window
+  - Header renders the cycling warning with re-compression + HandBrake guidance + yellow palette
+  - VideoAnalysis passes the prop to header
+  - Backwards-compat: `_MAX_RESUME_ATTEMPTS` safety net for slow-progress videos preserved
+  - Build endpoint advertises all 4 new feature flags
+- All 3 iter75 tests still pass — the original guard is the safety net behind the rapid-cycle detector.
+
+### Verified live on preview
+- `GET /api/health/deploy` → `build=iter97` with all 4 new feature flags.
+- Dashboard smoke screenshot renders cleanly, no console errors.
+
+### Files touched
+- `backend/services/processing.py` (threshold + ffmpeg memory guards)
+- `backend/server.py` (rapid-cycle detection, `last_resume_at` stamp, stuck_videos projection, BUILD_VERSION → iter97, 4 new feature flags)
+- `frontend/src/pages/components/hooks/useVideoProcessing.js` (`restartCount` + `firstRestartAt` + `isPodCycling`)
+- `frontend/src/pages/components/VideoAnalysisHeader.js` (`isPodCycling` prop + yellow banner)
+- `frontend/src/pages/VideoAnalysis.js` (wiring)
+- `backend/tests/test_iter97_pod_oom_cycle_remediation.py` (NEW — 10 cases)
+
+### Recovery for the affected video
+The production video `1140ed3a` (currently in OOM-loop) will trip the new rapid-cycle detector within 5 min of the iter97 deploy — get marked `failed` with the re-compression CTA, then the user can hit "Retry Processing" or just re-upload from HandBrake at 720p30/CQ28 (will land in the safe 800 MB tier). After iter97 deploys, no future video <800 MB enters the dangerous 360p tier.
+
+---
+
+
 ## Weekly Storage-Growth Digest Email (iter96 — May 2026)
 
 Follow-up to iter95. The cleanup UI was perfectly accurate but reactive — the user had to remember to visit `/admin/storage-cleanup` to know their quota was being eaten. iter96 turns silent quota loss into an inbox signal you can't miss.

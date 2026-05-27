@@ -12,6 +12,7 @@ const VideoAnalysisHeader = ({
   rosterCount,
   processingStatus,
   serverRestarted,
+  isPodCycling,
   processingLabel,
   onBack,
   onDownloadHighlights,
@@ -68,21 +69,25 @@ const VideoAnalysisHeader = ({
     </header>
 
     {isProcessing && (
-      <div data-testid="processing-banner" className="bg-gradient-to-r from-[#0C1A3D] to-[#0A0A0A] border-b border-[#1E3A6E]/30 px-6 py-4">
+      <div data-testid="processing-banner" className={`${isPodCycling ? 'bg-gradient-to-r from-[#3D2C0C] to-[#0A0A0A] border-b border-[#FBBF24]/30' : 'bg-gradient-to-r from-[#0C1A3D] to-[#0A0A0A] border-b border-[#1E3A6E]/30'} px-6 py-4`}>
         <div className="max-w-[1400px] mx-auto">
           <div className="flex items-center gap-4">
-            <div className="w-8 h-8 rounded-full bg-[#007AFF]/20 flex items-center justify-center flex-shrink-0">
-              <div className="w-4 h-4 border-2 border-[#007AFF] border-t-transparent rounded-full animate-spin" />
+            <div className={`w-8 h-8 rounded-full ${isPodCycling ? 'bg-[#FBBF24]/20' : 'bg-[#007AFF]/20'} flex items-center justify-center flex-shrink-0`}>
+              <div className={`w-4 h-4 border-2 ${isPodCycling ? 'border-[#FBBF24]' : 'border-[#007AFF]'} border-t-transparent rounded-full animate-spin`} />
             </div>
             <div className="flex-1">
-              <p className="text-sm font-medium text-white">
-                {serverRestarted ? 'Server restarted — processing resumed automatically' : 'Processing your match video...'}
+              <p className="text-sm font-medium text-white" data-testid="processing-banner-headline">
+                {isPodCycling
+                  ? 'This file is too heavy for our encoder — we may have to ask you to re-compress'
+                  : serverRestarted ? 'Server restarted — processing resumed automatically' : 'Processing your match video...'}
               </p>
-              <p className="text-xs text-[#7AA2D4] mt-0.5">
-                {processingStatus.processing_current
-                  ? `Running: ${processingLabel[processingStatus.processing_current] || processingStatus.processing_current}`
-                  : 'Preparing video for AI analysis'}
-                {processingStatus.completed_types && processingStatus.completed_types.length > 0 && (
+              <p className={`text-xs mt-0.5 ${isPodCycling ? 'text-[#FBBF24]' : 'text-[#7AA2D4]'}`}>
+                {isPodCycling
+                  ? 'Multiple OOM restarts detected. If this doesn\'t make progress in the next minute, re-compress with HandBrake (Fast 720p30 / CQ 28) and re-upload.'
+                  : processingStatus.processing_current
+                    ? `Running: ${processingLabel[processingStatus.processing_current] || processingStatus.processing_current}`
+                    : 'Preparing video for AI analysis'}
+                {!isPodCycling && processingStatus.completed_types && processingStatus.completed_types.length > 0 && (
                   <span className="text-[#4ADE80] ml-2">
                     — {processingStatus.completed_types.length}/4 done
                   </span>
@@ -90,11 +95,11 @@ const VideoAnalysisHeader = ({
               </p>
             </div>
             <div className="text-right">
-              <p className="text-lg font-bold text-[#007AFF]">{processingStatus.processing_progress || 0}%</p>
+              <p className={`text-lg font-bold ${isPodCycling ? 'text-[#FBBF24]' : 'text-[#007AFF]'}`}>{processingStatus.processing_progress || 0}%</p>
             </div>
           </div>
           <div className="mt-3 h-1.5 bg-[#1A1A2E] rounded-full overflow-hidden">
-            <div className="h-full bg-[#007AFF] rounded-full transition-all duration-500"
+            <div className={`h-full ${isPodCycling ? 'bg-[#FBBF24]' : 'bg-[#007AFF]'} rounded-full transition-all duration-500`}
               style={{ width: `${processingStatus.processing_progress || 0}%` }} />
           </div>
           <div className="flex items-center gap-4 mt-3">

@@ -41,7 +41,7 @@ const VideoAnalysis = () => {
   const onMarkersRefresh = useCallback((m) => setMarkers(m), [setMarkers]);
 
   const {
-    processingStatus, serverRestarted,
+    processingStatus, serverRestarted, isPodCycling,
     isProcessing, isProcessed, processingFailed,
     reprocess: handleReprocess,
     fetchNow: refetchProcessingStatus,
@@ -416,6 +416,7 @@ const VideoAnalysis = () => {
         rosterCount={rosterCount}
         processingStatus={processingStatus}
         serverRestarted={serverRestarted}
+        isPodCycling={isPodCycling}
         processingLabel={processingLabel}
         onBack={() => navigate('/')}
         onDownloadHighlights={handleDownloadHighlights}
