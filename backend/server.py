@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter99"
+BUILD_VERSION = "iter100"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -671,6 +671,11 @@ SHIPPED_FEATURES = [
     "ai-prompt-explicit-goal-detection-cues",
     "ai-marker-player-number-and-name-fields",
     "ai-player-performance-jersey-first-prompt",
+    # iter100 — Rich markers panel UI
+    "markers-panel-scannable-list",
+    "markers-panel-type-filter-pills",
+    "markers-panel-jersey-avatars",
+    "markers-panel-click-to-seek",
 ]
 
 def _get_build_sha() -> str:

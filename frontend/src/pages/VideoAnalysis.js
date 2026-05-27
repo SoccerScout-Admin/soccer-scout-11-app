@@ -11,6 +11,7 @@ import VideoAnalysisHeader from './components/VideoAnalysisHeader';
 import TrimPanel from './components/TrimPanel';
 import ClipsSidebar from './components/ClipsSidebar';
 import AnnotationsSidebar from './components/AnnotationsSidebar';
+import MarkersPanel from './components/MarkersPanel';
 import AnnotationForm from './components/AnnotationForm';
 import LiveCoachingMic from './components/LiveCoachingMic';
 import ClipCreateForm from './components/ClipCreateForm';
@@ -561,8 +562,9 @@ const VideoAnalysis = () => {
             />
           </div>
 
-          {/* Right Sidebar: Clips & Annotations */}
+          {/* Right Sidebar: AI Events, Clips, Annotations */}
           <div className="lg:col-span-4 space-y-4">
+            <MarkersPanel markers={markers} onSeek={seekTo} />
             <ClipsSidebar
               clips={clips}
               players={players}

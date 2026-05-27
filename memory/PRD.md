@@ -1,6 +1,66 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Rich Markers Panel — Scannable AI Event List (iter100 — May 2026)
+
+Follow-up to iter99's attribution fields. Previously the timeline markers were dots on the video scrub bar — coaches had to hover one dot at a time to see what each event was. iter100 surfaces the full list in a dedicated panel so a coach can scan "all 3 goals + who scored them" in 2 seconds.
+
+### Frontend
+New component `pages/components/MarkersPanel.js` in the right sidebar above ClipsSidebar (higher signal for game review):
+
+- **Header** with total event count.
+- **Type filter pills** — color-coded per event type with per-type counts (e.g., `Goals · 3`, `Shots · 1`). Active pill renders with the type's color as background. Toggle off by clicking the active pill again.
+- **Marker rows** — for each event:
+  - Color-coded left border + type icon (Phosphor icons: SoccerBall for goals, Target for shots, Hand for saves, etc.)
+  - Bold event label that turns sky-blue on hover (signals clickability)
+  - Match-time chip + team name on a secondary line
+  - **iter99 jersey-number avatar** on the right — a circled number badge colored to match the event type. Hover reveals `player_name` when available.
+  - Falls back to a text player_name when no number is recorded.
+- **Click any row → seeks the video player to that timestamp.**
+- **Empty state** — component returns `null` if there are no markers (no empty card cluttering the sidebar).
+
+### Color palette
+Every Gemini-emitted type has a dedicated color so a coach can spot patterns at a glance:
+- Goals — `#FBBF24` (signal yellow)
+- Shots — `#EF4444` (red)
+- Saves — `#7DD3FC` (sky blue, keeper-positive)
+- Chances — `#A78BFA` (violet)
+- Fouls — `#F97316` (orange)
+- Cards — `#DC2626` (deep red)
+- Subs — `#10B981` (green)
+- Tactical — `#6B7280` (slate)
+
+### Backend
+**Zero changes.** The existing `/api/markers/video/{video_id}` already uses `{"_id": 0}` projection so iter99's `player_number` + `player_name` reach the frontend untouched. iter100 added a regression test pinning this projection so future agents can't accidentally narrow it and break attribution.
+
+### Tests (10 new, 82/82 across iter75 + iter93→100)
+- `test_iter100_markers_panel.py`:
+  - Component file exists with required `data-testid` markers
+  - `TYPE_META` covers all 8 event types Gemini can emit (no fall-through to gray "unknown" for goals)
+  - References iter99 attribution fields + jersey avatar testid
+  - Click handler wires `onSeek(marker.time)`
+  - Filter pills use `countsByType` for counters
+  - Empty-state returns `null` (no card clutter)
+  - VideoAnalysis imports MarkersPanel
+  - MarkersPanel renders BEFORE ClipsSidebar in the right column (priority)
+  - Correct props passed (`markers`, `onSeek=seekTo`)
+  - Regression: `/api/markers/video/{id}` projection pinned to `{"_id": 0}`
+  - Deploy endpoint advertises 4 new feature flags
+
+### Verified live on preview
+- Seeded test video with 10 sample markers (3 goals, 1 each of shot/save/foul/card/chance/sub/tactical).
+- Playwright screenshot shows: AI EVENTS · 10 header, 8 filter pills with correct counts (All·10, Goals·3, Shots·1, Saves·1, etc), 10 marker rows each with type icon + label + time chip + team + jersey avatar (when present). Goals 1/2/3 visibly stand out in yellow.
+- `GET /api/health/deploy` → `build=iter100` with all 4 new feature flags.
+
+### Files touched
+- `frontend/src/pages/components/MarkersPanel.js` (NEW)
+- `frontend/src/pages/VideoAnalysis.js` (import + mount in right sidebar)
+- `backend/server.py` (BUILD_VERSION → iter100, 4 new feature flags)
+- `backend/tests/test_iter100_markers_panel.py` (NEW — 10 cases)
+
+---
+
+
 ## AI Quality Bump — Goal Detection + Player Recognition (iter99 — May 2026)
 
 User feedback 2026-05-27 after iter98 unblocked async analysis generation: *"I'm not seeing very robust tagging in the video I recently uploaded. none of the three goals are captured, and there is no player recognition."*
