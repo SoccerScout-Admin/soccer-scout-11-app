@@ -63,14 +63,19 @@ def build_analysis_prompts(match: dict, roster_context: str, segment_preamble: s
             f"6. **Recommendations** - Tactical improvements for both teams{roster_context}"
         ),
         "player_performance": (
-            f"Analyze individual player performances in this soccer match between {match['team_home']} and {match['team_away']}. "
+            f"Analyze individual player performances in this soccer match between {match['team_home']} and {match['team_away']}.\n\n"
+            "**IDENTIFY PLAYERS BY THEIR JERSEY NUMBER FIRST.** Throughout the match you will see jersey numbers — "
+            "when you reference a player, ALWAYS open with their number (e.g., '#7 plays in the right wing role...'). "
+            "If the roster below maps that number to a name, prefer the name + number (e.g., '#7 Marcus Lopez').\n\n"
             "For each notable player provide:\n\n"
-            "1. **Standout Performers** - Who were the best players and why?\n"
-            "2. **Key Contributions** - Goals, assists, key passes, tackles\n"
+            "1. **Standout Performers** - Who were the best players (by number/name) and why?\n"
+            "2. **Key Contributions** - Goals, assists, key passes, tackles — tie each to a specific number when possible\n"
             "3. **Work Rate & Positioning** - Movement, runs, defensive contribution\n"
             "4. **Decision Making** - Quality of decisions in key moments\n"
             "5. **Areas for Improvement** - What each key player could do better\n"
-            f"6. **Player Ratings** - Rate key players out of 10 with justification{roster_context}"
+            "6. **Player Ratings** - Rate key players (by number/name) out of 10 with justification\n\n"
+            f"If you cannot make out a jersey number clearly, describe the player by position + appearance "
+            f"(e.g., 'the holding midfielder in the dark kit') rather than guessing.{roster_context}"
         ),
         "highlights": (
             f"Identify and describe ALL key moments and highlights from this soccer match between {match['team_home']} and {match['team_away']}. "
@@ -84,18 +89,33 @@ def build_analysis_prompts(match: dict, roster_context: str, segment_preamble: s
             f"For each moment, indicate the approximate time if visible and rate its significance (1-5 stars).{roster_context}"
         ),
         "timeline_markers": (
-            f"Watch this soccer match video between {match['team_home']} and {match['team_away']}. "
-            "The video contains multiple segments from across the full match at high quality.\n\n"
+            f"You are watching a soccer match between {match['team_home']} (home) and {match['team_away']} (away).\n\n"
             f"{segment_preamble}"
-            "Identify EVERY key event with precise match timestamps (in seconds from the start of the match, NOT from the start of each segment).\n\n"
-            "Return ONLY a JSON array of event objects. Each object must have:\n"
-            "- \"time\": match timestamp in seconds (number, from match start)\n"
-            "- \"type\": one of \"goal\", \"shot\", \"save\", \"foul\", \"card\", \"substitution\", \"tactical\", \"chance\"\n"
-            "- \"label\": short description (max 60 chars)\n"
-            f"- \"team\": which team (\"{match['team_home']}\" or \"{match['team_away']}\" or \"neutral\")\n"
-            "- \"importance\": 1-5 (5 = most important, e.g. goals)\n\n"
-            "Be thorough — identify goals, shots on target, saves, dangerous attacks, key fouls, tactical changes. "
-            "Aim for 15-30 events across the full match.\n\n"
+            "**YOUR JOB:** Identify EVERY key event with precise match timestamps (seconds from match start, NOT from segment start).\n\n"
+            "**GOAL DETECTION — CRITICAL.** Goals are the most important events; do NOT miss them. "
+            "Cues that indicate a goal was just scored:\n"
+            "  • Ball clearly crosses the goal line into the net\n"
+            "  • Net visibly bulges from impact\n"
+            "  • Players celebrate (running, jumping, arms raised, group hug)\n"
+            "  • The defending goalkeeper retrieves the ball from inside the net\n"
+            "  • Play restarts from the CENTER CIRCLE (kickoff after goal)\n"
+            "  • A scoreboard overlay shows an updated score\n"
+            "If you see ANY of these cues, log a `goal` event with importance 5. "
+            "When in doubt between `shot` and `goal`, log BOTH events (one as `shot` for the attempt, one as `goal` for the score if the ball went in).\n\n"
+            "**PLAYER IDENTIFICATION.** For each event, try to identify the involved player(s):\n"
+            "  • If a jersey number is clearly visible, record it in `player_number`\n"
+            "  • If you can match that number to a roster entry below, record `player_name` (use the EXACT name from the roster)\n"
+            "  • If you cannot identify a specific player, leave both fields null\n\n"
+            "**OUTPUT FORMAT.** Return ONLY a JSON array of event objects. Each object MUST have:\n"
+            "  - \"time\": match timestamp in seconds (number, from match start)\n"
+            "  - \"type\": one of \"goal\", \"shot\", \"save\", \"foul\", \"card\", \"substitution\", \"tactical\", \"chance\"\n"
+            "  - \"label\": short description (max 60 chars). For goals, include scorer's name/number if known.\n"
+            f"  - \"team\": which team (\"{match['team_home']}\" or \"{match['team_away']}\" or \"neutral\")\n"
+            "  - \"importance\": 1-5 (5 = goal/red card, 4 = clear chance/save, 3 = shot, 2 = foul, 1 = minor)\n"
+            "  - \"player_number\": jersey number if visible (integer or null)\n"
+            "  - \"player_name\": exact roster name if you can identify the player (string or null)\n\n"
+            "Be THOROUGH — aim for 20-35 events covering every goal, shot, save, key foul, and tactical moment. "
+            "Coverage > brevity: better to log a near-miss as a `chance` than to skip it.\n\n"
             f"Return ONLY the JSON array, no other text.{roster_context}"
         ),
     }
@@ -127,6 +147,16 @@ async def parse_and_store_markers(
         {"video_id": video_id, "user_id": user_id, "auto_generated": True}
     )
     for m in markers_data:
+        # iter99 — capture player_number + player_name when Gemini provides them
+        pn_raw = m.get("player_number")
+        try:
+            player_number = int(pn_raw) if pn_raw is not None and str(pn_raw).strip() != "" else None
+        except (TypeError, ValueError):
+            player_number = None
+        player_name = m.get("player_name")
+        if player_name is not None:
+            player_name = str(player_name)[:60].strip() or None
+
         marker_doc = {
             "id": str(uuid.uuid4()),
             "video_id": video_id,
@@ -137,6 +167,8 @@ async def parse_and_store_markers(
             "label": str(m.get("label", ""))[:100],
             "team": m.get("team", "neutral"),
             "importance": min(5, max(1, int(m.get("importance", 3)))),
+            "player_number": player_number,
+            "player_name": player_name,
             "auto_generated": True,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -543,8 +575,16 @@ async def prepare_video_segments_720p(video: dict) -> tuple:
         if duration <= 0:
             raise Exception("Could not determine video duration")
 
-        segment_duration = 60
-        num_segments = 12
+        # iter99 — Quality bump for goal/player recognition.
+        # Previous: 12 × 60s segments at 480p = 12 min coverage of a 107-min
+        # match. Goals in 10-sec windows could fall entirely between segments.
+        # New: 18 × 45s segments at 720p = 13.5 min coverage, denser sampling
+        # so a 30-sec goal sequence (build-up + score + celebration) is much
+        # less likely to be missed entirely. 720p means jersey numbers go
+        # from ~15px tall (480p) to ~22px (720p) — Gemini Vision can actually
+        # read them now.
+        segment_duration = 45
+        num_segments = 18
         if duration < segment_duration * num_segments:
             num_segments = max(1, int(duration / segment_duration))
 
@@ -554,23 +594,27 @@ async def prepare_video_segments_720p(video: dict) -> tuple:
             start = pct * max(0, duration - segment_duration)
             segment_starts.append(max(0, start))
 
-        logger.info(f"[720p segments] Extracting {num_segments} x {segment_duration}s segments at 480p")
+        logger.info(f"[720p segments] Extracting {num_segments} x {segment_duration}s segments at 720p")
 
         segment_info_parts = []
         for idx, start in enumerate(segment_starts):
             seg_path = tempfile.mktemp(suffix=f"_seg{idx}.mp4", dir="/var/video_chunks")
             seg_cmd = [
                 "ffmpeg", "-y",
+                "-threads", "1",  # iter97 memory guard
+                "-fflags", "+discardcorrupt",
                 "-ss", str(int(start)),
                 "-i", raw_path,
                 "-t", str(segment_duration),
-                "-vf", "scale=-2:480",
+                "-vf", "scale=-2:720",  # iter99 — 480p → 720p (legible jersey numbers)
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
-                "-crf", "30",
-                "-r", "12",
+                "-crf", "28",  # slightly higher quality (was 30) since 720p needs more bits
+                "-r", "15",  # iter99 — 12fps → 15fps (better motion continuity for goal events)
                 "-c:a", "aac",
                 "-b:a", "48k",
+                "-bufsize", "16M",  # iter97 memory guard
+                "-max_muxing_queue_size", "256",  # iter97 memory guard
                 "-movflags", "+faststart",
                 seg_path,
             ]

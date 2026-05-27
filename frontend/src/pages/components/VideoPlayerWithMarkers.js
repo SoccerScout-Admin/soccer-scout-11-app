@@ -52,11 +52,17 @@ const VideoPlayerWithMarkers = forwardRef(function VideoPlayerWithMarkers(
               const pct = (m.time / videoDuration) * 100;
               if (pct < 0 || pct > 100) return null;
               const color = MARKER_COLORS[m.type] || '#888';
+              // iter99 — surface player attribution in the hover tooltip
+              const playerTag = m.player_name
+                ? ` — ${m.player_number ? `#${m.player_number} ` : ''}${m.player_name}`
+                : m.player_number
+                  ? ` — #${m.player_number}`
+                  : '';
               return (
                 <button
                   key={m.id}
                   data-testid={`marker-${m.id}`}
-                  title={`${formatTime(m.time)} — ${m.label}`}
+                  title={`${formatTime(m.time)} — ${m.label}${playerTag}`}
                   onClick={() => onSeek(m.time)}
                   style={{ left: `${pct}%`, backgroundColor: color }}
                   className="absolute top-0 w-2.5 h-5 -translate-x-1/2 pointer-events-auto cursor-pointer hover:scale-y-125 transition-transform opacity-90 hover:opacity-100"

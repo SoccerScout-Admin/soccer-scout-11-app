@@ -311,7 +311,10 @@ def test_deploy_endpoint_advertises_iter98_features():
             r = await c.get("/api/health/deploy")
             assert r.status_code == 200
             body = r.json()
-            assert body["build"] == "iter98"
+            # forward-compatible: build must be at least iter98
+            import re
+            m = re.match(r'iter(\d+)', body["build"] or "")
+            assert m and int(m.group(1)) >= 98, f"build must be >= iter98, got {body['build']}"
             features = set(body["features"])
             assert "async-analysis-generate-202" in features
             assert "async-analysis-generate-trimmed-202" in features

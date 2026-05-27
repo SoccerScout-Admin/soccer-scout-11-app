@@ -1,6 +1,70 @@
 # Soccer Scout - Product Requirements Document
 
 
+## AI Quality Bump — Goal Detection + Player Recognition (iter99 — May 2026)
+
+User feedback 2026-05-27 after iter98 unblocked async analysis generation: *"I'm not seeing very robust tagging in the video I recently uploaded. none of the three goals are captured, and there is no player recognition."*
+
+### Root causes identified
+- **Coverage gap.** 12 × 60s segments = 12 min sampling of a 107-min match. A 30-sec goal sequence could fall entirely between segments → 25%+ chance of missing each goal completely.
+- **Resolution gap.** 480p means jersey numbers are ~15 px tall. Gemini Vision can NOT read them reliably at that scale (we mislabeled the function `prepare_video_segments_720p` but actually scaled to 480p).
+- **Prompt gap.** Marker prompt said "be thorough" but never told Gemini WHAT visual cues to look for (net bulge, celebrations, kickoff restart) or asked for player attribution.
+- **Schema gap.** Markers had no `player_number` or `player_name` fields, so even if Gemini identified players, we couldn't surface it.
+
+### Five fixes shipped
+
+**1. Denser sampling — 18 × 45s instead of 12 × 60s** (`services/processing.py::prepare_video_segments_720p`). 13.5 min of coverage with shorter windows → much less likely for any goal sequence to fall entirely between segments. 50% more time-windows covered without inflating the total upload size meaningfully.
+
+**2. Actual 720p resolution** (`scale=-2:720` instead of `-2:480`). Jersey numbers go from ~15 px tall → ~22 px tall — Gemini can actually read them now. CRF tightened 30 → 28 to compensate for the resolution bump (still small files). Frame rate bumped 12 → 15 fps for better motion continuity around goal moments. iter97 memory guards (`-threads 1`, `-bufsize 16M`, `-max_muxing_queue_size 256`, `+discardcorrupt`) preserved so the OOM cycle doesn't return.
+
+**3. Stronger timeline_markers prompt** (`build_analysis_prompts`). Now opens with an explicit **GOAL DETECTION — CRITICAL** section listing the 6 visual cues that indicate a goal was just scored: ball crossing the goal line, net bulge, celebrations, GK retrieves from net, restart from center circle (kickoff after goal), scoreboard change. Calls for 20-35 events (was 15-30). Tells Gemini "when in doubt between shot and goal, log BOTH" so we never lose attempts.
+
+**4. Player attribution fields on markers.** Prompt now requires every event object to include `player_number` (visible jersey number, int or null) and `player_name` (exact roster name if mappable, string or null). `parse_and_store_markers` coerces strings to ints, strips whitespace, tolerates legacy responses (backwards compatible).
+
+**5. Player-first directive in `player_performance` prompt.** Opens with "**IDENTIFY PLAYERS BY THEIR JERSEY NUMBER FIRST**" and explicitly tells Gemini to lead every reference with the number (e.g., "#7 plays in the right wing role..."). If a number maps to the roster context, prefer "#7 Marcus Lopez" over the number alone. Falls back to position + appearance descriptors when no number is visible — no guessing.
+
+### Frontend
+`pages/components/VideoPlayerWithMarkers.js` marker tooltip now includes player attribution when present:
+- `12:34 — Header from corner — #9 Striker Jones` (both fields)
+- `12:34 — Header from corner — #9` (number only)
+- `12:34 — Header from corner` (no attribution, legacy)
+
+### Tests (13 new, 72/72 across iter75 + iter93→99)
+- `test_iter99_ai_quality_bump.py`:
+  - Segment count/duration assertions (18 × 45s, old 12 × 60s removed)
+  - `scale=-2:720` present, old `scale=-2:480` removed
+  - `-r 15` present, old `-r 12` removed
+  - iter97 memory guards preserved (`-threads 1`, etc.)
+  - Marker prompt contains goal-detection cues (goal line, celebrations, kickoff, center circle, scoreboard)
+  - Marker prompt requires `player_number` + `player_name` output fields
+  - Marker prompt asks for 20-35 events
+  - Player performance prompt emphasizes "jersey number FIRST" + ALWAYS directive
+  - Parser persists `player_number` + `player_name` (with int coercion + name trimming)
+  - Parser tolerates missing fields (backwards compat — legacy responses parse fine, fields become null)
+  - Parser handles garbage `player_number` (coerces to null)
+  - Frontend tooltip references both fields
+  - Deploy endpoint advertises iter99 feature flags
+
+### Verified live on preview
+- `GET /api/health/deploy` → `build=iter99` with all 5 new feature flags.
+- Live prompt render confirms structure: GOAL DETECTION section with 6 cues, PLAYER IDENTIFICATION section, OUTPUT FORMAT with the 2 new fields, player_performance opens with the jersey-first directive.
+
+### Files touched
+- `backend/services/processing.py` (segment params, ffmpeg scale/fps/CRF + memory guards, marker prompt, player_performance prompt, parser fields + coercion)
+- `backend/server.py` (BUILD_VERSION → iter99, 5 new feature flags)
+- `frontend/src/pages/components/VideoPlayerWithMarkers.js` (tooltip includes player attribution)
+- `backend/tests/test_iter99_ai_quality_bump.py` (NEW — 13 cases)
+- `backend/tests/test_iter98_async_analysis_generation.py` (loosened build-version assertion forward-compat — pattern from iter97)
+
+### Expected impact on the affected video
+Once iter99 deploys to production and the user clicks "Regenerate" on timeline markers:
+- 13.5 min of 720p coverage vs the previous 12 min of 480p (50% more pixel-budget for Gemini to work with).
+- Explicit goal cues prompt — should catch goals via celebrations + restart-from-center even when the ball-in-net moment isn't in a sampled segment.
+- Player numbers should appear in tooltips on hover for goals/shots where Gemini can resolve the jersey.
+
+---
+
+
 ## Async Analysis Generation — Dodge the Cloudflare 100s Edge Timeout (iter98 — May 2026)
 
 Real production bug 2026-05-27, video `f0673397` (1.04 GB, post-iter97 upload):
