@@ -68,18 +68,23 @@ const AdminStorageCleanup = () => {
   const [digestOptOut, setDigestOptOut] = useState(false);
   const [digestBusy, setDigestBusy] = useState(false);
   const [digestResult, setDigestResult] = useState(null);
+  // iter105 — pod memory chip + escalation
+  const [memory, setMemory] = useState(null);
+  const [podEmailCopied, setPodEmailCopied] = useState(false);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [r, a, pref] = await Promise.all([
+      const [r, a, pref, mem] = await Promise.all([
         axios.get(`${API}/admin/storage-cleanup/report`, { headers: getAuthHeader() }),
         axios.get(`${API}/admin/storage-cleanup/audit-history?days=90`, { headers: getAuthHeader() }),
         axios.get(`${API}/me/preferences/storage-digest`, { headers: getAuthHeader() }),
+        axios.get(`${API}/health/memory`).catch(() => ({ data: null })),
       ]);
       setReport(r.data);
       setAudits(a.data.audits || []);
       setDigestOptOut(!!pref.data.opt_out);
+      setMemory(mem.data);
     } catch (err) {
       console.error('Failed to load storage cleanup data', err);
     } finally {
@@ -136,6 +141,37 @@ const AdminStorageCleanup = () => {
     } finally {
       setDigestBusy(false);
     }
+  };
+
+  // iter105 — One-click "Email Support" for pod-bump escalation
+  const handleCopyPodBumpEmail = async () => {
+    if (!memory) return;
+    const subject = `Pod memory bump request — cgroup still at ${memory.cgroup_limit_gb} GB`;
+    const body = `Hello Emergent Support team,
+
+Following up on a previous ticket: I was told my Soccer Scout production pod would be bumped from 4 GB to 20 GB so video processing for full-match game film can complete without OOM cycling.
+
+The bump has not landed. Here is the live probe from production (https://soccerscout11.com/api/health/memory):
+
+  cgroup_limit_gb:  ${memory.cgroup_limit_gb}
+  cgroup_path:      ${memory.cgroup_path}
+  process_rss_gb:   ${memory.process_rss_gb}
+  host_total_gb:    ${memory.host_total_gb}
+  verdict:          ${memory.verdict}
+
+Concrete impact: 1+ GB compressed game-film videos (1080p30 source, HandBrake-compressed to the recommended preset) trigger the iter97 pod-OOM-cycle detector within seconds because ffmpeg + Python + Motor + FastAPI together exceed the 4 GB cgroup limit during segment encoding. Users see the iter97 yellow "falling back to lighter encoding" banner but processing never completes meaningfully because the safe tier (480p / 12fps) is the only one that fits in 4 GB.
+
+The host has ${memory.host_total_gb} GB of memory available, so this is purely a cgroup-limit adjustment on your side. Could you please bump the cgroup limit on the Soccer Scout production pod (soccerscout11.com) to 20 GB as previously committed?
+
+Thanks,
+`;
+    const mailto = `mailto:support@emergent.sh?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    try {
+      await navigator.clipboard.writeText(`To: support@emergent.sh\nSubject: ${subject}\n\n${body}`);
+      setPodEmailCopied(true);
+      setTimeout(() => setPodEmailCopied(false), 3000);
+    } catch { /* clipboard unavailable; mailto still works */ }
+    window.location.href = mailto;
   };
 
 
@@ -298,6 +334,60 @@ Thank you,
                 <p className="text-xs text-[#EF4444] mt-3">Error: {markResult.error}</p>
               )}
             </section>
+
+            {/* iter105 — Pod memory chip + escalation */}
+            {memory && (
+              <section data-testid="pod-memory-section" className="bg-[#141414] border border-white/10 p-5 mb-6">
+                <div className="flex items-center justify-between gap-4 flex-wrap">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                      style={{
+                        backgroundColor:
+                          memory.verdict === '20gb-class-pod-confirmed' ? '#10B981'
+                          : memory.verdict === '8gb-class-pod' ? '#FBBF24'
+                          : '#EF4444',
+                      }}
+                    />
+                    <div>
+                      <p className="text-xs font-bold tracking-[0.2em] uppercase text-[#E5E5E5]">
+                        Encoder Pod Memory
+                      </p>
+                      <p className="text-[11px] text-[#A3A3A3] mt-0.5">
+                        cgroup: <span data-testid="pod-memory-cgroup-gb" className="text-white font-semibold tabular-nums">{memory.cgroup_limit_gb} GB</span>
+                        {' · '}using <span className="tabular-nums">{memory.process_rss_gb} GB</span>
+                        {' · '}host has <span className="tabular-nums">{memory.host_total_gb} GB</span>
+                      </p>
+                    </div>
+                  </div>
+                  {memory.verdict === '4gb-or-smaller-pod-needs-support-bump' && (
+                    <button
+                      data-testid="pod-bump-email-btn"
+                      onClick={handleCopyPodBumpEmail}
+                      className="flex items-center gap-2 bg-[#EF4444] text-white font-semibold px-4 py-2 hover:bg-[#DC2626] transition-colors text-xs"
+                    >
+                      {podEmailCopied ? <CheckCircle size={14} weight="bold" /> : <Copy size={14} weight="bold" />}
+                      {podEmailCopied ? 'Copied + mail client opened' : 'Request pod bump from support'}
+                    </button>
+                  )}
+                </div>
+                {memory.verdict === '4gb-or-smaller-pod-needs-support-bump' && (
+                  <p className="text-[11px] text-[#EF4444] mt-3 leading-relaxed">
+                    <strong>Your pod is memory-constrained.</strong> 1+ GB game-film videos can't process the full iter101 quality tier (720p + scdet) because total encoder memory exceeds the 4 GB cgroup limit. The iter103 fallback to 480p sampling works but produces lower-quality goal/jersey detection. Click the button above to email Support — the request body is pre-filled with the live probe evidence.
+                  </p>
+                )}
+                {memory.verdict === '8gb-class-pod' && (
+                  <p className="text-[11px] text-[#FBBF24] mt-3 leading-relaxed">
+                    <strong>Mid-tier pod.</strong> Files up to ~1.5 GB should complete at full iter101 quality. Anything larger falls back to the iter103 safe tier (480p).
+                  </p>
+                )}
+                {memory.verdict === '20gb-class-pod-confirmed' && (
+                  <p className="text-[11px] text-[#10B981] mt-3 leading-relaxed">
+                    <strong>Full-quality tier confirmed.</strong> All file sizes will run the full iter101 pipeline (720p + scene-cut sampling).
+                  </p>
+                )}
+              </section>
+            )}
 
             {/* iter96 — Weekly digest email preferences */}
             <section data-testid="digest-preferences-section" className="bg-[#141414] border border-white/10 p-5 mb-6">

@@ -1,6 +1,65 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Pod Memory Chip + Support Escalation UI (iter105 — May 2026)
+
+User asked 2026-05-28: *"Last week, support was supposed to bump the app from 4GB to 20 GB. Did that not happen?"*
+
+iter104 shipped a probe endpoint and the production result was:
+```
+cgroup_limit_gb: 4
+verdict: 4gb-or-smaller-pod-needs-support-bump
+host_total_gb: 62.8
+```
+
+**Confirmed: the bump did not land** — host has 62.8 GB available, but the cgroup-limit ticket on Emergent's side is still pinned at 4 GB. iter105 turns this diagnostic into a UI surface that makes the escalation a one-click action.
+
+### Frontend
+- Storage Cleanup admin page (`/admin/storage-cleanup`) now fetches `/api/health/memory` alongside the iter94/96 data and renders a **pod memory chip** above the digest section:
+  - **Status dot** (green / yellow / red) matched to the verdict
+  - `cgroup: 4 GB · using 0.24 GB · host has 62.8 GB` summary line
+  - Verdict-specific explanatory copy:
+    - `20gb-class-pod-confirmed` → green ✓ "Full-quality tier confirmed. All file sizes will run the full iter101 pipeline."
+    - `8gb-class-pod` → yellow "Mid-tier pod. Files up to ~1.5 GB should complete at full iter101 quality."
+    - `4gb-or-smaller-pod-needs-support-bump` → red "Your pod is memory-constrained. 1+ GB game-film videos can't process the full iter101 quality tier..."
+- **"Request pod bump from support" button** renders ONLY on the 4 GB verdict (so users on healthy pods don't see a misleading "something is wrong" button):
+  - Opens a `mailto:support@emergent.sh` with the exact JSON probe output baked into the body — `cgroup_limit_gb`, `process_rss_gb`, `host_total_gb`, `verdict`
+  - Mentions the previous ticket commitment ("told my pod would be bumped from 4 GB to 20 GB")
+  - References the host's available memory (62.8 GB) to make clear this is purely a cgroup-limit setting on their side
+  - Falls back to `navigator.clipboard.writeText` for webmail users whose default mailto handler isn't set
+
+### Backend
+**Zero changes** — iter104's `/api/health/memory` endpoint is the data source. iter105 is purely a UI surface for the probe.
+
+### Tests (8 new, all backend + frontend grep guards)
+- `test_iter105_pod_memory_chip.py`:
+  - `/api/health/memory` returns all required fields + valid verdict bucket
+  - Probe is auth-free (so support / health monitors can hit it without credentials)
+  - Storage Cleanup page renders the chip section with required testids
+  - Verdict-specific copy + distinct colors per state (green/yellow/red)
+  - Pod-bump button is CONDITIONAL on the 4 GB verdict (not always-rendered)
+  - Email body includes the actual probe data (not generic "please bump my pod")
+  - Uses both mailto: AND clipboard fallback for webmail compatibility
+  - Deploy endpoint advertises 3 new feature flags
+
+### Verified live on preview
+- Preview pod shows the YELLOW (`8gb-class-pod`) variant with cgroup chip and mid-tier copy
+- `GET /api/health/deploy` → `build=iter105` with all 3 new feature flags
+
+### Files touched
+- `frontend/src/pages/AdminStorageCleanup.js` (`memory` state, `handleCopyPodBumpEmail` handler, pod-memory section above digest section)
+- `backend/server.py` (BUILD_VERSION → iter105, 3 new feature flags)
+- `backend/tests/test_iter105_pod_memory_chip.py` (NEW — 8 cases)
+
+### Outcome path for the affected user
+1. Redeploy iter105 → visit `/admin/storage-cleanup` on production
+2. The chip will be **red** with the red "Request pod bump from support" button
+3. Click it → mailto: opens with the pre-filled escalation including the exact 4 GB probe JSON + the 62.8 GB host total → send to support@emergent.sh
+4. Once support actually lands the 20 GB bump → reload the page → chip flips to green → iter106 can raise the iter103 0.8 GB threshold so 1+ GB files hit the full iter101 quality tier
+
+---
+
+
 ## Segment-Encoder Tier-Down for >800 MB Files (iter103 — May 2026)
 
 Production bug 2026-05-28: user re-uploaded the LFC 2007B vs AYSO video (1.04 GB / 1:47:48 / pre-compressed via HandBrake's recommended preset) on iter102 → yellow cycling banner fires within seconds → no processing progress.

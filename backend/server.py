@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter104"
+BUILD_VERSION = "iter105"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -696,6 +696,10 @@ SHIPPED_FEATURES = [
     "cycling-banner-blameless-messaging",
     # iter104 — memory probe endpoint to verify support's pod-size bump
     "health-memory-cgroup-probe",
+    # iter105 — pod memory chip + one-click support escalation
+    "pod-memory-chip-storage-cleanup-page",
+    "pod-bump-support-email-draft",
+    "pod-verdict-color-coded-status",
 ]
 
 def _get_build_sha() -> str:
