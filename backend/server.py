@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter103"
+BUILD_VERSION = "iter104"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -694,6 +694,8 @@ SHIPPED_FEATURES = [
     "segments-tier-down-800mb-480p",
     "segments-skip-scdet-on-heavy-files",
     "cycling-banner-blameless-messaging",
+    # iter104 — memory probe endpoint to verify support's pod-size bump
+    "health-memory-cgroup-probe",
 ]
 
 def _get_build_sha() -> str:
@@ -713,6 +715,72 @@ def _get_build_sha() -> str:
 
 BUILD_SHA = _get_build_sha()
 BUILT_AT = datetime.now(timezone.utc).isoformat()
+
+@api_router.get("/health/memory")
+async def memory_health():
+    """iter104 — Expose the pod's actual cgroup memory limit + current RSS
+    so we can confirm whether Emergent Support's "bump to 20 GB" actually
+    landed in production. If production reports 4 GB instead of 20 GB, the
+    support ticket didn't ship — user needs to escalate."""
+    cgroup_limit_bytes = None
+    cgroup_path_used = None
+    # cgroup v2 (modern containers)
+    for candidate in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            with open(candidate) as f:
+                raw = f.read().strip()
+            if raw and raw != "max":
+                cgroup_limit_bytes = int(raw)
+                cgroup_path_used = candidate
+                break
+        except (OSError, ValueError):
+            continue
+
+    # Current RSS of THIS process
+    rss_bytes = None
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss_bytes = int(line.split()[1]) * 1024
+                    break
+    except OSError:
+        pass
+
+    # Host total memory for context
+    host_total_bytes = None
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    host_total_bytes = int(line.split()[1]) * 1024
+                    break
+    except OSError:
+        pass
+
+    def _gb(n):
+        return round(n / (1024 ** 3), 2) if n else None
+
+    # The iter97/iter103 tier thresholds depend on this. Surface them so
+    # the user/admin can see whether the safe-tier logic actually needs to
+    # fire on their pod size.
+    return {
+        "cgroup_limit_bytes": cgroup_limit_bytes,
+        "cgroup_limit_gb": _gb(cgroup_limit_bytes),
+        "cgroup_path": cgroup_path_used,
+        "process_rss_bytes": rss_bytes,
+        "process_rss_gb": _gb(rss_bytes),
+        "host_total_bytes": host_total_bytes,
+        "host_total_gb": _gb(host_total_bytes),
+        "iter103_heavy_file_threshold_gb": 0.8,
+        "verdict": (
+            "20gb-class-pod-confirmed" if cgroup_limit_bytes and cgroup_limit_bytes >= 18 * 1024 ** 3
+            else "8gb-class-pod" if cgroup_limit_bytes and cgroup_limit_bytes >= 7 * 1024 ** 3
+            else "4gb-or-smaller-pod-needs-support-bump" if cgroup_limit_bytes
+            else "unknown"
+        ),
+    }
+
 
 @api_router.get("/health")
 async def health_check():
