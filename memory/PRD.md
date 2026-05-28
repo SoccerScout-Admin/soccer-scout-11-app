@@ -1,6 +1,68 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Manual Player Tagging on AI Markers — Hudl-Style (iter102 — May 2026)
+
+User request 2026-05-28: *"Can you wire the next iteration to let the user identify players in key highlights that the AI can't pick up? Similar to how Hudl allows a user to identify players that it can't figure out?"*
+
+Closes the loop with iter99-101: AI does its best on goal/player detection, and when it can't read a jersey number the user can now manually attribute the player in 2 clicks.
+
+### Backend
+- **`PATCH /api/markers/{marker_id}`** (`routes/analysis.py`):
+  - Body `MarkerTagInput`: optional `player_number`, `player_name`, `clear_player`, `label`, `team`, `type`, `importance`. All optional — only provided fields are updated.
+  - `clear_player: true` explicitly nulls both attribution fields (used by the "Clear AI tag" UI button).
+  - Validates `type` against the 8 Gemini-emitted types; clamps `importance` to 1-5; trims `player_name` to 60 chars; coerces `player_number` to int.
+  - On every successful update sets **`manually_tagged: true`** + **`tagged_at: <iso>`** so the UI can render a green ✓ provenance badge distinguishing human edits from AI output.
+  - 404s for cross-user marker IDs (no leak that it exists).
+  - 400 if no fields provided (prevents accidentally stamping `manually_tagged` without an actual edit).
+- **`DELETE /api/markers/{marker_id}`** — removes a marker entirely. Cross-user safe.
+
+### Frontend
+- **New `pages/components/TagPlayerModal.js`** — opens when the user clicks the edit pencil on any marker row.
+  - Loads the match roster via `GET /api/players/match/{match_id}`.
+  - Defaults to filtering by the marker's team; "Show both teams" checkbox toggles to the full roster.
+  - Search box matches name, jersey number, OR position substring.
+  - Each player row shows: 36px circular number avatar (yellow border), name, "POSITION · TEAM" subtitle. Green checkmark when the row matches the marker's current attribution.
+  - Click a player → calls PATCH → propagates the refreshed marker up via `onMarkerUpdated` → modal closes.
+  - Footer actions: "Clear AI tag" (only when current attribution exists), red "Delete marker" with confirm prompt.
+  - Safety: roster list capped at 60 visible rows so a 200-player import can't lock the DOM.
+- **`MarkersPanel` updates**:
+  - Each marker row gets a small **edit pencil button** on the right. Always visible (in yellow) when no AI attribution exists; opacity-0 → 100 on row hover when AI already tagged (less visual noise on auto-curated rows).
+  - Tiny green ✓ next to the time chip when `manually_tagged === true` so the user can scan which rows are AI vs human-curated.
+  - The `<TagPlayerModal>` is mounted inside the panel; `editingMarker` state controls open/close.
+- **VideoAnalysis wiring**: passes `matchId={match?.id}`, plus `onMarkerUpdated` and `onMarkerDeleted` handlers that splice/filter the local `markers` state (no full refetch needed for snappy UX).
+
+### Tests (19 new, 113/113 across iter75 + iter93→102)
+- `test_iter102_manual_player_tagging.py`:
+  - PATCH: sets attribution + `manually_tagged: true` + `tagged_at` provenance fields
+  - PATCH: int-coerces `player_number` strings, trims whitespace on names
+  - PATCH: `clear_player: true` nulls both fields but still stamps `manually_tagged`
+  - PATCH: can correct label/team/type/importance
+  - PATCH: rejects invalid type, clamps importance to 1-5
+  - PATCH: empty body → 400 (no accidental no-op marking)
+  - PATCH: auth + 404 boundaries
+  - PATCH: cross-user 404 (User B cannot touch User A's markers)
+  - DELETE: removes the row, returns `{deleted: true, id}`
+  - DELETE: auth + cross-user isolation
+  - Frontend grep guards: TagPlayerModal exists with required testids, uses `/players/match/`, calls PATCH + DELETE, MarkersPanel has edit button + manual badge + modal mount, VideoAnalysis wires all 3 new props
+  - Deploy endpoint advertises 5 new feature flags
+
+### Verified live on preview
+- Playwright screenshot: clicked the edit pencil on a marker row → modal opens centered with "TAG PLAYER · Header from corner · 3:54 · LFC" header, search bar, "Show both teams" toggle, 3 roster players visible (#9 Marcus Lopez ST·LFC, #7 Jamal Carter RW·LFC, #11 Tyler Brooks LW·LFC), red "Delete Marker" footer action. Background MarkersPanel still shows all 10 markers with filter pills.
+- `GET /api/health/deploy` → `build=iter102` with all 5 new feature flags.
+
+### Files touched
+- `backend/routes/analysis.py` (MarkerTagInput model, PATCH + DELETE endpoints)
+- `backend/server.py` (BUILD_VERSION → iter102, 5 new feature flags)
+- `frontend/src/pages/components/TagPlayerModal.js` (NEW)
+- `frontend/src/pages/components/MarkersPanel.js` (edit pencil button, manual ✓ badge, modal mount, restructure MarkerRow from a button to a div with nested seek button + action buttons)
+- `frontend/src/pages/VideoAnalysis.js` (matchId + onMarkerUpdated + onMarkerDeleted wiring)
+- `backend/tests/test_iter102_manual_player_tagging.py` (NEW — 19 cases)
+- `backend/tests/test_iter100_markers_panel.py` (loosened forward-compat for the new props)
+
+---
+
+
 ## Scene-Cut-Biased Segment Selection + Jersey-OCR Tightening (iter101 — May 2026)
 
 User feedback 2026-05-28 after deploying iter99/100 to production: *"Not generating many clips. I've reprocessed a few times and it only has 11 (no goals) and no player data is generating."*

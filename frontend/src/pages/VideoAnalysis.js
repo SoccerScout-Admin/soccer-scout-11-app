@@ -564,7 +564,13 @@ const VideoAnalysis = () => {
 
           {/* Right Sidebar: AI Events, Clips, Annotations */}
           <div className="lg:col-span-4 space-y-4">
-            <MarkersPanel markers={markers} onSeek={seekTo} />
+            <MarkersPanel
+              markers={markers}
+              onSeek={seekTo}
+              matchId={match?.id}
+              onMarkerUpdated={(updated) => setMarkers((prev) => prev.map((m) => m.id === updated.id ? updated : m))}
+              onMarkerDeleted={(id) => setMarkers((prev) => prev.filter((m) => m.id !== id))}
+            />
             <ClipsSidebar
               clips={clips}
               players={players}

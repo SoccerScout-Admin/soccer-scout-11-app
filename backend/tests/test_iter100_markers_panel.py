@@ -100,8 +100,12 @@ def test_video_analysis_imports_markers_panel():
 
 def test_video_analysis_passes_seek_to_markers_panel():
     src = open("/app/frontend/src/pages/VideoAnalysis.js").read()
-    # The seek handler must be wired through so clicks scrub the video
-    assert "<MarkersPanel markers={markers} onSeek={seekTo} />" in src
+    # The seek handler must be wired through so clicks scrub the video.
+    # Forward-compatible: only checks for the required props, not exact JSX
+    # layout (iter102 added matchId + handlers).
+    assert "<MarkersPanel" in src
+    assert "markers={markers}" in src
+    assert "onSeek={seekTo}" in src
 
 
 # ---------------------------------------------------------------------------

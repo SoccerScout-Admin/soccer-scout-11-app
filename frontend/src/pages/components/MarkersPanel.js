@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { SoccerBall, Target, Hand, Warning, Flag, ArrowsClockwise, Lightning, Eye } from '@phosphor-icons/react';
+import { SoccerBall, Target, Hand, Warning, Flag, ArrowsClockwise, Lightning, Eye, PencilSimple, CheckCircle } from '@phosphor-icons/react';
+import TagPlayerModal from './TagPlayerModal';
 
 /**
  * iter100 — Rich Markers Panel.
@@ -31,33 +32,48 @@ const formatTime = (s) => {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 };
 
-const MarkerRow = ({ marker, onSeek }) => {
+const MarkerRow = ({ marker, onSeek, onEdit }) => {
   const meta = TYPE_META[marker.type] || TYPE_META.tactical;
   const Icon = meta.icon;
+  const hasAttribution = !!marker.player_number || !!marker.player_name;
   return (
-    <button
+    <div
       data-testid={`marker-row-${marker.id}`}
-      onClick={() => onSeek(marker.time)}
-      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-white/[0.04] transition-colors text-left border-l-2 group"
+      className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-white/[0.04] transition-colors border-l-2 group"
       style={{ borderLeftColor: meta.color }}
     >
-      <div
-        className="w-7 h-7 flex items-center justify-center flex-shrink-0 rounded-sm"
-        style={{ backgroundColor: `${meta.color}20`, color: meta.color }}
+      <button
+        data-testid={`marker-row-seek-${marker.id}`}
+        onClick={() => onSeek(marker.time)}
+        className="flex items-center gap-3 flex-1 min-w-0 text-left"
       >
-        <Icon size={16} weight="bold" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-xs text-white truncate group-hover:text-[#7DD3FC] transition-colors">
-          {marker.label || meta.label}
-        </p>
-        <div className="flex items-center gap-2 mt-0.5">
-          <span className="text-[10px] tabular-nums text-[#888]">{formatTime(marker.time)}</span>
-          {marker.team && marker.team !== 'neutral' && (
-            <span className="text-[10px] text-[#666] truncate max-w-[120px]">· {marker.team}</span>
-          )}
+        <div
+          className="w-7 h-7 flex items-center justify-center flex-shrink-0 rounded-sm"
+          style={{ backgroundColor: `${meta.color}20`, color: meta.color }}
+        >
+          <Icon size={16} weight="bold" />
         </div>
-      </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-white truncate group-hover:text-[#7DD3FC] transition-colors">
+            {marker.label || meta.label}
+          </p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-[10px] tabular-nums text-[#888]">{formatTime(marker.time)}</span>
+            {marker.team && marker.team !== 'neutral' && (
+              <span className="text-[10px] text-[#666] truncate max-w-[110px]">· {marker.team}</span>
+            )}
+            {marker.manually_tagged && (
+              <CheckCircle
+                size={11}
+                weight="fill"
+                className="text-[#10B981] flex-shrink-0"
+                title="Manually tagged by you"
+                data-testid={`marker-row-manual-badge-${marker.id}`}
+              />
+            )}
+          </div>
+        </div>
+      </button>
       {/* iter99 jersey avatar */}
       {marker.player_number && (
         <div
@@ -74,12 +90,27 @@ const MarkerRow = ({ marker, onSeek }) => {
           {marker.player_name}
         </span>
       )}
-    </button>
+      {/* iter102 — manual tag button */}
+      <button
+        data-testid={`marker-row-edit-${marker.id}`}
+        onClick={() => onEdit(marker)}
+        className={`w-7 h-7 flex items-center justify-center flex-shrink-0 transition-colors ${
+          hasAttribution
+            ? 'opacity-0 group-hover:opacity-100 text-[#666] hover:text-white'
+            : 'text-[#FBBF24] hover:bg-[#FBBF24]/10'
+        }`}
+        title={hasAttribution ? 'Re-tag player' : 'Tag the player in this event'}
+        aria-label="Tag player"
+      >
+        <PencilSimple size={13} weight="bold" />
+      </button>
+    </div>
   );
 };
 
-const MarkersPanel = ({ markers, onSeek }) => {
+const MarkersPanel = ({ markers, onSeek, matchId, onMarkerUpdated, onMarkerDeleted }) => {
   const [filter, setFilter] = useState(ALL_FILTER);
+  const [editingMarker, setEditingMarker] = useState(null);
 
   // Sort: by time asc; group counts for the filter pills
   const sorted = useMemo(
@@ -154,7 +185,7 @@ const MarkersPanel = ({ markers, onSeek }) => {
       {/* Marker rows */}
       <div className="max-h-[480px] overflow-y-auto divide-y divide-white/5">
         {filtered.map((m) => (
-          <MarkerRow key={m.id} marker={m} onSeek={onSeek} />
+          <MarkerRow key={m.id} marker={m} onSeek={onSeek} onEdit={setEditingMarker} />
         ))}
         {filtered.length === 0 && (
           <p className="text-xs text-[#666] px-4 py-6 text-center">
@@ -162,6 +193,16 @@ const MarkersPanel = ({ markers, onSeek }) => {
           </p>
         )}
       </div>
+
+      {/* iter102 — Tag-player modal */}
+      <TagPlayerModal
+        marker={editingMarker}
+        matchId={matchId}
+        isOpen={!!editingMarker}
+        onClose={() => setEditingMarker(null)}
+        onMarkerUpdated={onMarkerUpdated}
+        onMarkerDeleted={onMarkerDeleted}
+      />
     </div>
   );
 };
