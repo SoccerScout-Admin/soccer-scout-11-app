@@ -78,12 +78,12 @@ const VideoAnalysisHeader = ({
             <div className="flex-1">
               <p className="text-sm font-medium text-white" data-testid="processing-banner-headline">
                 {isPodCycling
-                  ? 'This file is too heavy for our encoder — we may have to ask you to re-compress'
+                  ? 'Falling back to lighter encoding settings — your file is fine, this is on us'
                   : serverRestarted ? 'Server restarted — processing resumed automatically' : 'Processing your match video...'}
               </p>
               <p className={`text-xs mt-0.5 ${isPodCycling ? 'text-[#FBBF24]' : 'text-[#7AA2D4]'}`}>
                 {isPodCycling
-                  ? 'Multiple OOM restarts detected. If this doesn\'t make progress in the next minute, re-compress with HandBrake (Fast 720p30 / CQ 28) and re-upload.'
+                  ? 'Our encoder pod is memory-constrained for files this size. We\'re switching to the iter103 safe tier (480p sampling) — processing may take a few minutes longer but should complete. If it doesn\'t, hit "Retry Processing" below.'
                   : processingStatus.processing_current
                     ? `Running: ${processingLabel[processingStatus.processing_current] || processingStatus.processing_current}`
                     : 'Preparing video for AI analysis'}

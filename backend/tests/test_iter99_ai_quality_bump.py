@@ -58,20 +58,29 @@ def test_segments_count_and_duration_bumped():
 # ---------------------------------------------------------------------------
 
 def test_segments_scale_bumped_to_720p():
+    """iter99: 720p variant must be present. iter103 added a 480p fallback
+    for >800 MB files — verify BOTH tiers are wired (not the old hardcoded
+    480p-only)."""
     src = open("/app/backend/services/processing.py").read()
     fn_start = src.find("async def prepare_video_segments_720p")
     body = src[fn_start:fn_start + 8000]
-    assert '"scale=-2:720"' in body, "segment scale must be 720p"
-    assert '"scale=-2:480"' not in body, "old 480p scale must be removed"
+    # iter99: 720p tier present (used for ≤800 MB files post-iter103)
+    assert '"scale=-2:720"' in body, "720p tier (light files) must be wired"
+    # iter103: 480p tier also present (used for >800 MB files)
+    assert '"scale=-2:480"' in body, "iter103 480p heavy-file fallback must be wired"
 
 
 def test_segments_fps_bumped_to_15():
+    """iter99: 15fps for light files. iter103: 12fps fallback for heavy files."""
     src = open("/app/backend/services/processing.py").read()
     fn_start = src.find("async def prepare_video_segments_720p")
     body = src[fn_start:fn_start + 8000]
-    # Look for the -r argument inside the seg_cmd
-    assert '"-r", "15"' in body
-    assert '"-r", "12"' not in body
+    # Either branch must use 15fps
+    assert 'seg_fps = "15"' in body or '"-r", "15"' in body
+    # And the seg_cmd uses the adaptive variable, not a hardcoded value
+    seg_cmd_idx = body.find("seg_cmd = [")
+    seg_cmd_block = body[seg_cmd_idx:seg_cmd_idx + 1500]
+    assert '"-r", seg_fps' in seg_cmd_block or '"-r", "15"' in seg_cmd_block
 
 
 def test_segments_keep_iter97_memory_guards():

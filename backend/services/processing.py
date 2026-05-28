@@ -701,26 +701,56 @@ async def prepare_video_segments_720p(video: dict) -> tuple:
         if duration < segment_duration * num_segments:
             num_segments = max(1, int(duration / segment_duration))
 
-        segment_starts = await _select_motion_windows(
-            raw_path=raw_path,
-            duration=duration,
-            num_segments=num_segments,
-            window_duration=segment_duration,
-        )
+        # iter103 — Tier-down for memory-constrained pods.
+        # Production bug 2026-05-28 (LFC 2007B vs AYSO 1.04 GB / 1:47:48):
+        # iter101 introduced 720p segments + scdet pre-pass, which together
+        # pushed total processing memory above the cgroup limit on the
+        # production pod. iter97 already does the same trick on
+        # `prepare_video_sample` (>800 MB → drop to 180p safe tier). Apply
+        # the same gating to the segment path:
+        #   • >800 MB source: 480p / 12fps / CRF 28 segments + SKIP scdet
+        #     (use even spacing). Matches iter99-era settings that were
+        #     proven to work on this pod.
+        #   • ≤800 MB source: 720p / 15fps / CRF 24 + scdet (iter101 path).
+        video_size_gb = video.get("file_size_bytes", 0) / (1024 ** 3) if video.get("file_size_bytes") else 0
+        heavy_file = video_size_gb > 0.8
+        if heavy_file:
+            seg_scale = "scale=-2:480"
+            seg_fps = "12"
+            seg_crf = "28"
+            tier_label = f"480p/12fps/crf28 (heavy file {video_size_gb:.2f}GB — skipping scdet)"
+            segment_starts = []  # skip the scdet pass — directly use even spacing below
+        else:
+            seg_scale = "scale=-2:720"
+            seg_fps = "15"
+            seg_crf = "24"
+            tier_label = "720p/15fps/crf24 (iter101 high-quality tier)"
+            segment_starts = await _select_motion_windows(
+                raw_path=raw_path,
+                duration=duration,
+                num_segments=num_segments,
+                window_duration=segment_duration,
+            )
 
         if not segment_starts:
             # Fallback to iter99 even spacing (safer than crashing if scdet
-            # binary is missing or the source has zero scene changes).
-            logger.warning(
-                "[scene-cut] no usable motion windows detected — falling back to even spacing"
-            )
+            # binary is missing or the source has zero scene changes — also
+            # the heavy-file path lands here intentionally).
+            if heavy_file:
+                logger.info(
+                    f"[scene-cut] heavy file ({video_size_gb:.2f}GB) — using even spacing"
+                )
+            else:
+                logger.warning(
+                    "[scene-cut] no usable motion windows detected — falling back to even spacing"
+                )
             segment_starts = []
             for i in range(num_segments):
                 pct = i / max(1, num_segments - 1)
                 start = pct * max(0, duration - segment_duration)
                 segment_starts.append(max(0, start))
 
-        logger.info(f"[720p segments] Extracting {num_segments} x {segment_duration}s segments at 720p")
+        logger.info(f"[segments] Extracting {num_segments} x {segment_duration}s at {tier_label}")
 
         segment_info_parts = []
         for idx, start in enumerate(segment_starts):
@@ -732,11 +762,11 @@ async def prepare_video_segments_720p(video: dict) -> tuple:
                 "-ss", str(int(start)),
                 "-i", raw_path,
                 "-t", str(segment_duration),
-                "-vf", "scale=-2:720",  # iter99 — 480p → 720p (legible jersey numbers)
+                "-vf", seg_scale,  # iter103 — tier-adaptive: 480p heavy / 720p light
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
-                "-crf", "24",  # iter101 — 28 → 24 for better jersey-number legibility (~40% larger files but still tiny vs Gemini 2GB limit)
-                "-r", "15",  # iter99 — 12fps → 15fps (better motion continuity for goal events)
+                "-crf", seg_crf,  # iter103 — tier-adaptive
+                "-r", seg_fps,    # iter103 — tier-adaptive
                 "-c:a", "aac",
                 "-b:a", "48k",
                 "-bufsize", "16M",  # iter97 memory guard

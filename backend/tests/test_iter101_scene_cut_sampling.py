@@ -181,22 +181,28 @@ def test_helper_uses_iter97_memory_guards():
 
 def test_prepare_video_segments_falls_back_to_even_spacing():
     """The caller MUST keep the even-spacing fallback for the case where
-    scdet returns [] (timeout, missing binary, too-few cuts)."""
+    scdet returns [] (timeout, missing binary, too-few cuts) OR the iter103
+    heavy-file path which deliberately skips scdet."""
     src = open("/app/backend/services/processing.py").read()
     fn_start = src.find("async def prepare_video_segments_720p")
-    body = src[fn_start:fn_start + 6000]
+    body = src[fn_start:fn_start + 8000]
     # Even-spacing block must still exist in the fallback path
-    assert "falling back to even spacing" in body.lower()
+    assert "even spacing" in body.lower()
     assert "pct * max(0, duration - segment_duration)" in body
 
 
 def test_segments_use_crf_24():
-    """CRF lowered 28 → 24 for better jersey-number legibility."""
+    """iter101 CRF 24 for light files. iter103 added CRF 28 fallback for
+    heavy files (>800 MB). Both tiers must be wired via the seg_crf var."""
     src = open("/app/backend/services/processing.py").read()
     fn_start = src.find("async def prepare_video_segments_720p")
     body = src[fn_start:fn_start + 8000]
-    assert '"-crf", "24"' in body
-    assert '"-crf", "28"' not in body or body.count('"-crf", "28"') == 0
+    # Light tier still uses CRF 24
+    assert 'seg_crf = "24"' in body or '"-crf", "24"' in body
+    # seg_cmd uses the adaptive var
+    seg_cmd_idx = body.find("seg_cmd = [")
+    seg_cmd_block = body[seg_cmd_idx:seg_cmd_idx + 1500]
+    assert '"-crf", seg_crf' in seg_cmd_block or '"-crf", "24"' in seg_cmd_block
 
 
 # ---------------------------------------------------------------------------

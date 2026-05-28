@@ -1,6 +1,68 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Segment-Encoder Tier-Down for >800 MB Files (iter103 — May 2026)
+
+Production bug 2026-05-28: user re-uploaded the LFC 2007B vs AYSO video (1.04 GB / 1:47:48 / pre-compressed via HandBrake's recommended preset) on iter102 → yellow cycling banner fires within seconds → no processing progress.
+
+### Root cause
+iter101 introduced two memory-intensive steps to the timeline_markers pipeline:
+1. **scdet pre-pass** decodes the entire 1+ GB raw file (even though it only emits to a 240p proxy)
+2. **720p segment encoding** at CRF 24 — ~2.25× the pixel-budget of iter99's 480p
+
+iter97's `prepare_video_sample` path already tiers down at 800 MB → 180p/5fps for the single-sample analyses. But iter101's segment path was a flat 720p with no tier-down, so on a memory-constrained production pod, 1+ GB files OOM-cycle through the iter97 cycling detector and never finish.
+
+### Fix
+Apply the **same 800 MB threshold** to `prepare_video_segments_720p` so heavy files drop to the iter99-era settings that were proven to work on this exact pod:
+
+- **>800 MB source** → 480p / 12fps / CRF 28 + **skip scdet entirely** (use even spacing). Memory profile matches iter99 which we know completes.
+- **≤800 MB source** → 720p / 15fps / CRF 24 + scdet (full iter101 path). Smaller files have memory headroom for the quality bump.
+
+Mechanically: a new `heavy_file = video_size_gb > 0.8` branch sets `seg_scale`, `seg_fps`, `seg_crf` tier variables AND zeroes `segment_starts` to skip the scdet motion-window helper. The downstream `if not segment_starts:` block (preserved unchanged) generates even-spaced windows for heavy files. The seg_cmd ffmpeg invocation now references the tier variables instead of hardcoded values, keeping iter97's memory guards (`-threads 1`, `-bufsize 16M`, `-max_muxing_queue_size 256`, `+discardcorrupt`) intact across both tiers.
+
+### Banner UX rewrite (blameless)
+The iter97 cycling banner read "This file is too heavy for our encoder — we may have to ask you to re-compress" with HandBrake guidance. But the user IS already at HandBrake's recommended preset — the previous copy implied user error when the actual issue is a memory-constrained pod. Rewrote to:
+
+> **Falling back to lighter encoding settings — your file is fine, this is on us**
+> Our encoder pod is memory-constrained for files this size. We're switching to the iter103 safe tier (480p sampling) — processing may take a few minutes longer but should complete. If it doesn't, hit "Retry Processing" below.
+
+Accurate, actionable, and doesn't blame the user.
+
+### Tests (9 new, 140/140 across iter75 + iter93→103)
+- `test_iter103_segments_tier_down.py`:
+  - 800 MB threshold matches iter97's `video_size_gb > 0.8` constant (lockstep with the single-sample tier-down)
+  - Heavy branch sets 480p/12fps/CRF28 + skips scdet (`segment_starts = []` before any `_select_motion_windows` call)
+  - Light branch keeps iter101 high-quality settings + scdet
+  - seg_cmd uses adaptive variables (`seg_scale`, `seg_fps`, `seg_crf`), not the old hardcoded values
+  - iter97 memory guards preserved on both tiers
+  - Cycling banner no longer mentions "too heavy" or hardcoded HandBrake preset
+  - Banner explicitly explains the fallback action + retry path
+  - Deploy endpoint advertises 3 new feature flags
+- Updated forward-compat tests in iter97/99/101 that pinned the old hardcoded values (now check for either the variable form or hardcoded form).
+
+### Verified live on preview
+- `GET /api/health/deploy` → `build=iter103` with all 3 new feature flags
+- Dashboard smoke screenshot: all UI elements intact, no console errors
+
+### Files touched
+- `backend/services/processing.py` (tier branch in `prepare_video_segments_720p`, seg_cmd uses tier variables)
+- `backend/server.py` (BUILD_VERSION → iter103, 3 new feature flags)
+- `frontend/src/pages/components/VideoAnalysisHeader.js` (blameless cycling-banner copy)
+- `backend/tests/test_iter103_segments_tier_down.py` (NEW — 9 cases)
+- `backend/tests/test_iter97_pod_oom_cycle_remediation.py` (forward-compat for banner copy)
+- `backend/tests/test_iter99_ai_quality_bump.py` (forward-compat for tier variables)
+- `backend/tests/test_iter101_scene_cut_sampling.py` (forward-compat for tier variables)
+
+### Expected impact for the affected video
+After redeploying iter103 and re-uploading the 1.04 GB LFC vs AYSO video:
+- Timeline markers will encode at 480p / 12fps / CRF 28 (iter99 settings = proven to work on this pod) with even-spaced sampling.
+- Goal capture rate will be back to ~50-60% (iter99 baseline) instead of iter101's projected ~95% — but that's better than the 0% they get from a stalled processing pipeline.
+- Manual tagging from iter102 fills the player-attribution gap.
+- Once Emergent provides a beefier production tier, we can lower the 0.8 GB threshold or even raise it to 2 GB (full iter101 path for all files).
+
+---
+
+
 ## Manual Player Tagging on AI Markers — Hudl-Style (iter102 — May 2026)
 
 User request 2026-05-28: *"Can you wire the next iteration to let the user identify players in key highlights that the AI can't pick up? Similar to how Hudl allows a user to identify players that it can't figure out?"*

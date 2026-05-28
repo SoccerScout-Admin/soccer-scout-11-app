@@ -109,10 +109,15 @@ def test_frontend_hook_exposes_pod_cycling():
 def test_frontend_header_renders_pod_cycling_warning():
     src = open("/app/frontend/src/pages/components/VideoAnalysisHeader.js").read()
     assert "isPodCycling" in src, "header must accept the isPodCycling prop"
-    assert "re-compress" in src.lower() or "recompress" in src.lower(), (
-        "cycling banner must mention re-compression as the next step"
-    )
-    assert "HandBrake" in src, "cycling banner must point at HandBrake (iter71)"
+    # iter103 — replaced "re-compress with HandBrake" guidance with the
+    # blameless "falling back to lighter settings" message. Either form of
+    # actionable copy is acceptable here.
+    assert (
+        "re-compress" in src.lower()
+        or "recompress" in src.lower()
+        or "lighter" in src.lower()
+        or "safe tier" in src.lower()
+    ), "cycling banner must mention SOME fallback/recompress action"
     # Yellow palette (#FBBF24) distinguishes from blue (#007AFF) processing banner
     assert "#FBBF24" in src
 
