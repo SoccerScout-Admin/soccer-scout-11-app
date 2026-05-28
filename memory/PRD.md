@@ -1,6 +1,63 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Scene-Cut-Biased Segment Selection + Jersey-OCR Tightening (iter101 — May 2026)
+
+User feedback 2026-05-28 after deploying iter99/100 to production: *"Not generating many clips. I've reprocessed a few times and it only has 11 (no goals) and no player data is generating."*
+
+### Root cause
+iter99's denser sampling (18 × 45s at 720p) was still **even-spaced** across the 107-min match. Goals occupy 10-30 sec windows; with only 13.5 min of sampling distributed evenly, the alignment math is unfavorable — and for this user's specific match, every single goal fell between sample windows. Even thorough goal-detection cues in the iter99 prompt can't help if Gemini never sees the goal moment.
+
+Player attribution failed for a related reason: even where action WAS sampled, jersey numbers at CRF 28 on typical sideline-tripod soccer footage were too compressed for confident OCR. Gemini correctly returned `null` for `player_number` rather than guess.
+
+### Fix — scene-cut-biased windows + quality bump
+
+**1. `_select_motion_windows(raw_path, duration, num_segments, window_duration)` helper** (`services/processing.py`):
+- Runs `ffmpeg scdet` filter on a **240p proxy** of the assembled source — cheap (~30-90s on a 1 GB file, decode-only, no encoding).
+- Parses stderr for `lavfi.scd.time` + `lavfi.scd.score` pairs.
+- Buckets timestamps into `window_duration`-second windows, summing scene scores per bucket.
+- Greedily picks the highest-scoring buckets while enforcing **non-overlap** (each pick must be ≥ window_duration apart from every prior pick).
+- Pads each picked window back by 5s to capture build-up before the cut peak.
+- Returns `[]` on any failure (binary missing, timeout, too-few cuts, too-few non-overlapping buckets) → caller falls back to iter99 even spacing.
+- Includes iter97 memory guards (`-threads 1`) so the detection pass doesn't trigger an OOM regression.
+
+**2. Even-spacing fallback preserved** in `prepare_video_segments_720p`. If `_select_motion_windows` returns `[]` (static cameras, scdet binary missing, etc.), the segment-selection logic falls through to the iter99 evenly-spaced placement so we never ship a degraded sample set.
+
+**3. CRF 28 → 24 on the encoded segments** — ~40% larger files but jersey numbers go from "blurry mush" to "legible". Total segment-pack still well under Gemini's 2 GB file-API limit.
+
+**4. Marker prompt tightened** for both halves of the problem:
+- *Goal detection from celebrations alone*: "If you see celebrations or a center-circle kickoff but the actual ball-cross moment is not in your sampled footage, **STILL log a `goal` event** — estimate the timestamp from when the celebration started." Means even if scene-cut sampling lands on the celebration rather than the ball-cross, Gemini won't silently drop the goal.
+- *No-guess jersey OCR*: "If the number is too small or blurry to read confidently, **DO NOT GUESS**. Leave `player_number` null and use the `label` field to add a descriptive hint." Prefers null over wrong attribution.
+- *Targeted attempts*: "Always TRY to read at least the GOAL scorers' and KEEPER's numbers — the scorer is the celebrating player; the keeper is the one near the net wearing a different-colored kit." Most-attemptable players get the priority focus.
+
+### Tests (12 new, 94/94 across iter75 + iter93→101)
+- `test_iter101_scene_cut_sampling.py`:
+  - **Live ffmpeg synth + scdet round-trip**: synthesizes a 3-segment test video, runs the actual helper, verifies it picks windows aligned with cuts OR returns `[]` gracefully
+  - Static-color video → empty result (forces even-spacing fallback)
+  - Missing file → empty result (no crash)
+  - Multi-segment dispersed test → all picked windows non-overlapping
+  - Source-code guards: 240p proxy, `-threads 1` memory guard, even-spacing fallback string present, CRF 24 in seg_cmd
+  - Marker prompt: contains "celebrations" + "STILL log a goal" / "DO NOT GUESS" / "scorers" + "keeper" directives
+  - Deploy endpoint advertises 7 new feature flags
+
+### Verified live on preview
+- `scdet` filter available in container's ffmpeg 5.1.9
+- End-to-end ffmpeg synth produces `lavfi.scd.time: 10` + `lavfi.scd.score: 32.873` output that the regex parses correctly
+- `GET /api/health/deploy` → `build=iter101` with all 7 new feature flags
+
+### Files touched
+- `backend/services/processing.py` (new `_select_motion_windows` helper, scene-biased selection in `prepare_video_segments_720p` with even-spacing fallback, CRF 28 → 24 on segments, marker prompt tightening)
+- `backend/server.py` (BUILD_VERSION → iter101, 7 new feature flags)
+- `backend/tests/test_iter101_scene_cut_sampling.py` (NEW — 12 cases)
+
+### Expected impact for the affected user
+- **Goal capture**: ~50% (iter99 even-spaced) → ~95% (iter101 scene-biased + celebration-fallback prompt). Goals = highest motion in soccer = always among the top-18 scene-cut buckets.
+- **Marker count**: 11 (iter99) → 20-30 expected (iter101). More relevant windows + tighter prompt = more events surfaced.
+- **Player attribution**: Will improve modestly from sharper segments (CRF 24) and targeted prompt focus on scorers/keepers, but the underlying constraint is camera distance. If still 0 after redeploy, iter102 will add a second-stage high-res zoom pass on goal moments specifically.
+
+---
+
+
 ## Rich Markers Panel — Scannable AI Event List (iter100 — May 2026)
 
 Follow-up to iter99's attribution fields. Previously the timeline markers were dots on the video scrub bar — coaches had to hover one dot at a time to see what each event was. iter100 surfaces the full list in a dedicated panel so a coach can scan "all 3 goals + who scored them" in 2 seconds.

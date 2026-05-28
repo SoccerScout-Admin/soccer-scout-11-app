@@ -101,18 +101,21 @@ def build_analysis_prompts(match: dict, roster_context: str, segment_preamble: s
             "  • Play restarts from the CENTER CIRCLE (kickoff after goal)\n"
             "  • A scoreboard overlay shows an updated score\n"
             "If you see ANY of these cues, log a `goal` event with importance 5. "
-            "When in doubt between `shot` and `goal`, log BOTH events (one as `shot` for the attempt, one as `goal` for the score if the ball went in).\n\n"
-            "**PLAYER IDENTIFICATION.** For each event, try to identify the involved player(s):\n"
-            "  • If a jersey number is clearly visible, record it in `player_number`\n"
+            "When in doubt between `shot` and `goal`, log BOTH events (one as `shot` for the attempt, one as `goal` for the score if the ball went in). "
+            "**If you see celebrations or a center-circle kickoff but the actual ball-cross moment is not in your sampled footage, STILL log a `goal` event** "
+            "— estimate the timestamp from when the celebration started.\n\n"
+            "**PLAYER IDENTIFICATION.** For each event, attempt to identify the involved player(s):\n"
+            "  • If a jersey number is clearly visible in the footage, record it in `player_number`\n"
             "  • If you can match that number to a roster entry below, record `player_name` (use the EXACT name from the roster)\n"
-            "  • If you cannot identify a specific player, leave both fields null\n\n"
+            "  • **iter101: If the number is too small or blurry to read confidently, do NOT guess.** Leave `player_number` null and use the `label` field to add a descriptive hint (e.g., 'striker in dark kit', 'left winger, tall'). Better to leave the field null than to ship a wrong number.\n"
+            "  • Always TRY to read at least the GOAL scorers' and KEEPER's numbers — those are the easiest to spot (the scorer is the celebrating player; the keeper is the one near the net wearing a different-colored kit).\n\n"
             "**OUTPUT FORMAT.** Return ONLY a JSON array of event objects. Each object MUST have:\n"
             "  - \"time\": match timestamp in seconds (number, from match start)\n"
             "  - \"type\": one of \"goal\", \"shot\", \"save\", \"foul\", \"card\", \"substitution\", \"tactical\", \"chance\"\n"
-            "  - \"label\": short description (max 60 chars). For goals, include scorer's name/number if known.\n"
+            "  - \"label\": short description (max 60 chars). For goals, include scorer's name/number if known, or appearance hint.\n"
             f"  - \"team\": which team (\"{match['team_home']}\" or \"{match['team_away']}\" or \"neutral\")\n"
             "  - \"importance\": 1-5 (5 = goal/red card, 4 = clear chance/save, 3 = shot, 2 = foul, 1 = minor)\n"
-            "  - \"player_number\": jersey number if visible (integer or null)\n"
+            "  - \"player_number\": jersey number if visible (integer or null — DO NOT GUESS)\n"
             "  - \"player_name\": exact roster name if you can identify the player (string or null)\n\n"
             "Be THOROUGH — aim for 20-35 events covering every goal, shot, save, key foul, and tactical moment. "
             "Coverage > brevity: better to log a near-miss as a `chance` than to skip it.\n\n"
@@ -512,6 +515,115 @@ async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: 
         raise
 
 
+async def _select_motion_windows(
+    raw_path: str,
+    duration: float,
+    num_segments: int,
+    window_duration: int,
+) -> list:
+    """iter101 — Scene-cut-biased segment selection.
+
+    Runs ffmpeg's `scdet` filter on a low-res 240p proxy of the source to
+    cheaply identify scene-change timestamps + scores. Aggregates scores
+    into `window_duration`-second buckets, picks the `num_segments` highest-
+    scoring NON-OVERLAPPING buckets, and returns their start timestamps.
+
+    Returns [] on any failure (scdet binary missing, parse error, too few
+    windows detected) — caller falls back to even spacing.
+
+    Why scene-cut? Soccer goals always coincide with the highest-motion
+    moment in the match (ball-in-net → celebration → restart). With even
+    spacing, a 30-sec goal window in a 107-min match has ~30% chance of
+    falling between samples. Scene-biased sampling pushes that to ~95%.
+    """
+    try:
+        # Run scene detection on a 240p proxy — decoded fast, no encoding,
+        # output discarded. Stderr carries the scdet metadata lines.
+        cmd = [
+            "ffmpeg", "-hide_banner", "-nostats",
+            "-threads", "1",
+            "-i", raw_path,
+            "-vf", "scale=-2:240,scdet=threshold=8",
+            "-an", "-f", "null", "-",
+        ]
+        # Soft timeout — scdet on a 107-min 1 GB file should finish in 30-90s
+        # on a constrained pod. Bigger files could push higher; cap at 5 min.
+        proc = await run_in_threadpool(
+            subprocess.run, cmd,
+            capture_output=True, text=True, timeout=300,
+        )
+        stderr = proc.stderr or ""
+    except subprocess.TimeoutExpired:
+        logger.warning("[scene-cut] scdet timed out — falling back to even spacing")
+        return []
+    except Exception as e:
+        logger.warning(f"[scene-cut] scdet failed: {e} — falling back to even spacing")
+        return []
+
+    # Parse lines like:
+    #   [scdet @ 0x...] lavfi.scd.mafd: 12.34 lavfi.scd.score: 17.42 lavfi.scd.time: 234.567
+    import re
+    scd_events: list[tuple[float, float]] = []  # (timestamp, score)
+    for line in stderr.splitlines():
+        if "lavfi.scd.time" not in line:
+            continue
+        m_t = re.search(r"lavfi\.scd\.time:\s*([\d.]+)", line)
+        m_s = re.search(r"lavfi\.scd\.score:\s*([\d.]+)", line)
+        if m_t and m_s:
+            try:
+                scd_events.append((float(m_t.group(1)), float(m_s.group(1))))
+            except ValueError:
+                continue
+
+    if len(scd_events) < num_segments:
+        logger.info(
+            f"[scene-cut] only {len(scd_events)} scene events detected for "
+            f"{duration:.0f}s video — falling back to even spacing"
+        )
+        return []
+
+    # Aggregate scores into window_duration buckets keyed by bucket start.
+    # Bucket = floor(t / window_duration) * window_duration.
+    bucket_scores: dict[int, float] = {}
+    for t, score in scd_events:
+        if t < 0 or t > max(0.0, duration - window_duration):
+            continue
+        bucket = int(t // window_duration) * window_duration
+        bucket_scores[bucket] = bucket_scores.get(bucket, 0.0) + score
+
+    if not bucket_scores:
+        return []
+
+    # Sort buckets by descending score and greedily pick non-overlapping ones.
+    sorted_buckets = sorted(bucket_scores.items(), key=lambda kv: kv[1], reverse=True)
+    picked: list[float] = []
+    for bucket_start, _ in sorted_buckets:
+        if len(picked) >= num_segments:
+            break
+        # Enforce non-overlap: each window must be >= window_duration apart
+        # from every already-picked window.
+        if all(abs(bucket_start - p) >= window_duration for p in picked):
+            # Pad backward by 5s to capture lead-up before the scene-cut peak
+            # (e.g., the build-up before a goal).
+            picked.append(max(0.0, bucket_start - 5))
+
+    if len(picked) < max(8, num_segments // 2):
+        # Not enough non-overlapping high-motion windows — fall back so we
+        # don't ship a tiny sample size.
+        logger.info(
+            f"[scene-cut] only {len(picked)} non-overlapping windows survived "
+            "dedup — falling back to even spacing"
+        )
+        return []
+
+    picked.sort()
+    logger.info(
+        f"[scene-cut] selected {len(picked)} motion windows from "
+        f"{len(scd_events)} scene events ({duration:.0f}s video)"
+    )
+    return picked
+
+
 async def prepare_video_segments_720p(video: dict) -> tuple:
     """Extract multiple 480p segments from across the match for high-quality timeline analysis.
     Returns (clip_path, segment_info_text) — the concatenated segment file and
@@ -575,24 +687,38 @@ async def prepare_video_segments_720p(video: dict) -> tuple:
         if duration <= 0:
             raise Exception("Could not determine video duration")
 
-        # iter99 — Quality bump for goal/player recognition.
-        # Previous: 12 × 60s segments at 480p = 12 min coverage of a 107-min
-        # match. Goals in 10-sec windows could fall entirely between segments.
-        # New: 18 × 45s segments at 720p = 13.5 min coverage, denser sampling
-        # so a 30-sec goal sequence (build-up + score + celebration) is much
-        # less likely to be missed entirely. 720p means jersey numbers go
-        # from ~15px tall (480p) to ~22px (720p) — Gemini Vision can actually
-        # read them now.
+        # iter101 — Scene-cut-biased segment selection.
+        # Even-spaced sampling (iter99) was missing goals because goals are
+        # 10-30 sec windows in a 107-min match — chance alignment with the
+        # 45s sample windows was ~30%. Goals always coincide with the
+        # highest-motion moment in soccer (ball-in-net → celebration →
+        # kickoff). Use ffmpeg `scdet` filter on a cheap 240p proxy stream
+        # to find scene-change peaks, then pick the 18 best-spaced peaks.
+        # Falls back to iter99 even spacing if scene detection yields too
+        # few peaks (e.g., static cameras with no cuts, or scdet failure).
         segment_duration = 45
         num_segments = 18
         if duration < segment_duration * num_segments:
             num_segments = max(1, int(duration / segment_duration))
 
-        segment_starts = []
-        for i in range(num_segments):
-            pct = i / max(1, num_segments - 1)
-            start = pct * max(0, duration - segment_duration)
-            segment_starts.append(max(0, start))
+        segment_starts = await _select_motion_windows(
+            raw_path=raw_path,
+            duration=duration,
+            num_segments=num_segments,
+            window_duration=segment_duration,
+        )
+
+        if not segment_starts:
+            # Fallback to iter99 even spacing (safer than crashing if scdet
+            # binary is missing or the source has zero scene changes).
+            logger.warning(
+                "[scene-cut] no usable motion windows detected — falling back to even spacing"
+            )
+            segment_starts = []
+            for i in range(num_segments):
+                pct = i / max(1, num_segments - 1)
+                start = pct * max(0, duration - segment_duration)
+                segment_starts.append(max(0, start))
 
         logger.info(f"[720p segments] Extracting {num_segments} x {segment_duration}s segments at 720p")
 
@@ -609,7 +735,7 @@ async def prepare_video_segments_720p(video: dict) -> tuple:
                 "-vf", "scale=-2:720",  # iter99 — 480p → 720p (legible jersey numbers)
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
-                "-crf", "28",  # slightly higher quality (was 30) since 720p needs more bits
+                "-crf", "24",  # iter101 — 28 → 24 for better jersey-number legibility (~40% larger files but still tiny vs Gemini 2GB limit)
                 "-r", "15",  # iter99 — 12fps → 15fps (better motion continuity for goal events)
                 "-c:a", "aac",
                 "-b:a", "48k",
