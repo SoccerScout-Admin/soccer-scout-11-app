@@ -502,7 +502,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter107"
+BUILD_VERSION = "iter108"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -714,6 +714,11 @@ SHIPPED_FEATURES = [
     "possession-stats-veo-style-card",
     "jersey-color-team-disambiguation",
     "shared-prompt-builder-on-manual-regenerate",
+    # iter108 — one-click goals-only highlight reel
+    "goals-only-highlight-reel-endpoint",
+    "auto-create-clips-from-goal-markers",
+    "select-clips-goals-only-flag",
+    "highlight-reel-panel-goals-only-button",
 ]
 
 def _get_build_sha() -> str:

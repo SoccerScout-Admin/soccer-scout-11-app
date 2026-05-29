@@ -212,19 +212,31 @@ def _score_clip(clip: dict) -> float:
     return base
 
 
-def _select_clips(clips: list) -> tuple[list, float]:
+def _select_clips(clips: list, goals_only: bool = False) -> tuple[list, float]:
     """Greedy pick of top-scored clips fitting MAX_DURATION_S minus title-card budget.
+
+    iter108 — When `goals_only=True`, skip the score-based greedy pruning
+    entirely. Just take every goal clip in chronological order, trimming
+    each to <= 12s as usual, and stopping only if the total budget is
+    exceeded (which is rare for goal clips — a 90s reel fits 6-7 goals
+    easily). This produces a pure goal compilation, not a "best moments"
+    mix that might drop a goal in favor of a higher-scored shot.
 
     Returns (selected_clips_in_chronological_order, total_clip_seconds).
     """
     if not clips:
         return [], 0.0
 
-    # Sort by descending score, break ties by chronological order.
-    scored = sorted(
-        clips,
-        key=lambda c: (-_score_clip(c), float(c.get("start_time", 0))),
-    )
+    if goals_only:
+        # Already filtered to type=goal upstream — preserve chronological order
+        # and let the budget cap apply naturally.
+        scored = sorted(clips, key=lambda c: float(c.get("start_time", 0)))
+    else:
+        # Sort by descending score, break ties by chronological order.
+        scored = sorted(
+            clips,
+            key=lambda c: (-_score_clip(c), float(c.get("start_time", 0))),
+        )
 
     # Each clip pulls TITLE_CARD_DURATION_S of overhead.
     overhead_per_clip = TITLE_CARD_DURATION_S
@@ -383,7 +395,15 @@ async def process_reel(reel_id: str) -> dict:
         await _mark_failed(reel_id, "no_clips_available")
         return {"status": "failed"}
 
-    selected, _ = _select_clips(clips)
+    # iter108 — goals-only reel filters to type=goal clips before selection
+    # so the reel is a pure goal compilation (no shots/saves/tactical mixed in).
+    if reel.get("goals_only"):
+        clips = [c for c in clips if c.get("clip_type") == "goal"]
+        if not clips:
+            await _mark_failed(reel_id, "no_goal_clips_available")
+            return {"status": "failed"}
+
+    selected, _ = _select_clips(clips, goals_only=reel.get("goals_only", False))
     if not selected:
         await _mark_failed(reel_id, "no_clips_passed_filters")
         return {"status": "failed"}

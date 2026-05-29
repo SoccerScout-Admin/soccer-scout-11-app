@@ -242,6 +242,28 @@ const HighlightReelsPanel = ({ matchId }) => {
     }
   }, [matchId, fetchReels]);
 
+  // iter108 — One-click goals-only reel
+  const handleGenerateGoalsOnly = useCallback(async () => {
+    setGenerating(true);
+    setError(null);
+    try {
+      const r = await axios.post(
+        `${API}/matches/${matchId}/highlight-reel/goals-only`,
+        {},
+        { headers: getAuthHeader() },
+      );
+      if (r.data?.goal_clips_auto_created > 0) {
+        // brief inline note so the user knows iter108 created clips automatically
+        setError(null);
+      }
+      await fetchReels();
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to start goals-only reel.');
+    } finally {
+      setGenerating(false);
+    }
+  }, [matchId, fetchReels]);
+
   const handleShareToggled = useCallback((reelId, newToken) => {
     setReels((prev) => prev.map((r) => (r.id === reelId ? { ...r, share_token: newToken } : r)));
   }, []);
@@ -276,28 +298,39 @@ const HighlightReelsPanel = ({ matchId }) => {
 
       {!collapsed && (
         <>
-          <button
-            data-testid="generate-reel-btn"
-            onClick={handleGenerate}
-            disabled={generating || hasInFlight}
-            className="w-full sm:w-auto flex items-center justify-center gap-2 bg-gradient-to-r from-[#007AFF] to-[#10B981] text-white px-5 py-3 text-sm font-bold tracking-wider uppercase hover:opacity-90 disabled:opacity-50 transition-opacity mb-4">
-            {generating ? (
-              <>
-                <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Starting…
-              </>
-            ) : hasInFlight ? (
-              <>
-                <Sparkle size={16} weight="fill" />
-                Reel In Progress…
-              </>
-            ) : (
-              <>
-                <Sparkle size={16} weight="fill" />
-                Generate Highlight Reel
-              </>
-            )}
-          </button>
+          <div className="flex flex-col sm:flex-row gap-2 mb-4">
+            <button
+              data-testid="generate-reel-btn"
+              onClick={handleGenerate}
+              disabled={generating || hasInFlight}
+              className="flex-1 sm:flex-initial flex items-center justify-center gap-2 bg-gradient-to-r from-[#007AFF] to-[#10B981] text-white px-5 py-3 text-sm font-bold tracking-wider uppercase hover:opacity-90 disabled:opacity-50 transition-opacity">
+              {generating ? (
+                <>
+                  <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Starting…
+                </>
+              ) : hasInFlight ? (
+                <>
+                  <Sparkle size={16} weight="fill" />
+                  Reel In Progress…
+                </>
+              ) : (
+                <>
+                  <Sparkle size={16} weight="fill" />
+                  Best Moments Reel
+                </>
+              )}
+            </button>
+            {/* iter108 — Goals-only one-click reel */}
+            <button
+              data-testid="generate-goals-only-reel-btn"
+              onClick={handleGenerateGoalsOnly}
+              disabled={generating || hasInFlight}
+              className="flex-1 sm:flex-initial flex items-center justify-center gap-2 bg-[#FBBF24] text-black px-5 py-3 text-sm font-bold tracking-wider uppercase hover:opacity-90 disabled:opacity-50 transition-opacity">
+              <Sparkle size={16} weight="fill" />
+              Goals-Only Reel
+            </button>
+          </div>
 
           {error && (
             <div data-testid="reel-error"

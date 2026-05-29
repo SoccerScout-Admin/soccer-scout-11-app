@@ -124,6 +124,125 @@ async def create_highlight_reel(
     return _strip_internal(doc)
 
 
+@router.post("/matches/{match_id}/highlight-reel/goals-only")
+async def create_goals_only_highlight_reel(
+    match_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """iter108 — One-click goal-only highlight reel.
+
+    Finds every `type=goal` marker on the match's video, auto-creates a
+    15-sec clip for each marker that doesn't already have one, then
+    enqueues the existing reel pipeline with `goals_only=True` so the
+    selector picks ONLY type=goal clips (not the usual greedy
+    top-scored mix).
+
+    Returns the reel doc (status=pending). Frontend polls /highlight-reels
+    for completion like a normal reel.
+    """
+    if not is_ffmpeg_available():
+        raise HTTPException(status_code=503, detail="ffmpeg is not available on this server.")
+
+    match = await _load_match(match_id, current_user["id"])
+
+    # Find the video for this match
+    video = await db.videos.find_one(
+        {"match_id": match_id, "user_id": current_user["id"], "is_deleted": {"$ne": True}},
+        {"_id": 0, "id": 1},
+        sort=[("created_at", -1)],
+    )
+    if not video:
+        raise HTTPException(status_code=400, detail="No video found for this match.")
+
+    # All goal markers for this video
+    goal_markers = await db.markers.find(
+        {"video_id": video["id"], "user_id": current_user["id"], "type": "goal"},
+        {"_id": 0},
+    ).to_list(200)
+    if not goal_markers:
+        raise HTTPException(
+            status_code=400,
+            detail="No goal markers detected on this video yet. Run the AI analysis first (or manually tag the goals you want included).",
+        )
+
+    # In-flight cap matches the main create endpoint
+    in_flight = await db.highlight_reels.count_documents({
+        "user_id": current_user["id"],
+        "status": {"$in": ["pending", "processing"]},
+    })
+    if in_flight >= 3:
+        raise HTTPException(
+            status_code=429,
+            detail="You already have 3 reels in progress. Wait for one to finish.",
+        )
+
+    # Auto-create clips for goal markers that don't already have one.
+    # Match by source_marker_id (iter108) OR by an exact time window match
+    # so re-running this endpoint doesn't pile up duplicate clips.
+    existing_goal_clips = await db.clips.find(
+        {"match_id": match_id, "user_id": current_user["id"], "clip_type": "goal"},
+        {"_id": 0, "id": 1, "source_marker_id": 1, "start_time": 1, "end_time": 1},
+    ).to_list(500)
+    existing_by_marker = {c.get("source_marker_id"): c for c in existing_goal_clips if c.get("source_marker_id")}
+
+    created_count = 0
+    for m in goal_markers:
+        if m["id"] in existing_by_marker:
+            continue
+        clip_doc = {
+            "id": str(uuid.uuid4()),
+            "video_id": video["id"],
+            "match_id": match_id,
+            "user_id": current_user["id"],
+            "title": _build_goal_clip_title(m),
+            "description": f"Auto-created from AI goal marker at {int(m['time'])//60}:{int(m['time'])%60:02d}",
+            "start_time": max(0.0, float(m["time"]) - 7.0),
+            "end_time": float(m["time"]) + 8.0,
+            "clip_type": "goal",
+            "player_ids": [],
+            "source_marker_id": m["id"],  # iter108 provenance
+            "auto_from_goal_marker": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.clips.insert_one(clip_doc)
+        created_count += 1
+
+    # Enqueue reel with goals_only flag so the selector takes ONLY type=goal
+    reel_id = str(uuid.uuid4())
+    doc = {
+        "id": reel_id,
+        "user_id": current_user["id"],
+        "match_id": match_id,
+        "status": "pending",
+        "progress": 0.0,
+        "selected_clip_ids": [],
+        "total_clips": 0,
+        "duration_seconds": 0.0,
+        "output_path": None,
+        "share_token": None,
+        "error": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "match_title": f"{match.get('team_home', '')} vs {match.get('team_away', '')}".strip(),
+        "goals_only": True,  # iter108 — read by _select_clips to filter to type=goal
+        "goal_clips_auto_created": created_count,
+    }
+    await db.highlight_reels.insert_one(doc)
+    await enqueue_reel(reel_id)
+    doc.pop("_id", None)
+    return _strip_internal(doc)
+
+
+def _build_goal_clip_title(marker: dict) -> str:
+    """Mirrors the iter107 marker-clip title format so goal clips look the
+    same whether they came from a one-click scissor button or the goals-only
+    reel endpoint."""
+    if marker.get("player_number") and marker.get("player_name"):
+        return f"Goal — #{marker['player_number']} {marker['player_name']}"[:120]
+    if marker.get("player_number"):
+        return f"Goal — #{marker['player_number']}"[:120]
+    return (marker.get("label") or "Goal")[:120]
+
+
 @router.get("/matches/{match_id}/highlight-reels")
 async def list_highlight_reels(
     match_id: str,

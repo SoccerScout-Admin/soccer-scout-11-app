@@ -1,6 +1,68 @@
 # Soccer Scout - Product Requirements Document
 
 
+## One-Click Goals-Only Highlight Reel (iter108 — May 2026)
+
+User said yes to the iter107 finish-tool suggestion: a one-click button that takes every `type=goal` marker, creates clips for each, and stitches them into a downloadable goal-only highlight reel.
+
+### Backend
+- **`POST /api/matches/{match_id}/highlight-reel/goals-only`** in `routes/highlight_reels.py`:
+  - 503 if ffmpeg unavailable; 404 if match not owned by user; 400 if no video or no goal markers; 429 if user has 3+ reels in flight (matches the main create endpoint's cap)
+  - Finds all `markers` with `type=goal` for the match's video
+  - For each goal marker WITHOUT an existing auto-clip (matched by `source_marker_id` for idempotency), creates a clip with:
+    - `start_time = max(0.0, marker.time - 7.0)` (clamped to >= 0 so an early goal at t=3 doesn't produce a negative start)
+    - `end_time = marker.time + 8.0` (15s window centered on the marker)
+    - `clip_type = "goal"`, `auto_from_goal_marker = True`, `source_marker_id = marker.id`
+    - Title via `_build_goal_clip_title(marker)`: `"Goal — #9 Marcus Lopez"` (with iter99/iter102 player attribution) → falls back to `"Goal — #9"` → falls back to marker label
+  - Enqueues a reel row with `goals_only: True` + `goal_clips_auto_created: <count>` provenance
+- **`_select_clips(clips, goals_only=False)`** in `services/highlight_reel.py`:
+  - When `goals_only=True`, skips score-greedy pruning entirely. Takes every goal clip in chronological order, applying only the per-clip 12s duration cap + the MAX_DURATION_S budget.
+  - Backwards-compatible: existing callers continue passing only `clips` and get the original score-based behavior.
+- **Reel pipeline** in `_run_reel_job` filters clips to `clip_type=goal` upstream when `goals_only=True` so the selector sees only goal candidates. Fails with `no_goal_clips_available` if filtering empties the set.
+
+### Frontend
+- `pages/components/HighlightReelsPanel.js`:
+  - Renamed existing button from "Generate Highlight Reel" → **"Best Moments Reel"** to distinguish the two flows
+  - New **yellow "Goals-Only Reel" button** next to it (Phosphor `Sparkle` icon, `bg-[#FBBF24]` to match the goal marker color scheme)
+  - Shares `generating` + `hasInFlight` state with the existing button so users can't double-trigger
+  - `handleGenerateGoalsOnly` calls the new endpoint and reuses the existing `fetchReels` polling so the new reel appears in the panel list with progress + download once ready
+
+### Tests (13 new, 189/189 across iter75 + iter93→108)
+- `test_iter108_goals_only_reel.py`:
+  - Creates one 15s clip per goal marker; tagged with `clip_type=goal`, `auto_from_goal_marker`, `source_marker_id`
+  - Idempotent — re-running creates 0 new clips
+  - Clamps `start_time` to 0 for goals at t=3 (negative-start prevention)
+  - Carries iter99 player attribution into clip titles
+  - 404 for unknown match, 400 for no video, 400 for no goal markers, auth required, cross-user 404
+  - `_select_clips(goals_only=True)` returns ALL goal clips chronologically (skips score pruning)
+  - `_select_clips()` default (no flag) still uses score-greedy selection (verified by membership test with high-scoring goal clip beating low-scored highlights under tight budget)
+  - Frontend grep: panel has `generate-goals-only-reel-btn` testid + handler + endpoint reference + both button labels
+  - Deploy endpoint advertises 4 new feature flags
+
+### Verified live on preview
+- Playwright screenshot of `/match/{id}` shows the new yellow "GOALS-ONLY REEL" button rendering side-by-side with the rebranded "BEST MOMENTS REEL" button, under the helper text "AI picks your top clips (goals first), stitches them with branded title cards..."
+- `GET /api/health/deploy` → `build=iter108` with all 4 new feature flags
+
+### Files touched
+- `backend/routes/highlight_reels.py` (NEW `/goals-only` endpoint + `_build_goal_clip_title` helper)
+- `backend/services/highlight_reel.py` (`_select_clips(goals_only=False)` flag + upstream goal filter + `goals_only` reel doc support)
+- `backend/server.py` (BUILD_VERSION → iter108, 4 new feature flags)
+- `frontend/src/pages/components/HighlightReelsPanel.js` (`handleGenerateGoalsOnly`, renamed first button, new yellow second button)
+- `backend/tests/test_iter108_goals_only_reel.py` (NEW — 13 cases)
+
+### End-to-end coach workflow now possible
+1. Upload match video
+2. iter97-103 pipeline auto-processes → iter99/107 prompt generates goal markers
+3. iter102 pencil-tag any goal scorers AI missed
+4. iter107 manual scissor-clip individual marquee moments
+5. **iter108 one-click "Goals-Only Reel"** → 60-90s downloadable MP4 of every goal with player names baked in
+6. Share via iter40-49 Recruiter Lens links to college coaches
+
+Total time: ~5 minutes from upload-complete to recruiter-ready reel.
+
+---
+
+
 ## Clip-from-Marker + Possession Stats + Jersey Colors (iter107 — May 2026)
 
 User request 2026-05-28 post-iter106 deploy:
