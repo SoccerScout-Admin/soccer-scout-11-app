@@ -175,6 +175,22 @@ Thanks,
   };
 
 
+  // iter106 — Download the orphan-chunk manifest as JSON so the user can
+  // attach it directly to a Support reply (per Support's 2026-05-28 request
+  // "reply to this ticket with the manifest attached directly").
+  const handleDownloadManifest = () => {
+    if (!report) return;
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `soccer-scout-orphan-manifest-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const handleCopySupportEmail = async () => {
     if (!report) return;
     const s = report.summary;
@@ -308,6 +324,15 @@ Thank you,
                 >
                   {copied ? <CheckCircle size={18} weight="bold" /> : <Copy size={18} weight="bold" />}
                   {copied ? 'Copied to clipboard + mail client opened' : 'Copy email to support'}
+                </button>
+                <button
+                  data-testid="download-manifest-btn"
+                  onClick={handleDownloadManifest}
+                  disabled={summary.total_orphan_chunks === 0}
+                  className="flex items-center justify-center gap-2 bg-[#0EA5E9] text-white font-semibold px-5 py-3 hover:bg-[#0284C7] transition-colors disabled:opacity-30 disabled:cursor-not-allowed text-sm"
+                >
+                  <Database size={18} weight="bold" />
+                  Download manifest (JSON)
                 </button>
                 <button
                   data-testid="mark-orphans-btn"

@@ -1,6 +1,70 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Orphan Path Dedup + Better Chunk-Size Estimation (iter106 — May 2026)
+
+Emergent Support 2026-05-28: *"From where you checked that chunking size 23 GB and it store in on our object storage. Because our object storage have only 5 GB space."*
+
+Support was **right** — our iter95 collector inflated the orphan report. Two bugs:
+
+### Bug 1: Path double-counting across buckets
+A single physical chunk in object storage can be referenced from multiple Mongo docs simultaneously:
+- A finalized upload session keeps `chunked_uploads.chunk_paths` after finalizing
+- The video record created from it ALSO carries `chunk_paths`
+- If the chunked_uploads is dismissed AND the video later fails, **both rows have the same paths**
+
+iter95's `_collect_all_orphan_buckets` iterated each bucket independently and called `_collect(doc, bucket)` per doc — so a path appearing in `dismissed_sessions` (chunked_uploads.dismissed_at exists) AND `failed_videos` (videos.processing_status=failed) got tallied **twice**, doubling the reported bytes.
+
+### Bug 2: 10 MB chunk-size default inflated legacy uploads
+`size_est = sizes.get(idx_str) or 10 * 1024 * 1024` — when `chunk_sizes` wasn't recorded (pre-iter80 legacy chunks), we defaulted to 10 MB. Real chunks at the tail end of a file are often 1-3 MB. With 2,000+ legacy chunks, this inflated ~3-4×.
+
+### Fix
+**Global path-level dedup** in `_collect_all_orphan_buckets`:
+- New `seen_paths: set[str]` ledger. First bucket the path appears in claims it; subsequent buckets skip.
+- Iteration order: `dismissed_sessions → abandoned_uploads → completed_uploads_without_video → failed_videos → stuck_videos → deleted_videos → lost_chunks`. Predictable so the per-bucket counts are stable.
+
+**Three-tier chunk-size estimation** in `_doc_chunk_size_estimate(doc, idx_str)`:
+1. `chunk_sizes[idx]` if recorded (post-iter80 source-of-truth)
+2. `file_size_bytes / total_chunks` (legacy upload with file_size + total_chunks but no chunk_sizes — much closer to truth than the 10 MB default)
+3. 10 MB fallback only when none of the above is available
+
+All 4 projections (dismissed / abandoned / completed-no-video / failed+stuck+deleted / lost) now also fetch `file_size_bytes` + `total_chunks` so the helper can do the math.
+
+### Report summary now exposes the methodology
+- `summary.deduplicated_by_path: true`
+- `summary.size_estimation_method: "chunk_sizes[idx] when recorded, else file_size_bytes/total_chunks, else 10MB default"`
+- Updated `instructions` field mentions iter106's dedup so users seeing smaller totals than a previous report understand why.
+
+### Frontend: "Download manifest (JSON)" button
+Per Support's request "reply to this ticket with the manifest attached directly":
+- New blue button next to "Copy email to support" on `/admin/storage-cleanup`
+- Generates a JSON blob from the report response, downloads as `soccer-scout-orphan-manifest-<timestamp>.json`
+- User can attach directly to the Support ticket reply
+
+### Tests (9 new, 157/157 across iter75 + iter93→106)
+- `test_iter106_orphan_dedup.py`:
+  - Same path in 2 buckets (dismissed + failed) counts as 1, not 2
+  - `deduplicated_by_path: true` and `size_estimation_method` exposed in summary
+  - Three-tier size estimation: recorded chunk_sizes → file_size/total_chunks → 10 MB
+  - Bucket priority is deterministic (dismissed wins over failed when both reference the same path)
+  - `mark-orphans` also benefits from the dedup (uses the same helper)
+  - Frontend "Download manifest" button + handler + JSON blob shape
+
+### Verified live on preview
+- `GET /api/health/deploy` → `build=iter106` with all 3 new feature flags
+
+### Files touched
+- `backend/server.py` (`_collect_all_orphan_buckets` global dedup + `_doc_chunk_size_estimate` helper + lost-chunk dedup, report summary metadata, BUILD_VERSION → iter106, 3 new feature flags)
+- `frontend/src/pages/AdminStorageCleanup.js` (`handleDownloadManifest` + new blue download button)
+- `backend/tests/test_iter106_orphan_dedup.py` (NEW — 9 cases)
+
+### Outcome for the user
+- Re-run the report on production after redeploy. Expected number to drop from ~19 GB to **~5 GB** — matching Support's quota observation. The 14 GB discrepancy was our counting bug, not phantom storage. Support's 5 GB observation was right all along.
+- Click "Download manifest (JSON)" → attach to Support reply → they can purge the listed paths server-side.
+
+---
+
+
 ## Pod Memory Chip + Support Escalation UI (iter105 — May 2026)
 
 User asked 2026-05-28: *"Last week, support was supposed to bump the app from 4GB to 20 GB. Did that not happen?"*

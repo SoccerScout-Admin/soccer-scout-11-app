@@ -497,7 +497,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter105"
+BUILD_VERSION = "iter106"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -700,6 +700,10 @@ SHIPPED_FEATURES = [
     "pod-memory-chip-storage-cleanup-page",
     "pod-bump-support-email-draft",
     "pod-verdict-color-coded-status",
+    # iter106 — dedup orphan paths + better chunk-size estimation
+    "orphan-report-global-path-dedup",
+    "chunk-size-estimate-via-file-size-divided-by-total-chunks",
+    "download-manifest-json-button",
 ]
 
 def _get_build_sha() -> str:
@@ -980,6 +984,9 @@ async def storage_cleanup_report(current_user: dict = Depends(get_current_user))
             "total_estimated_bytes": total_bytes,
             "total_estimated_gb": round(total_bytes / (1024 ** 3), 2),
             "by_bucket": {k: len(v) for k, v in buckets.items()},
+            # iter106 — explicit note that totals are de-duplicated
+            "deduplicated_by_path": True,
+            "size_estimation_method": "chunk_sizes[idx] when recorded, else file_size_bytes/total_chunks, else 10MB default",
         },
         "buckets": buckets,
         "instructions": (
@@ -987,7 +994,9 @@ async def storage_cleanup_report(current_user: dict = Depends(get_current_user))
             "(Allow: PUT, GET, HEAD as of 2026-05-24). To reclaim this storage, "
             "email support@emergent.sh with subject "
             "'Manual purge requested — orphan chunks from failed/dismissed uploads' "
-            "and attach this report. They can purge the listed paths server-side."
+            "and attach this report. They can purge the listed paths server-side. "
+            "iter106 note: each chunk path is counted ONCE globally. If you see "
+            "totals smaller than a previous report, that's iter106's dedup fix landing."
         ),
     }
 
@@ -1014,6 +1023,24 @@ _ORPHAN_BUCKET_KEYS = [
 async def _collect_all_orphan_buckets(uid: str, capture_paths: bool):
     """Single source of truth for the orphan-bucket logic.
 
+    iter106 — Path-deduplicated. Real production issue 2026-05-28: Emergent
+    Support said the user's object storage quota is 5 GB but iter95 reported
+    ~19 GB of orphans. Root causes:
+
+      1. The SAME storage path can appear in MULTIPLE buckets — a chunked
+         upload that finalized into a video, where both the chunked_uploads
+         doc AND the videos doc retain `chunk_paths` pointing at the same
+         physical chunks. iter95 counted each occurrence.
+
+      2. The 10 MB chunk_size fallback inflated legacy chunks whose actual
+         size was 1-3 MB. iter106 falls back to file_size_bytes/total_chunks
+         per parent doc (much closer to truth) before defaulting to 10 MB.
+
+    Each path is now counted ONCE globally — first bucket it appears in
+    wins (priority order: dismissed → abandoned → completed-no-video →
+    failed → stuck → deleted → lost). Counts/bytes per bucket reflect
+    actually-unique paths attributable to that bucket.
+
     When `capture_paths=True` returns (buckets_dict_of_lists, total_chunks,
     total_bytes) — used by the report endpoint that needs per-path detail.
     When `capture_paths=False` returns (buckets_dict_of_int_counts,
@@ -1025,16 +1052,39 @@ async def _collect_all_orphan_buckets(uid: str, capture_paths: bool):
         buckets = {k: 0 for k in _ORPHAN_BUCKET_KEYS}
     total_chunks = 0
     total_bytes = 0
+    seen_paths: set[str] = set()  # iter106 — global dedup ledger
+
+    def _doc_chunk_size_estimate(doc: dict, idx_str: str) -> int:
+        """iter106 — Best estimate of a chunk's actual byte size.
+        Order: chunk_sizes[idx] (recorded post-iter80) → file_size_bytes /
+        total_chunks → 10 MB default."""
+        sizes = doc.get("chunk_sizes") or {}
+        recorded = sizes.get(idx_str)
+        if recorded:
+            try:
+                return int(recorded)
+            except (TypeError, ValueError):
+                pass
+        file_size = doc.get("file_size_bytes") or doc.get("file_size")
+        total_chunks_doc = doc.get("total_chunks")
+        if file_size and total_chunks_doc and total_chunks_doc > 0:
+            try:
+                return int(int(file_size) / int(total_chunks_doc))
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+        return 10 * 1024 * 1024
 
     def _collect(doc: dict, bucket_key: str):
         nonlocal total_chunks, total_bytes
         cp = doc.get("chunk_paths") or {}
         cb = doc.get("chunk_backends") or {}
-        sizes = doc.get("chunk_sizes", {})
         for idx_str, path in cp.items():
             if cb.get(idx_str) != "storage":
                 continue
-            size_est = sizes.get(idx_str) or 10 * 1024 * 1024
+            if not path or path in seen_paths:  # iter106 — global dedup
+                continue
+            seen_paths.add(path)
+            size_est = _doc_chunk_size_estimate(doc, idx_str)
             if capture_paths:
                 buckets[bucket_key].append({"path": path, "size_estimate": size_est, "bucket": bucket_key})
             else:
@@ -1049,7 +1099,8 @@ async def _collect_all_orphan_buckets(uid: str, capture_paths: bool):
     # 1. Dismissed chunked_uploads (user explicitly waved off)
     async for s in db.chunked_uploads.find(
         {"user_id": uid, "dismissed_at": {"$exists": True}},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1,
+         "file_size_bytes": 1, "file_size": 1, "total_chunks": 1},
     ):
         _collect(s, "dismissed_sessions")
 
@@ -1061,7 +1112,8 @@ async def _collect_all_orphan_buckets(uid: str, capture_paths: bool):
             "dismissed_at": {"$exists": False},
             "created_at": {"$lt": abandon_cutoff},
         },
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1,
+         "file_size_bytes": 1, "file_size": 1, "total_chunks": 1},
     ):
         _collect(s, "abandoned_uploads")
 
@@ -1071,7 +1123,8 @@ async def _collect_all_orphan_buckets(uid: str, capture_paths: bool):
     completed_sessions = []
     async for s in db.chunked_uploads.find(
         {"user_id": uid, "status": "completed"},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "video_id": 1},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1,
+         "file_size_bytes": 1, "file_size": 1, "total_chunks": 1, "video_id": 1},
     ):
         completed_sessions.append(s)
     if completed_sessions:
@@ -1089,7 +1142,8 @@ async def _collect_all_orphan_buckets(uid: str, capture_paths: bool):
     # 4. Failed videos — split between alive (recoverable) and is_deleted
     async for v in db.videos.find(
         {"user_id": uid, "processing_status": "failed"},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1, "is_deleted": 1},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1,
+         "file_size_bytes": 1, "file_size": 1, "total_chunks": 1, "is_deleted": 1},
     ):
         _collect(v, "deleted_videos" if v.get("is_deleted") else "failed_videos")
 
@@ -1101,7 +1155,8 @@ async def _collect_all_orphan_buckets(uid: str, capture_paths: bool):
             "created_at": {"$lt": stuck_cutoff},
             "is_deleted": {"$ne": True},
         },
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1,
+         "file_size_bytes": 1, "file_size": 1, "total_chunks": 1},
     ):
         _collect(v, "stuck_videos")
 
@@ -1110,20 +1165,26 @@ async def _collect_all_orphan_buckets(uid: str, capture_paths: bool):
     # loss event.
     async for v in db.videos.find(
         {"user_id": uid, "chunk_backends": {"$exists": True}},
-        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1},
+        {"_id": 0, "chunk_paths": 1, "chunk_backends": 1, "chunk_sizes": 1,
+         "file_size_bytes": 1, "file_size": 1, "total_chunks": 1},
     ):
         cp = v.get("chunk_paths") or {}
         cb = v.get("chunk_backends") or {}
         for idx_str, backend in cb.items():
-            if backend == "lost" and cp.get(idx_str):
+            if backend == "lost":
+                path = cp.get(idx_str)
+                if not path or path in seen_paths:
+                    continue
+                seen_paths.add(path)
+                size_est = _doc_chunk_size_estimate(v, idx_str)
                 if capture_paths:
                     buckets["lost_chunks"].append(
-                        {"path": cp[idx_str], "size_estimate": 10 * 1024 * 1024, "bucket": "lost_chunks"}
+                        {"path": path, "size_estimate": size_est, "bucket": "lost_chunks"}
                     )
                 else:
                     buckets["lost_chunks"] += 1
                 total_chunks += 1
-                total_bytes += 10 * 1024 * 1024
+                total_bytes += size_est
 
     return buckets, total_chunks, total_bytes
 
