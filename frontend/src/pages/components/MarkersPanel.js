@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
-import { SoccerBall, Target, Hand, Warning, Flag, ArrowsClockwise, Lightning, Eye, PencilSimple, CheckCircle } from '@phosphor-icons/react';
+import { SoccerBall, Target, Hand, Warning, Flag, ArrowsClockwise, Lightning, Eye, PencilSimple, CheckCircle, Scissors } from '@phosphor-icons/react';
+import axios from 'axios';
+import { API, getAuthHeader } from '../../App';
 import TagPlayerModal from './TagPlayerModal';
 
 /**
@@ -32,10 +34,11 @@ const formatTime = (s) => {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 };
 
-const MarkerRow = ({ marker, onSeek, onEdit }) => {
+const MarkerRow = ({ marker, onSeek, onEdit, onClip, clipBusyForId }) => {
   const meta = TYPE_META[marker.type] || TYPE_META.tactical;
   const Icon = meta.icon;
   const hasAttribution = !!marker.player_number || !!marker.player_name;
+  const isClipping = clipBusyForId === marker.id;
   return (
     <div
       data-testid={`marker-row-${marker.id}`}
@@ -104,13 +107,54 @@ const MarkerRow = ({ marker, onSeek, onEdit }) => {
       >
         <PencilSimple size={13} weight="bold" />
       </button>
+      {/* iter107 — one-click clip from marker */}
+      <button
+        data-testid={`marker-row-clip-${marker.id}`}
+        onClick={() => onClip(marker)}
+        disabled={isClipping}
+        className="w-7 h-7 flex items-center justify-center flex-shrink-0 opacity-0 group-hover:opacity-100 text-[#666] hover:text-[#7DD3FC] transition-all disabled:opacity-100 disabled:text-[#7DD3FC]"
+        title="Create 15-sec clip centered on this moment"
+        aria-label="Create clip from this marker"
+      >
+        {isClipping
+          ? <div className="w-3 h-3 border border-[#7DD3FC] border-t-transparent rounded-full animate-spin" />
+          : <Scissors size={13} weight="bold" />}
+      </button>
     </div>
   );
 };
 
-const MarkersPanel = ({ markers, onSeek, matchId, onMarkerUpdated, onMarkerDeleted }) => {
+const MarkersPanel = ({ markers, onSeek, matchId, videoId, onMarkerUpdated, onMarkerDeleted, onClipCreated }) => {
   const [filter, setFilter] = useState(ALL_FILTER);
   const [editingMarker, setEditingMarker] = useState(null);
+  const [clipBusyForId, setClipBusyForId] = useState(null);
+
+  const handleCreateClipFromMarker = async (marker) => {
+    if (!videoId) return;
+    setClipBusyForId(marker.id);
+    // iter107 — 15-sec clip centered on the marker timestamp, clamped to >= 0
+    const start = Math.max(0, marker.time - 7);
+    const end = marker.time + 8;
+    const title = marker.player_number
+      ? `${marker.label || marker.type} — #${marker.player_number}${marker.player_name ? ` ${marker.player_name}` : ''}`
+      : marker.label || `AI ${marker.type}`;
+    try {
+      const r = await axios.post(`${API}/clips`, {
+        video_id: videoId,
+        title: title.slice(0, 120),
+        start_time: start,
+        end_time: end,
+        clip_type: marker.type === 'goal' ? 'goal' : 'highlight',
+        description: `Auto-created from AI marker at ${Math.floor(marker.time / 60)}:${String(Math.floor(marker.time % 60)).padStart(2, '0')}`,
+        player_ids: [],
+      }, { headers: getAuthHeader() });
+      onClipCreated?.(r.data);
+    } catch (err) {
+      alert('Could not create clip: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setClipBusyForId(null);
+    }
+  };
 
   // Sort: by time asc; group counts for the filter pills
   const sorted = useMemo(
@@ -185,7 +229,14 @@ const MarkersPanel = ({ markers, onSeek, matchId, onMarkerUpdated, onMarkerDelet
       {/* Marker rows */}
       <div className="max-h-[480px] overflow-y-auto divide-y divide-white/5">
         {filtered.map((m) => (
-          <MarkerRow key={m.id} marker={m} onSeek={onSeek} onEdit={setEditingMarker} />
+          <MarkerRow
+            key={m.id}
+            marker={m}
+            onSeek={onSeek}
+            onEdit={setEditingMarker}
+            onClip={handleCreateClipFromMarker}
+            clipBusyForId={clipBusyForId}
+          />
         ))}
         {filtered.length === 0 && (
           <p className="text-xs text-[#666] px-4 py-6 text-center">

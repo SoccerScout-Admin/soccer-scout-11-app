@@ -1,6 +1,86 @@
 # Soccer Scout - Product Requirements Document
 
 
+## Clip-from-Marker + Possession Stats + Jersey Colors (iter107 — May 2026)
+
+User request 2026-05-28 post-iter106 deploy:
+> *"a. [One-click clips from markers]. Also: I'd like to see pass strings and possession as a stat that is highlighted in the app, similar to Veo. And, can we add jersey color to the teams when we create matches, so the AI automatically knows which team is which when analysing?"*
+
+Three coordinated changes shipped in one iteration since they all reinforce each other (jersey colors + Veo stats improve AI quality; clip-from-marker turns improved markers into shareable deliverables).
+
+### 1. Jersey colors on matches
+- **`Match` + `MatchCreate` models** (both `server.py` AND `routes/matches.py` — there were duplicate definitions, fixed both): added optional `team_home_jersey_color` + `team_away_jersey_color` string fields.
+- **`PATCH /api/matches/{id}`** now accepts the same fields in its allowed-keys whitelist so users can backfill colors on existing matches.
+- **`build_analysis_prompts`** injects a `**TEAM KIT COLORS — use this to disambiguate teams.** {home team} wears {color}; {away team} wears {color}.` preamble at the top of EVERY analysis prompt (tactical, player_performance, highlights, timeline_markers, possession_stats). Especially valuable post-iter103 because 480p footage makes both teams look similar at distance.
+- **Frontend** `CreateMatchModal` gets a 2-column row of color inputs with helper text "Helps the AI tell the teams apart in 480p footage. Common color names work — red, navy, white, yellow, etc." (Free-form text, not a color picker — soccer kits are usually described by name like "navy", "maroon", "neon yellow".)
+
+### 2. Possession stats (Veo-style)
+- **New `possession_stats` analysis type** in `build_analysis_prompts`. Gemini receives explicit methodology hints (pass-string definition, what counts as out-of-play, how to scale total passes from sample windows) and returns a STRUCTURED JSON object with 7 fields:
+  ```json
+  {
+    "team_home_possession_pct": int,
+    "team_away_possession_pct": int,
+    "team_home_longest_pass_string": int,
+    "team_away_longest_pass_string": int,
+    "team_home_total_passes_estimate": int,
+    "team_away_total_passes_estimate": int,
+    "summary": "..."
+  }
+  ```
+- Wired into `run_auto_processing` as the 5th analysis type so it generates automatically alongside the existing 4. Also added to the reprocess endpoint's "remaining types" computation.
+- **`pages/components/MatchStatsCard.js`** (NEW) renders prominently above the video player. Parses the Gemini JSON (handles ```json fence wrapping), normalizes possession to 100% sum, and shows:
+  - Side-by-side **possession bar** color-coded with each team's jersey color (or default sky/red)
+  - **Longest pass string** callouts — big numbers in the team color
+  - Total passes estimate as a secondary metric row
+  - Tactical summary quote at the bottom
+- Card returns `null` if no `possession_stats` analysis exists yet (no empty stub clutter).
+- Common color names → hex map (`red → #EF4444`, `navy → #1E3A8A`, etc.) with raw hex passthrough for "neon green" type strings.
+
+### 3. Clip-from-marker (one-click)
+- **MarkersPanel** row now has a small scissor button (Phosphor `Scissors` icon) next to the iter102 pencil. Always hidden until row hover (less visual noise on rows that are already clip-worthy).
+- **Click → POST `/api/clips`** with:
+  - `start_time = max(0, marker.time - 7)` (centers 15s on the marker, clamped to >= 0)
+  - `end_time = marker.time + 8`
+  - `title` built from marker label + iter99 player attribution (`"Header from corner — #9 Marcus Lopez"`) capped at 120 chars
+  - `clip_type = "goal"` for goal markers, `"highlight"` otherwise
+  - `description` includes the formatted source timestamp (`"Auto-created from AI marker at 3:54"`)
+- Loading state shows a spinner in the button; `onClipCreated` callback splices the new clip into VideoAnalysis's `clips` state so it appears in ClipsSidebar instantly.
+
+### 4. Bonus: shared prompt builder on manual regenerates
+While wiring possession_stats, found that `_run_generate_analysis` and `_run_generate_trimmed_analysis` in `server.py` were duplicating SIMPLIFIED inline prompts that lacked all the iter99-107 improvements (kit colors, goal-detection cues, jersey-first directive, etc.). iter107 routes both through the shared `build_analysis_prompts` helper so manual regenerates get the same quality as auto-processing. **Fixes a silent regression** where clicking "Regenerate" on tactical/player_performance/highlights produced lower-quality output than the auto-pass.
+
+### Tests (19 new, 176/176 across iter75 + iter93→107)
+- `test_iter107_clips_possession_jerseys.py`:
+  - Match accepts + persists jersey colors (POST + PATCH); backwards compat (works without colors)
+  - All 5 prompts inject kit preamble when set; skip when not; one-color variant works
+  - possession_stats prompt specifies all 7 JSON output fields + methodology hints
+  - possession_stats wired into auto-processing pipeline + reprocess remaining-types
+  - `_run_generate_analysis` uses `build_analysis_prompts` (no more inline duplicates)
+  - MarkersPanel scissor button + 15-sec window (Math.max clamp + ±7/+8) + player-attribution-in-title
+  - VideoAnalysis wires `videoId` + `onClipCreated` to MarkersPanel
+  - MatchStatsCard exists with required testids; returns null when no data; uses jersey colors for visualization
+  - VideoAnalysis mounts MatchStatsCard
+  - CreateMatchModal has the 2 color inputs
+  - Deploy endpoint advertises 4 new feature flags
+
+### Verified live on preview
+- Seeded test possession_stats + jersey colors on the test coach's video
+- Playwright screenshot confirms the full MATCH STATS card renders: red/white possession bar (58% / 42%), longest-pass-string callouts (9 / 5), total passes row (~312 / ~198), tactical summary quote
+- `GET /api/health/deploy` → `build=iter107` with all 4 new feature flags
+
+### Files touched
+- `backend/server.py` (Match + MatchCreate model jersey fields, `_run_generate_analysis` + `_run_generate_trimmed_analysis` use shared builder, `all_types` + reprocess remaining-types include possession_stats, BUILD_VERSION → iter107, 4 new feature flags)
+- `backend/routes/matches.py` (Match + MatchCreate jersey fields in the OTHER model location, PATCH allowed-keys whitelist)
+- `backend/services/processing.py` (`build_analysis_prompts` kit_preamble injection + new `possession_stats` prompt, auto-processing `all_types` includes it)
+- `frontend/src/pages/components/MatchStatsCard.js` (NEW)
+- `frontend/src/pages/components/MarkersPanel.js` (Scissors icon + `handleCreateClipFromMarker` + `onClip` prop wiring + clip-busy spinner state)
+- `frontend/src/pages/components/CreateMatchModal.js` (2 jersey-color inputs + helper text)
+- `frontend/src/pages/VideoAnalysis.js` (MatchStatsCard mount above video player + `videoId` + `onClipCreated` props on MarkersPanel)
+- `backend/tests/test_iter107_clips_possession_jerseys.py` (NEW — 19 cases)
+
+---
+
+
 ## Orphan Path Dedup + Better Chunk-Size Estimation (iter106 — May 2026)
 
 Emergent Support 2026-05-28: *"From where you checked that chunking size 23 GB and it store in on our object storage. Because our object storage have only 5 GB space."*

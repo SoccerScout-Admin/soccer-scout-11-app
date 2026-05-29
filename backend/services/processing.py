@@ -51,9 +51,29 @@ def build_roster_context(roster: list) -> str:
 
 def build_analysis_prompts(match: dict, roster_context: str, segment_preamble: str) -> dict:
     """Build the AI prompt dictionary for each analysis type."""
+    # iter107 — Jersey color context. When the user sets jersey colors during
+    # match creation, prepend a kit-color preamble to EVERY prompt so Gemini
+    # can disambiguate teams in 480p/720p footage instead of guessing by
+    # position. The color disambiguator matters even more after iter103's
+    # tier-down because 480p makes both teams look similar at distance.
+    home_color = (match.get("team_home_jersey_color") or "").strip()
+    away_color = (match.get("team_away_jersey_color") or "").strip()
+    kit_preamble = ""
+    if home_color or away_color:
+        kit_parts = []
+        if home_color:
+            kit_parts.append(f"{match['team_home']} (home) wears {home_color}")
+        if away_color:
+            kit_parts.append(f"{match['team_away']} (away) wears {away_color}")
+        kit_preamble = (
+            "**TEAM KIT COLORS — use this to disambiguate teams.** "
+            + "; ".join(kit_parts) + ".\n\n"
+        )
+
     return {
         "tactical": (
-            f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. "
+            f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}.\n\n"
+            f"{kit_preamble}"
             "Provide detailed tactical analysis covering:\n\n"
             "1. **Formations** - What formations are each team using? Any formation changes during the match?\n"
             "2. **Pressing Patterns** - How do teams press? High press, mid-block, or low block?\n"
@@ -64,6 +84,7 @@ def build_analysis_prompts(match: dict, roster_context: str, segment_preamble: s
         ),
         "player_performance": (
             f"Analyze individual player performances in this soccer match between {match['team_home']} and {match['team_away']}.\n\n"
+            f"{kit_preamble}"
             "**IDENTIFY PLAYERS BY THEIR JERSEY NUMBER FIRST.** Throughout the match you will see jersey numbers — "
             "when you reference a player, ALWAYS open with their number (e.g., '#7 plays in the right wing role...'). "
             "If the roster below maps that number to a name, prefer the name + number (e.g., '#7 Marcus Lopez').\n\n"
@@ -78,7 +99,8 @@ def build_analysis_prompts(match: dict, roster_context: str, segment_preamble: s
             f"(e.g., 'the holding midfielder in the dark kit') rather than guessing.{roster_context}"
         ),
         "highlights": (
-            f"Identify and describe ALL key moments and highlights from this soccer match between {match['team_home']} and {match['team_away']}. "
+            f"Identify and describe ALL key moments and highlights from this soccer match between {match['team_home']} and {match['team_away']}.\n\n"
+            f"{kit_preamble}"
             "Include:\n\n"
             "1. **Goals & Assists** - Describe each goal in detail with timestamps if visible\n"
             "2. **Near Misses** - Close chances that didn't result in goals\n"
@@ -90,6 +112,7 @@ def build_analysis_prompts(match: dict, roster_context: str, segment_preamble: s
         ),
         "timeline_markers": (
             f"You are watching a soccer match between {match['team_home']} (home) and {match['team_away']} (away).\n\n"
+            f"{kit_preamble}"
             f"{segment_preamble}"
             "**YOUR JOB:** Identify EVERY key event with precise match timestamps (seconds from match start, NOT from segment start).\n\n"
             "**GOAL DETECTION — CRITICAL.** Goals are the most important events; do NOT miss them. "
@@ -120,6 +143,36 @@ def build_analysis_prompts(match: dict, roster_context: str, segment_preamble: s
             "Be THOROUGH — aim for 20-35 events covering every goal, shot, save, key foul, and tactical moment. "
             "Coverage > brevity: better to log a near-miss as a `chance` than to skip it.\n\n"
             f"Return ONLY the JSON array, no other text.{roster_context}"
+        ),
+        # iter107 — Veo-style match stats (possession + pass strings).
+        # Returns a structured JSON object that the frontend can render as
+        # a prominent stat card at the top of the video analysis page.
+        "possession_stats": (
+            f"You are watching a soccer match between {match['team_home']} (home) and {match['team_away']} (away).\n\n"
+            f"{kit_preamble}"
+            f"{segment_preamble}"
+            "**YOUR JOB:** Estimate match-level possession + pass-stringing statistics for both teams. "
+            "These are coarse estimates from the sampled segments — close enough is fine.\n\n"
+            "**METHODOLOGY HINTS:**\n"
+            "  • Possession = % of total ball-in-play time each team had the ball at their feet. "
+            "Out-of-play time (throw-ins waiting, goal kicks not yet taken) doesn't count.\n"
+            "  • Pass string = a sequence of consecutive passes by one team without the ball going dead "
+            "(out of bounds, fouled, intercepted). A turnover via tackle or interception breaks the string.\n"
+            "  • Longest pass string = the highest number of consecutive passes you observed in your "
+            "samples for each team. Typical youth/HS games show 3-8; pro games 10-25.\n"
+            "  • Total passes estimate = scale up from what you saw across the sampled segments. "
+            "If you saw N passes total across X minutes of sampled footage in a Y-minute match, scale by Y/X.\n\n"
+            "**OUTPUT FORMAT.** Return ONLY a JSON object (no array, no preamble) with these fields:\n"
+            "{\n"
+            f"  \"team_home_possession_pct\": integer 0-100 (must sum to 100 with away),\n"
+            f"  \"team_away_possession_pct\": integer 0-100,\n"
+            f"  \"team_home_longest_pass_string\": integer (consecutive passes),\n"
+            f"  \"team_away_longest_pass_string\": integer,\n"
+            f"  \"team_home_total_passes_estimate\": integer,\n"
+            f"  \"team_away_total_passes_estimate\": integer,\n"
+            "  \"summary\": short string explaining what the stats imply tactically (max 240 chars)\n"
+            "}\n\n"
+            f"Return ONLY the JSON object, no other text.{roster_context}"
         ),
     }
 
@@ -887,7 +940,7 @@ async def run_auto_processing(
     timeline markers are stored — kept as a callback so this module doesn't import
     server.py.
     """
-    all_types = ["tactical", "player_performance", "highlights", "timeline_markers"]
+    all_types = ["tactical", "player_performance", "highlights", "timeline_markers", "possession_stats"]
     analysis_types = only_types if only_types else all_types
     tmp_path = None
     tmp_path_720p = None

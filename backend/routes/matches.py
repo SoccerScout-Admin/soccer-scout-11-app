@@ -24,6 +24,9 @@ class Match(BaseModel):
     has_manual_result: bool = False
     manual_result: Optional[dict] = None
     insights: Optional[dict] = None
+    # iter107 — jersey colors so the AI can disambiguate teams in 480p footage
+    team_home_jersey_color: Optional[str] = None
+    team_away_jersey_color: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -33,6 +36,8 @@ class MatchCreate(BaseModel):
     date: str
     competition: str = ""
     folder_id: Optional[str] = None
+    team_home_jersey_color: Optional[str] = None
+    team_away_jersey_color: Optional[str] = None
 
 
 @router.post("/matches", response_model=Match)
@@ -77,7 +82,8 @@ async def update_match(
     )
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
-    allowed = {"folder_id", "team_home", "team_away", "date", "competition"}
+    allowed = {"folder_id", "team_home", "team_away", "date", "competition",
+               "team_home_jersey_color", "team_away_jersey_color"}
     filtered = {k: v for k, v in updates.items() if k in allowed}
     if filtered:
         await db.matches.update_one({"id": match_id}, {"$set": filtered})

@@ -131,6 +131,38 @@ const CreateMatchModal = ({ open, onClose, onSubmit, formData, setFormData, load
                   onChange={(e) => setFormData({ ...formData, team_away: e.target.value })}
                   className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none" required />
               </div>
+              {/* iter107 — Jersey colors so the AI can disambiguate teams in low-res footage */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">
+                    Home Jersey Color
+                  </label>
+                  <input
+                    data-testid="home-jersey-color-input"
+                    type="text"
+                    value={formData.team_home_jersey_color || ''}
+                    onChange={(e) => setFormData({ ...formData, team_home_jersey_color: e.target.value })}
+                    className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none"
+                    placeholder="e.g., red, navy, white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">
+                    Away Jersey Color
+                  </label>
+                  <input
+                    data-testid="away-jersey-color-input"
+                    type="text"
+                    value={formData.team_away_jersey_color || ''}
+                    onChange={(e) => setFormData({ ...formData, team_away_jersey_color: e.target.value })}
+                    className="w-full bg-[#0A0A0A] border border-white/10 text-white px-4 py-3 focus:border-[#007AFF] focus:outline-none"
+                    placeholder="e.g., blue, yellow, black"
+                  />
+                </div>
+              </div>
+              <p className="text-[10px] text-[#666] -mt-2">
+                Helps the AI tell the teams apart in 480p footage. Common color names work — red, navy, white, yellow, etc.
+              </p>
               <div>
                 <label className="block text-xs font-bold tracking-[0.2em] uppercase text-[#A3A3A3] mb-2">Date</label>
                 <input data-testid="match-date-input" type="date" value={formData.date}

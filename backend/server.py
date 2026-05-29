@@ -131,6 +131,9 @@ class Match(BaseModel):
     competition: str = ""
     folder_id: Optional[str] = None
     video_id: Optional[str] = None
+    # iter107 — jersey colors so the AI can disambiguate teams in 480p footage
+    team_home_jersey_color: Optional[str] = None
+    team_away_jersey_color: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 class MatchCreate(BaseModel):
@@ -139,6 +142,8 @@ class MatchCreate(BaseModel):
     date: str
     competition: str = ""
     folder_id: Optional[str] = None
+    team_home_jersey_color: Optional[str] = None
+    team_away_jersey_color: Optional[str] = None
 
 class Video(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -497,7 +502,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter106"
+BUILD_VERSION = "iter107"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -704,6 +709,11 @@ SHIPPED_FEATURES = [
     "orphan-report-global-path-dedup",
     "chunk-size-estimate-via-file-size-divided-by-total-chunks",
     "download-manifest-json-button",
+    # iter107 — clip-from-marker + possession stats + jersey colors
+    "clip-from-marker-one-click",
+    "possession-stats-veo-style-card",
+    "jersey-color-team-disambiguation",
+    "shared-prompt-builder-on-manual-regenerate",
 ]
 
 def _get_build_sha() -> str:
@@ -2523,7 +2533,7 @@ async def reprocess_video(video_id: str, current_user: dict = Depends(get_curren
     # Delete only failed analyses (keep completed ones)
     await db.analyses.delete_many({"video_id": video_id, "user_id": current_user["id"], "status": "failed"})
     
-    remaining = [t for t in ["tactical", "player_performance", "highlights", "timeline_markers"] if t not in completed]
+    remaining = [t for t in ["tactical", "player_performance", "highlights", "timeline_markers", "possession_stats"] if t not in completed]
     
     if not remaining:
         return {"status": "already_complete", "completed_types": list(completed)}
@@ -2783,11 +2793,12 @@ async def _run_generate_analysis(
             system_message="You are an expert soccer analyst. You will receive video samples from multiple points throughout the match. Analyze the full match based on these samples and provide detailed tactical insights.",
         ).with_model("gemini", "gemini-3.1-pro-preview")
         video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
-        prompts = {
-            "tactical": f"Analyze this soccer match video between {match['team_home']} and {match['team_away']}. Provide detailed tactical analysis.{roster_context}",
-            "player_performance": f"Analyze individual player performances in this match between {match['team_home']} and {match['team_away']}.{roster_context}",
-            "highlights": f"Identify key moments and highlights from this match between {match['team_home']} and {match['team_away']}.{roster_context}",
-        }
+        # iter107 — use the shared prompt builder so manual regenerates get
+        # the same jersey-color preamble + tightened prompts as auto-processing
+        from services.processing import build_analysis_prompts
+        prompts = build_analysis_prompts(
+            match=match, roster_context=roster_context, segment_preamble="",
+        )
         prompt = prompts.get(analysis_type, prompts["tactical"])
         response = await chat.send_message(UserMessage(text=prompt, file_contents=[video_file]))
 
@@ -3857,7 +3868,7 @@ async def resume_interrupted_processing():
             # Delete failed ones so they can be retried
             await db.analyses.delete_many({"video_id": video_id, "status": "failed"})
 
-            remaining = [t for t in ["tactical", "player_performance", "highlights", "timeline_markers"] if t not in completed]
+            remaining = [t for t in ["tactical", "player_performance", "highlights", "timeline_markers", "possession_stats"] if t not in completed]
 
             if remaining:
                 # Bump the resume counter BEFORE kicking off the new attempt

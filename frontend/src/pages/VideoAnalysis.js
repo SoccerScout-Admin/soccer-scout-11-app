@@ -12,6 +12,7 @@ import TrimPanel from './components/TrimPanel';
 import ClipsSidebar from './components/ClipsSidebar';
 import AnnotationsSidebar from './components/AnnotationsSidebar';
 import MarkersPanel from './components/MarkersPanel';
+import MatchStatsCard from './components/MatchStatsCard';
 import AnnotationForm from './components/AnnotationForm';
 import LiveCoachingMic from './components/LiveCoachingMic';
 import ClipCreateForm from './components/ClipCreateForm';
@@ -473,6 +474,7 @@ const VideoAnalysis = () => {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left: Video + Controls */}
           <div className="lg:col-span-8 space-y-4">
+            <MatchStatsCard analyses={analyses} match={match} />
             <VideoPlayerWithMarkers
               ref={videoRef}
               videoSrc={videoSrc}
@@ -568,8 +570,10 @@ const VideoAnalysis = () => {
               markers={markers}
               onSeek={seekTo}
               matchId={match?.id}
+              videoId={videoId}
               onMarkerUpdated={(updated) => setMarkers((prev) => prev.map((m) => m.id === updated.id ? updated : m))}
               onMarkerDeleted={(id) => setMarkers((prev) => prev.filter((m) => m.id !== id))}
+              onClipCreated={(clip) => setClips((prev) => [clip, ...prev])}
             />
             <ClipsSidebar
               clips={clips}
