@@ -18,7 +18,7 @@ from conftest import THROWAWAY_PASSWORD, make_throwaway_email
 
 BASE_URL = os.environ.get(
     'REACT_APP_BACKEND_URL',
-    'https://scout-lens.preview.emergentagent.com',
+    'https://soccer-analysis-16.preview.emergentagent.com',
 ).rstrip('/')
 
 TEST_EMAIL = make_throwaway_email("cookie-auth")

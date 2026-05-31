@@ -133,7 +133,7 @@ async def login(input: LoginRequest):
 ### Health Checks
 ```bash
 # /api/health endpoint
-curl https://scout-lens.preview.emergentagent.com/api/health
+curl https://soccer-analysis-16.preview.emergentagent.com/api/health
 {
   "status": "healthy",
   "service": "soccer-scout-api",

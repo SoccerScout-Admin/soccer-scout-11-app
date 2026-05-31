@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
-BASE_URL = os.environ.get("BASE_URL") or "https://scout-lens.preview.emergentagent.com"
+BASE_URL = os.environ.get("BASE_URL") or "https://soccer-analysis-16.preview.emergentagent.com"
 ADMIN_EMAIL = "testcoach@demo.com"
 ADMIN_PASS = "password123"
 

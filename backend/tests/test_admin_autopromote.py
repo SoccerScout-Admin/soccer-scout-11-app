@@ -30,7 +30,7 @@ _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-BASE_URL = os.environ.get("BASE_URL") or "https://scout-lens.preview.emergentagent.com"
+BASE_URL = os.environ.get("BASE_URL") or "https://soccer-analysis-16.preview.emergentagent.com"
 
 
 def _run(coro):

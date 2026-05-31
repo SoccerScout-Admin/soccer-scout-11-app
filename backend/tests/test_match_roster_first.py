@@ -15,7 +15,7 @@ import os
 import uuid
 import requests
 
-BASE_URL = os.environ.get("BASE_URL") or "https://scout-lens.preview.emergentagent.com"
+BASE_URL = os.environ.get("BASE_URL") or "https://soccer-analysis-16.preview.emergentagent.com"
 
 
 def _login():

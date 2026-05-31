@@ -930,7 +930,7 @@ After the 2026-05-23 → 2026-05-24 21+ hour Emergent Object Storage outage, eve
   - Uses yellow palette (visually distinct from red disk-pressure banner)
 
 ### Verified live on preview during the active 2026-05-24 outage
-- Banner appears within ~5s of login on `https://scout-lens.preview.emergentagent.com/dashboard`.
+- Banner appears within ~5s of login on `https://soccer-analysis-16.preview.emergentagent.com/dashboard`.
 - Text reads: "STORAGE DEGRADED — Emergent Object Storage is currently failing (PUT returned 500). Uploads are paused — we'll resume automatically when it recovers. Existing videos and clips load normally."
 - Sits cleanly above the navigation header. Other UI (Match Library, Coach Pulse, existing videos) is fully usable.
 
