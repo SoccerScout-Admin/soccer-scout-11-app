@@ -1,6 +1,17 @@
 # Soccer Scout - Product Requirements Document
 
 
+## New Brand Logo Rollout (Feb 2026)
+
+User uploaded a new official "Soccer Scout 11" logo (square lockup: white+blue "S11" mark with an embedded play button, "SOCCER SCOUT 11" wordmark, tagline "ANALYZE. IDENTIFY. ELEVATE." on black). Regenerated ALL brand assets in `/app/frontend/public/` from the source, preserving each file's original dimensions/mode so no layout broke:
+- **Header/inline lockups** (`logo-mark.png` 969x473, `logo-mark-256.png`, `logo-mark-96.png`): the S11 mark, black→transparent RGBA (clean over dark UI). Mark is ~2:1, matching the old header logo's 1.95:1 ratio — zero layout regression.
+- **Square app icons** (`favicon.png`, `apple-touch-icon.png`, `icon-192/512.png`, `logo-192/512.png`): S11 mark centered on `#0A0A0A`.
+- **Full lockup** (`logo.png` 1200², `logo-source.png` 2000²) + static social card (`og-image.png` 1200x630).
+- Backend `services/og_card.py` dynamic OG cards auto-pick up the new `logo-mark.png` (in-memory cache cleared via backend restart; verified the S11 mark renders bottom-right with working transparency).
+- No code changes — assets only. Verified live: auth page, landing header, icon contact sheet, and a rendered dynamic OG card all show the new mark crisply. OG/share tests (16) pass.
+- NOTE: filenames unchanged, so browsers/social scrapers may serve cached old favicon/OG image until cache expiry (use a social re-scrape e.g. FB Sharing Debugger if needed).
+
+
 ## One-Click Goals-Only Highlight Reel (iter108 — May 2026)
 
 User said yes to the iter107 finish-tool suggestion: a one-click button that takes every `type=goal` marker, creates clips for each, and stitches them into a downloadable goal-only highlight reel.
