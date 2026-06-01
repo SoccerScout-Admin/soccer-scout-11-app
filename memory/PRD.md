@@ -12,6 +12,17 @@ User uploaded a new official "Soccer Scout 11" logo (square lockup: white+blue "
 - NOTE: filenames unchanged, so browsers/social scrapers may serve cached old favicon/OG image until cache expiry (use a social re-scrape e.g. FB Sharing Debugger if needed).
 
 
+## Animated Logo Intro Splash (Feb 2026)
+
+Premium first-load brand reveal of the new S11 mark. New `components/LogoIntro.js` mounted globally at the top of `App.js` (above the router, `z-9999`).
+- Animation sequence (CSS in `styles/logo-intro.css`): radial blue glow breathe + expanding ring pulse → S11 mark scales in with overshoot (`cubic-bezier(0.16,1,0.3,1)`) + glow pulse + a metallic shine sweep masked to the logo shape → "SOCCER SCOUT 11" wordmark (Bebas Neue, white + blue, matches landing header) fades up → tagline + accent divider draw in → whole overlay fades out (~2.6s total).
+- Fires **once per browser session** (gated by `sessionStorage 'ss11-splash-played'`, separate from the existing auth/landing inline `logo-intro-played` key). **Click anywhere to skip.**
+- Accessibility: users with `prefers-reduced-motion: reduce` skip the splash entirely (component returns null).
+- Shine mask-image URL set inline in JSX (browser-resolved) so webpack/css-loader doesn't try to bundle the public asset.
+- Verified live via frozen-frame screenshot + DOM inspection (wordmark/tagline render correctly; earlier captures only caught them mid-fade). No backend changes. Lint clean, no console errors.
+- Files: `frontend/src/components/LogoIntro.js` (NEW), `frontend/src/styles/logo-intro.css` (splash classes appended), `frontend/src/App.js` (import + mount).
+
+
 ## One-Click Goals-Only Highlight Reel (iter108 — May 2026)
 
 User said yes to the iter107 finish-tool suggestion: a one-click button that takes every `type=goal` marker, creates clips for each, and stitches them into a downloadable goal-only highlight reel.

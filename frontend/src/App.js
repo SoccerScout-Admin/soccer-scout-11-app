@@ -38,6 +38,7 @@ import Messages from './pages/Messages';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 import DiskPressureBanner from './components/DiskPressureBanner';
 import StorageOutageBanner from './components/StorageOutageBanner';
+import LogoIntro from './components/LogoIntro';
 import { Toaster } from 'sonner';
 import useInAppNotifications from './hooks/useInAppNotifications';
 
@@ -166,6 +167,7 @@ function App() {
 
   return (
     <div className="App">
+      <LogoIntro />
       <BrowserRouter>
         <PWAInstallPrompt />
         <DiskPressureBanner />

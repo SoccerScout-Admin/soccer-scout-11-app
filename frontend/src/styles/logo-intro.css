@@ -35,3 +35,162 @@
     animation: none;
   }
 }
+
+/* =========================================================================
+ * Full-screen brand intro splash (Feb 2026)
+ * A premium first-load reveal of the S11 mark. Fires once per browser
+ * session (gated by sessionStorage in LogoIntro.js). Click anywhere to skip.
+ * ======================================================================= */
+.ss11-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #0A0A0A;
+  opacity: 1;
+  transition: opacity 550ms cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+  overflow: hidden;
+}
+.ss11-splash.leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Radial blue glow that breathes behind the mark */
+.ss11-splash::before {
+  content: "";
+  position: absolute;
+  width: 80vmin;
+  height: 80vmin;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 122, 255, 0.22) 0%, rgba(0, 122, 255, 0.06) 38%, transparent 70%);
+  filter: blur(8px);
+  animation: ss11-glow-breathe 2600ms ease-in-out both;
+  pointer-events: none;
+}
+
+/* Faint expanding ring pulse on entrance */
+.ss11-splash::after {
+  content: "";
+  position: absolute;
+  width: 38vmin;
+  height: 38vmin;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 122, 255, 0.45);
+  opacity: 0;
+  animation: ss11-ring-pulse 1500ms cubic-bezier(0.16, 1, 0.3, 1) 250ms both;
+  pointer-events: none;
+}
+
+.ss11-splash-inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 1;
+}
+
+.ss11-mark-wrap {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+  animation: ss11-mark-in 1000ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.ss11-mark {
+  height: 22vmin;
+  max-height: 168px;
+  min-height: 96px;
+  width: auto;
+  display: block;
+  filter: drop-shadow(0 0 26px rgba(0, 122, 255, 0.35));
+  animation: ss11-mark-glow 2200ms ease-in-out 400ms both;
+}
+
+/* Metallic shine that sweeps across the mark, masked to the logo shape.
+ * mask-image url is set inline in LogoIntro.js (browser-resolved) so webpack
+ * doesn't try to bundle the public asset. */
+.ss11-shine {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, 0.9) 50%, transparent 62%);
+  background-size: 250% 100%;
+  background-position: 160% 0;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  animation: ss11-shine-sweep 1150ms ease-in-out 520ms both;
+}
+
+.ss11-wordmark {
+  margin-top: 3.2vmin;
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: clamp(28px, 6vmin, 56px);
+  letter-spacing: 0.14em;
+  line-height: 1;
+  color: #FFFFFF;
+  text-transform: uppercase;
+  opacity: 0;
+  animation: ss11-fade-up 620ms ease-out 560ms both;
+}
+.ss11-wordmark span { color: #007AFF; }
+
+.ss11-tagline {
+  margin-top: 1.4vmin;
+  font-family: 'Manrope', sans-serif;
+  font-size: clamp(10px, 1.6vmin, 14px);
+  letter-spacing: 0.42em;
+  color: #6B7280;
+  text-transform: uppercase;
+  opacity: 0;
+  animation: ss11-fade-up 620ms ease-out 760ms both;
+}
+
+.ss11-divider {
+  margin-top: 1.8vmin;
+  height: 2px;
+  width: 120px;
+  background: linear-gradient(90deg, transparent, #007AFF, transparent);
+  transform: scaleX(0);
+  opacity: 0;
+  animation: ss11-divider-draw 700ms cubic-bezier(0.16, 1, 0.3, 1) 820ms both;
+}
+
+@keyframes ss11-mark-in {
+  0%   { opacity: 0; transform: scale(0.74) translateY(10px); }
+  60%  { opacity: 1; transform: scale(1.04) translateY(-2px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes ss11-mark-glow {
+  0%, 100% { filter: drop-shadow(0 0 22px rgba(0, 122, 255, 0.28)); }
+  50%      { filter: drop-shadow(0 0 46px rgba(0, 122, 255, 0.6)); }
+}
+@keyframes ss11-shine-sweep {
+  from { background-position: 160% 0; }
+  to   { background-position: -160% 0; }
+}
+@keyframes ss11-glow-breathe {
+  0%   { opacity: 0; transform: scale(0.7); }
+  45%  { opacity: 1; transform: scale(1.05); }
+  100% { opacity: 0.55; transform: scale(1); }
+}
+@keyframes ss11-ring-pulse {
+  0%   { opacity: 0; transform: scale(0.5); }
+  35%  { opacity: 0.6; }
+  100% { opacity: 0; transform: scale(2.6); }
+}
+@keyframes ss11-fade-up {
+  0%   { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes ss11-divider-draw {
+  0%   { opacity: 0; transform: scaleX(0); }
+  100% { opacity: 1; transform: scaleX(1); }
+}
