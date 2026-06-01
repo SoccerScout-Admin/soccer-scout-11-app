@@ -28,6 +28,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 from db import db
 from services.email_queue import send_or_queue
+from services.email_branding import email_logo_header
 
 router = APIRouter()
 
@@ -74,7 +75,7 @@ def _build_email_html(reset_url: str, name: str) -> str:
     <tr><td align="center" style="padding:40px 16px;">
       <table width="560" cellpadding="0" cellspacing="0" role="presentation" style="max-width:560px;background:#141414;border:1px solid rgba(255,255,255,0.1);">
         <tr><td style="padding:32px 32px 8px 32px;">
-          <div style="font-family:Bebas Neue,Impact,sans-serif;font-size:28px;letter-spacing:2px;color:#007AFF;">SOCCER SCOUT 11</div>
+          {email_logo_header(width=190, margin_bottom=14)}
           <div style="font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#888;margin-top:4px;">Password Reset</div>
         </td></tr>
         <tr><td style="padding:16px 32px;">

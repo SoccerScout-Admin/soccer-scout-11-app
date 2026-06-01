@@ -23,6 +23,23 @@ Premium first-load brand reveal of the new S11 mark. New `components/LogoIntro.j
 - Files: `frontend/src/components/LogoIntro.js` (NEW), `frontend/src/styles/logo-intro.css` (splash classes appended), `frontend/src/App.js` (import + mount).
 
 
+## Dashboard Branded Loader + S11 Logo in Emails (Feb 2026)
+
+Two brand-polish follow-ups after the logo rollout + intro splash:
+
+### A. Dashboard post-login loader
+- Added `initialLoading` flag to `hooks/useMatches.js` (true until first `/api/matches` fetch resolves).
+- New `pages/components/DashboardLoader.js`: centered S11 mark with infinite glow pulse + an indeterminate sliding progress bar + "Loading your match library" — shown in the dashboard content area while `initialLoading` is true (replaces the brief empty-"Welcome" flash on login). Loader CSS added to `styles/logo-intro.css` (`ss11-loader-mark`, `ss11-loader-bar`, `prefers-reduced-motion` guard).
+- Wired into `pages/Dashboard.js` (the content body renders `<DashboardLoader/>` while loading). Verified live: logged in as test coach with the matches API delayed → branded loader renders correctly.
+
+### B. S11 logo in user-facing emails
+- New shared helper `services/email_branding.py::email_logo_header()` returns a linked logo `<img>` header.
+- New asset `frontend/public/email-logo.png`: S11 mark + "SOCCER SCOUT 11" on a **rounded dark badge with transparent corners + subtle border** so it reads as an intentional brand plate on ANY email background (white, dark navy, dark card) — verified across all three.
+- Injected into 6 templates: `reel_recap.py`, `scout_digest.py`, `coach_pulse_email.py` (replaced the old text wordmark), `routes/recruiter_lens.py` (roster send + hot-lead), `routes/password_reset.py` (replaced text wordmark), and the storage-growth digest in `server.py`.
+- Verified: every builder injects the logo exactly once (render tests); two full emails screenshot-rendered (recruiter-lens navy header + reel-recap dark theme) look polished; reel_recap/scout_digest/coach_pulse/recruiter_lens/recruiter_outreach test suites pass; backend healthy.
+- NOTE: `test_password_reset_and_bootstrap.py` has 4-5 **pre-existing** failures — the session-scoped `api_client` fixture gets auth+csrf cookies once `auth_token` runs, then password-reset POSTs without `X-CSRF-Token` → 403 (the bad-token test builds no email yet still 403s, proving it's unrelated to the logo change). Live endpoints verified correct via curl (forgot-password → 200, bad-token → 400).
+
+
 ## One-Click Goals-Only Highlight Reel (iter108 — May 2026)
 
 User said yes to the iter107 finish-tool suggestion: a one-click button that takes every `type=goal` marker, creates clips for each, and stitches them into a downloadable goal-only highlight reel.

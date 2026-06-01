@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 from db import db
 from services.email_queue import send_or_queue
+from services.email_branding import email_logo_header
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,7 @@ def _build_recap_html(coach_name: str, total_7d: int, delta: int, items: list) -
 <table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:40px 16px;">
   <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#141414;border:1px solid rgba(255,255,255,0.1);">
     <tr><td style="padding:32px 32px 16px 32px;">
+      {email_logo_header()}
       <div style="font-family:Bebas Neue,Impact,sans-serif;font-size:30px;letter-spacing:2px;color:#007AFF;">REEL RECAP</div>
       <div style="font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#888;margin-top:4px;">Weekly views report · {datetime.now(timezone.utc).strftime('%b %d, %Y')}</div>
     </td></tr>

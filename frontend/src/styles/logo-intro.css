@@ -194,3 +194,22 @@
   0%   { opacity: 0; transform: scaleX(0); }
   100% { opacity: 1; transform: scaleX(1); }
 }
+
+/* Dashboard branded loader (post-login transition) */
+.ss11-loader-mark {
+  filter: drop-shadow(0 0 22px rgba(0, 122, 255, 0.35));
+  animation: ss11-mark-glow 1800ms ease-in-out infinite;
+}
+.ss11-loader-bar {
+  animation: ss11-loader-slide 1100ms ease-in-out infinite;
+}
+@keyframes ss11-loader-slide {
+  0%   { transform: translateX(-130%); }
+  100% { transform: translateX(430%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ss11-loader-mark,
+  .ss11-loader-bar {
+    animation: none;
+  }
+}

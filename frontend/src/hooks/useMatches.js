@@ -13,6 +13,9 @@ export const useMatches = (selectedFolderId) => {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMatchIds, setSelectedMatchIds] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  // True until the very first matches fetch resolves — lets the dashboard show a
+  // branded loader instead of flashing the empty "Welcome" state on login.
+  const [initialLoading, setInitialLoading] = useState(true);
 
   const fetchMatches = useCallback(async () => {
     try {
@@ -20,6 +23,8 @@ export const useMatches = (selectedFolderId) => {
       setMatches(response.data);
     } catch (err) {
       console.error('Failed to fetch matches:', err);
+    } finally {
+      setInitialLoading(false);
     }
   }, []);
 
@@ -111,6 +116,7 @@ export const useMatches = (selectedFolderId) => {
   return {
     matches,
     displayMatches,
+    initialLoading,
     fetchMatches,
     createMatch,
     moveMatch,

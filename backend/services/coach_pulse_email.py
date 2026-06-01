@@ -6,6 +6,7 @@ no Jinja since we want zero new deps.
 from __future__ import annotations
 from typing import Optional
 from html import escape
+from services.email_branding import email_logo_header
 
 
 def _escape(s: Optional[str]) -> str:
@@ -142,9 +143,7 @@ def render_coach_pulse_email(
     <tr><td align="center">
       <table cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;background:white;padding:36px;">
         <tr><td>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
-            <span style="display:inline-block;font-size:18px;font-weight:900;letter-spacing:-0.5px;color:#0F1B3D;">Soccer Scout <span style="color:#007AFF;">11</span></span>
-          </div>
+          {email_logo_header(width=180, margin_bottom=14)}
           <div style="font-size:11px;letter-spacing:3px;color:#A855F7;text-transform:uppercase;font-weight:bold;">Coach Pulse</div>
           <h1 style="margin:6px 0 4px 0;font-size:24px;color:#111;font-weight:bold;letter-spacing:-0.4px;">Hi {_escape(coach_name)}</h1>
           <div style="font-size:13px;color:#888;margin-bottom:8px;">Your weekly digest — {_escape(week_label)}</div>

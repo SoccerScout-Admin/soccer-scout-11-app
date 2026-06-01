@@ -39,6 +39,7 @@ from urllib.parse import urlencode
 from db import db
 from routes.auth import get_current_user
 from services.email_queue import send_or_queue
+from services.email_branding import email_logo_header
 
 router = APIRouter()
 
@@ -148,6 +149,7 @@ def _email_html(
     <tr><td align="center">
       <table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;">
         <tr><td style="padding:32px 32px 16px 32px;background:#0F1A2E;color:#fff;">
+          {email_logo_header(width=190, margin_bottom=16)}
           <div style="font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#60A5FA;margin-bottom:6px;">Recruiter Lens</div>
           <div style="font-size:24px;font-weight:700;">{team_name}</div>
           <div style="font-size:14px;color:#A3A3A3;margin-top:6px;">{filter_summary}</div>
@@ -196,6 +198,7 @@ def _hot_lead_email_html(
     <tr><td align="center">
       <table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;">
         <tr><td style="padding:32px 32px 16px 32px;background:#0F1A2E;color:#fff;">
+          {email_logo_header(width=190, margin_bottom=16)}
           <div style="font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#10B981;margin-bottom:6px;">Hot Lead</div>
           <div style="font-size:22px;font-weight:700;">{recipient_label} keeps coming back</div>
           <div style="font-size:14px;color:#A3A3A3;margin-top:6px;">{team_name} · {filter_summary}</div>

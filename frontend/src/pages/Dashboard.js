@@ -17,6 +17,7 @@ import BulkActionBar from './components/BulkActionBar';
 import QuickActionsRow from './components/QuickActionsRow';
 import MyReelStatsCard from './components/MyReelStatsCard';
 import ResumeAcrossDevicesBanner from './components/ResumeAcrossDevicesBanner';
+import DashboardLoader from './components/DashboardLoader';
 import InstallGuideModal from '../components/InstallGuideModal';
 import BuildInfoChip from '../components/BuildInfoChip';
 
@@ -229,6 +230,10 @@ const Dashboard = () => {
             </button>
           </div>
 
+          {m.initialLoading ? (
+            <DashboardLoader />
+          ) : (
+          <>
           {!m.selectionMode && (
             <>
               <ResumeAcrossDevicesBanner />
@@ -297,6 +302,8 @@ const Dashboard = () => {
                   onDeleteMatch={m.deleteMatch} />
               ))}
             </div>
+          )}
+          </>
           )}
         </main>
       </div>

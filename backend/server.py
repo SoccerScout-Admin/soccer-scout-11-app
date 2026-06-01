@@ -1412,6 +1412,7 @@ async def _maybe_send_storage_digest(uid: str, snapshot: dict, now_iso: str) -> 
 
     # Build email
     from services.email_queue import send_or_queue
+    from services.email_branding import email_logo_header
     base_url = (os.environ.get("PUBLIC_APP_URL")
                 or os.environ.get("REACT_APP_BACKEND_URL", "")).rstrip("/")
     cleanup_link = f"{base_url}/admin/storage-cleanup" if base_url else "/admin/storage-cleanup"
@@ -1436,6 +1437,7 @@ async def _maybe_send_storage_digest(uid: str, snapshot: dict, now_iso: str) -> 
     html = f"""<html><body style="margin:0;padding:24px;background:#0A0A0A;color:#E5E5E5;font-family:Inter,sans-serif;">
   <table style="max-width:600px;margin:0 auto;width:100%;border-collapse:collapse;background:#141414;border:1px solid #222;">
     <tr><td style="padding:24px;">
+      {email_logo_header(width=190, margin_bottom=16)}
       <p style="margin:0 0 12px;font-size:11px;letter-spacing:0.25em;color:#FBBF24;text-transform:uppercase;font-weight:bold;">
         Storage Quota Alert
       </p>
