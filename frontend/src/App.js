@@ -35,6 +35,7 @@ import ScoutListingDetail from './pages/ScoutListingDetail';
 import ScoutListingForm from './pages/ScoutListingForm';
 import ScoutMyListings from './pages/ScoutMyListings';
 import Messages from './pages/Messages';
+import NotFound from './pages/NotFound';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 import DiskPressureBanner from './components/DiskPressureBanner';
 import StorageOutageBanner from './components/StorageOutageBanner';
@@ -361,6 +362,7 @@ function App() {
             }
           />
           <Route path="/scouts/:listingId" element={<ScoutListingDetail />} />
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
     </div>
