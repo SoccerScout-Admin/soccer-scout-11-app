@@ -502,7 +502,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter108"
+BUILD_VERSION = "iter109"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -719,6 +719,11 @@ SHIPPED_FEATURES = [
     "auto-create-clips-from-goal-markers",
     "select-clips-goals-only-flag",
     "highlight-reel-panel-goals-only-button",
+    # iter109 — full-match coverage for AI timeline markers (root-cause fix:
+    # long matches were only 13% sampled, so goals were missed entirely)
+    "full-match-coverage-timeline-markers",
+    "timeline-markers-chunked-full-coverage",
+    "timeline-markers-merge-dedupe",
 ]
 
 def _get_build_sha() -> str:
@@ -2792,6 +2797,27 @@ async def _run_generate_analysis(
 
     tmp_path = None
     try:
+        # iter109 — manual regenerate of timeline markers uses the same
+        # full-match coverage flow as auto-processing (chunks the whole match,
+        # merges + dedupes events, stores markers + auto-clips). The generic
+        # single-call path below never parsed markers into db.markers anyway.
+        if analysis_type == "timeline_markers":
+            if not match:
+                raise RuntimeError("Match not found for timeline markers")
+            from services.processing import run_timeline_markers_full_coverage
+            await run_timeline_markers_full_coverage(
+                video, match, roster_context, video["id"], user_id,
+                video["match_id"], auto_create_clips_from_markers,
+            )
+            # run_timeline_markers_full_coverage replaces the timeline_markers
+            # analysis row itself (delete+insert), which also clears the pending
+            # placeholder created by this endpoint.
+            logger.info(
+                f"[generate_analysis] analysis_id={analysis_id} timeline_markers "
+                f"full-coverage completed"
+            )
+            return
+
         tmp_path = await prepare_video_sample(video)
 
         chat = LlmChat(

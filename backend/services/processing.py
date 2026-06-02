@@ -186,24 +186,41 @@ async def parse_and_store_markers(
 ) -> int:
     """Parse a timeline_markers JSON response and persist the markers.
 
-    `auto_create_clips_callback(video_id, user_id, match_id)` is invoked at the
-    end if provided — keeps this module decoupled from the clip-creation
-    helper that still lives in server.py.
+    Backward-compatible wrapper around the iter109 split helpers
+    (`_parse_markers_response` + `_store_markers`). Used by the single-call
+    manual-regenerate path in server.py and the iter99 tests.
     """
-    clean = response.strip()
+    normalized = _parse_markers_response(response, time_offset=0.0)
+    return await _store_markers(
+        video_id, match_id, user_id, normalized, auto_create_clips_callback
+    )
+
+
+def _parse_markers_response(response: str, time_offset: float = 0.0) -> list:
+    """Pure parse: strip code fences, JSON-decode, normalize each event.
+
+    `time_offset` is added to every event's `time` — used by the iter109
+    full-coverage chunk flow so per-clip (0-based) timestamps become absolute
+    match seconds. Returns a list of normalized marker dicts (NO db ids yet).
+    Returns [] on any parse failure instead of raising.
+    """
+    clean = (response or "").strip()
     if clean.startswith("```"):
         clean = clean.split("\n", 1)[1] if "\n" in clean else clean[3:]
         if clean.endswith("```"):
             clean = clean[:-3]
         clean = clean.strip()
-    markers_data = _json.loads(clean)
+    try:
+        markers_data = _json.loads(clean)
+    except (ValueError, TypeError):
+        return []
     if not isinstance(markers_data, list):
-        return 0
-    await db.markers.delete_many(
-        {"video_id": video_id, "user_id": user_id, "auto_generated": True}
-    )
+        return []
+
+    normalized = []
     for m in markers_data:
-        # iter99 — capture player_number + player_name when Gemini provides them
+        if not isinstance(m, dict):
+            continue
         pn_raw = m.get("player_number")
         try:
             player_number = int(pn_raw) if pn_raw is not None and str(pn_raw).strip() != "" else None
@@ -212,30 +229,103 @@ async def parse_and_store_markers(
         player_name = m.get("player_name")
         if player_name is not None:
             player_name = str(player_name)[:60].strip() or None
+        try:
+            t = float(m.get("time", 0)) + time_offset
+        except (TypeError, ValueError):
+            t = time_offset
+        normalized.append({
+            "time": max(0.0, t),
+            "type": m.get("type", "chance"),
+            "label": str(m.get("label", ""))[:100],
+            "team": m.get("team", "neutral"),
+            "importance": min(5, max(1, int(m.get("importance", 3)) if str(m.get("importance", 3)).strip().isdigit() else 3)),
+            "player_number": player_number,
+            "player_name": player_name,
+        })
+    return normalized
 
+
+def _dedupe_markers(normalized: list, window_sec: float = 7.0) -> list:
+    """Merge near-duplicate events (same type within `window_sec`) that arise
+    from the small overlap between adjacent full-coverage chunks. Keeps the
+    higher-importance copy."""
+    out = []
+    for m in sorted(normalized, key=lambda x: x["time"]):
+        dup = None
+        for k in out:
+            if k["type"] == m["type"] and abs(k["time"] - m["time"]) < window_sec:
+                dup = k
+                break
+        if dup is None:
+            out.append(m)
+        elif m["importance"] > dup["importance"]:
+            dup.update(m)
+    return out
+
+
+async def _store_markers(
+    video_id: str,
+    match_id: str,
+    user_id: str,
+    normalized: list,
+    auto_create_clips_callback=None,
+) -> int:
+    """Replace this video's auto-generated markers with `normalized` (one
+    atomic delete + insert pass) and fire the clip-creation callback once."""
+    await db.markers.delete_many(
+        {"video_id": video_id, "user_id": user_id, "auto_generated": True}
+    )
+    for n in normalized:
         marker_doc = {
             "id": str(uuid.uuid4()),
             "video_id": video_id,
             "match_id": match_id,
             "user_id": user_id,
-            "time": float(m.get("time", 0)),
-            "type": m.get("type", "chance"),
-            "label": str(m.get("label", ""))[:100],
-            "team": m.get("team", "neutral"),
-            "importance": min(5, max(1, int(m.get("importance", 3)))),
-            "player_number": player_number,
-            "player_name": player_name,
             "auto_generated": True,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            **n,
         }
         await db.markers.insert_one(marker_doc)
-    logger.info(f"Stored {len(markers_data)} AI timeline markers for video {video_id}")
+    logger.info(f"Stored {len(normalized)} AI timeline markers for video {video_id}")
     if auto_create_clips_callback is not None:
         try:
             await auto_create_clips_callback(video_id, user_id, match_id)
         except Exception as e:
             logger.warning(f"auto_create_clips_callback failed: {e}")
-    return len(markers_data)
+    return len(normalized)
+
+
+_DEFAULT_VIDEO_SYSTEM_MESSAGE = (
+    "You are an expert soccer analyst. You will receive the full match "
+    "video (compressed). Analyze the entire match and provide detailed "
+    "tactical insights, player assessments, highlight identification, "
+    "and precise timestamp markers for key events."
+)
+
+
+async def _send_video_to_gemini(
+    video_file_path: str,
+    prompt: str,
+    session_id: str,
+    system_message: str = _DEFAULT_VIDEO_SYSTEM_MESSAGE,
+) -> str:
+    """Send one video + prompt to Gemini and return the raw text response.
+
+    Lazy-imports emergentintegrations so this module loads even when the SDK
+    isn't installed (e.g., during regression tests that don't call AI).
+    """
+    from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
+
+    chat = LlmChat(
+        api_key=_emergent_key(),
+        session_id=session_id,
+        system_message=system_message,
+    ).with_model("gemini", "gemini-3.1-pro-preview")
+
+    video_file = FileContentWithMimeType(file_path=video_file_path, mime_type="video/mp4")
+    return await chat.send_message(
+        UserMessage(text=prompt, file_contents=[video_file])
+    )
 
 
 async def run_single_analysis(
@@ -247,29 +337,9 @@ async def run_single_analysis(
     prompt: str,
     auto_create_clips_callback=None,
 ) -> str:
-    """Send one analysis prompt to Gemini and persist the result.
-
-    Lazy-imports emergentintegrations so this module loads even when the SDK
-    isn't installed (e.g., during regression tests that don't call AI).
-    """
-    from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
-
-    chat = LlmChat(
-        api_key=_emergent_key(),
-        session_id=f"auto-{video_id}-{analysis_type}",
-        system_message=(
-            "You are an expert soccer analyst. You will receive the full match "
-            "video (compressed). Analyze the entire match and provide detailed "
-            "tactical insights, player assessments, highlight identification, "
-            "and precise timestamp markers for key events."
-        ),
-    ).with_model("gemini", "gemini-3.1-pro-preview")
-
-    video_file = FileContentWithMimeType(
-        file_path=video_file_path, mime_type="video/mp4"
-    )
-    response = await chat.send_message(
-        UserMessage(text=prompt, file_contents=[video_file])
+    """Send one analysis prompt to Gemini and persist the result."""
+    response = await _send_video_to_gemini(
+        video_file_path, prompt, session_id=f"auto-{video_id}-{analysis_type}"
     )
 
     analysis_doc = {
@@ -295,6 +365,303 @@ async def run_single_analysis(
             logger.warning(f"Failed to parse timeline markers JSON: {parse_err}")
 
     return response
+
+
+# ===========================================================================
+# iter109 — Full-match coverage for AI timeline markers.
+#
+# ROOT CAUSE this replaces: prepare_video_segments_720p sampled only 18 x 45s
+# windows (~13 min) out of a 100+ min match for heavy files — so goals outside
+# those windows were NEVER shown to Gemini and produced ~1 marker for a whole
+# match. The fix: transcode the ENTIRE match to a low-res / low-fps proxy and
+# feed it to Gemini in contiguous time-chunks (each well under Gemini's ~1h
+# per-call video limit), then merge + dedupe the events. Gemini samples video
+# at ~1 fps, so a goal's multi-second celebration + center-circle kickoff is
+# always captured. Each chunk file is sized like the proven-working payload
+# (~40-55 MB) and transcoded in a single streaming pass (-threads 1) so the
+# 4 GB production pod stays well under its memory budget.
+# ===========================================================================
+_FULL_COVERAGE_CHUNK_SECONDS = 1500   # 25 min of match time per Gemini call
+_FULL_COVERAGE_SCALE = "scale=-2:360"  # 360p — proven safe (480p segments worked)
+_FULL_COVERAGE_FPS = "3"               # Gemini samples ~1fps; 3 gives headroom
+_FULL_COVERAGE_CRF = "32"
+_FULL_COVERAGE_OVERLAP = 10            # sec of overlap so boundary goals aren't split
+
+
+def build_timeline_markers_chunk_prompt(
+    match: dict, roster_context: str, clip_start_sec: float, clip_end_sec: float
+) -> str:
+    """Timeline-markers prompt for ONE contiguous clip of the match.
+
+    Timestamps are requested RELATIVE TO THIS CLIP (0-based); the caller adds
+    the clip's match-time offset afterwards. This is far more reliable than
+    asking the model to do offset arithmetic itself.
+    """
+    home_color = (match.get("team_home_jersey_color") or "").strip()
+    away_color = (match.get("team_away_jersey_color") or "").strip()
+    kit_preamble = ""
+    if home_color or away_color:
+        kit_parts = []
+        if home_color:
+            kit_parts.append(f"{match['team_home']} (home) wears {home_color}")
+        if away_color:
+            kit_parts.append(f"{match['team_away']} (away) wears {away_color}")
+        kit_preamble = (
+            "**TEAM KIT COLORS — use this to disambiguate teams.** "
+            + "; ".join(kit_parts) + ".\n\n"
+        )
+
+    s_min, s_sec = divmod(int(clip_start_sec), 60)
+    e_min, e_sec = divmod(int(clip_end_sec), 60)
+    clip_len = int(clip_end_sec - clip_start_sec)
+
+    return (
+        f"You are watching a CONTINUOUS portion of a soccer match between "
+        f"{match['team_home']} (home) and {match['team_away']} (away).\n\n"
+        f"{kit_preamble}"
+        f"This clip covers match time {s_min}:{s_sec:02d} to {e_min}:{e_sec:02d}, "
+        f"and is {clip_len} seconds long start-to-finish (no cuts — it is one "
+        f"unbroken stretch of play).\n\n"
+        "**YOUR JOB:** Identify EVERY key event in this clip.\n\n"
+        "**GOAL DETECTION — CRITICAL.** Goals are the most important events; do NOT miss them. "
+        "Cues that indicate a goal was just scored:\n"
+        "  • Ball clearly crosses the goal line into the net\n"
+        "  • Net visibly bulges from impact\n"
+        "  • Players celebrate (running, jumping, arms raised, group hug)\n"
+        "  • The defending goalkeeper retrieves the ball from inside the net\n"
+        "  • Play restarts from the CENTER CIRCLE (kickoff after goal)\n"
+        "  • A scoreboard overlay shows an updated score\n"
+        "If you see ANY of these cues, log a `goal` event with importance 5. "
+        "If you see celebrations or a center-circle kickoff but the ball-cross moment itself isn't visible, "
+        "STILL log a `goal` — estimate the time from when the celebration started.\n\n"
+        "**PLAYER IDENTIFICATION.** If a jersey number is clearly visible, record it in `player_number` "
+        "(and `player_name` if it matches the roster below). If the number is too small/blurry to read "
+        "confidently, leave `player_number` null and add an appearance hint in `label` — do NOT guess.\n\n"
+        "**OUTPUT FORMAT.** Return ONLY a JSON array of event objects. Each object MUST have:\n"
+        "  - \"time\": seconds FROM THE START OF THIS CLIP (number, 0 to "
+        f"{clip_len}) — NOT absolute match time\n"
+        "  - \"type\": one of \"goal\", \"shot\", \"save\", \"foul\", \"card\", \"substitution\", \"tactical\", \"chance\"\n"
+        "  - \"label\": short description (max 60 chars)\n"
+        f"  - \"team\": \"{match['team_home']}\" or \"{match['team_away']}\" or \"neutral\"\n"
+        "  - \"importance\": 1-5 (5 = goal/red card, 4 = clear chance/save, 3 = shot, 2 = foul, 1 = minor)\n"
+        "  - \"player_number\": jersey number if visible (integer or null — DO NOT GUESS)\n"
+        "  - \"player_name\": exact roster name if identifiable (string or null)\n\n"
+        "Be THOROUGH — log every goal, shot, save, key foul and tactical moment you see in this clip. "
+        "Coverage > brevity. If nothing notable happens, return an empty array [].\n\n"
+        f"Return ONLY the JSON array, no other text.{roster_context}"
+    )
+
+
+async def _assemble_raw_for_coverage(video: dict, raw_path: str) -> None:
+    """Write the full source video to `raw_path`, fail-fast on missing chunks.
+    Mirrors the assembly used by prepare_video_sample / _720p."""
+    if video.get("is_chunked"):
+        chunk_paths = video.get("chunk_paths", {})
+        chunk_backends = video.get("chunk_backends", {})
+        total_chunks = video.get("total_chunks", len(chunk_paths))
+        logger.info(f"[full-coverage] Assembling full video from {total_chunks} chunks")
+        with open(raw_path, "wb") as f:
+            for i in range(total_chunks):
+                path = chunk_paths.get(str(i))
+                backend = chunk_backends.get(str(i), "storage")
+                if not path:
+                    raise RuntimeError(f"Chunk {i} of {total_chunks} is missing — re-upload required.")
+                if backend in ("filesystem", "persistent_filesystem") and not os.path.exists(path):
+                    raise RuntimeError(
+                        f"Chunk {i} of {total_chunks} ({backend}) was lost — re-upload required. path={path}"
+                    )
+                chunk_info = {"backend": backend, "path": path}
+                try:
+                    data = await read_chunk_data(video["id"], i, chunk_info)
+                    f.write(data)
+                    del data
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Chunk {i} of {total_chunks} unreadable ({backend}): {str(e)[:120]} — re-upload required."
+                    ) from e
+    else:
+        data, _ = await run_in_threadpool(get_object_sync, video["storage_path"])
+        with open(raw_path, "wb") as f:
+            f.write(data)
+        del data
+
+
+def _compute_coverage_windows(duration: float, chunk_seconds: float = None,
+                              overlap: float = None) -> list:
+    """Split `duration` into contiguous equal-length windows that cover 100%
+    of the runtime (no tiny trailing chunk). Each window after the first starts
+    `overlap` seconds early so a goal on a boundary isn't split.
+    Returns a list of (start_seconds, length_seconds). Pure + unit-testable."""
+    import math
+    cs = chunk_seconds if chunk_seconds is not None else _FULL_COVERAGE_CHUNK_SECONDS
+    ov = overlap if overlap is not None else _FULL_COVERAGE_OVERLAP
+    if duration <= 0:
+        return []
+    n = max(1, math.ceil(duration / cs))
+    base = duration / n
+    windows = []
+    for i in range(n):
+        raw_start = i * base
+        start = max(0.0, raw_start - (ov if i > 0 else 0))
+        end = min(duration, raw_start + base)
+        if end - start >= 1:
+            windows.append((start, end - start))
+    return windows
+
+
+async def prepare_full_coverage_chunks(video: dict) -> list:
+    """Transcode the ENTIRE match into contiguous low-res chunks covering 100%
+    of the runtime. Returns a list of (chunk_path, offset_seconds, length_seconds).
+    Caller is responsible for deleting each chunk_path."""
+    ext = video["original_filename"].split(".")[-1] if "." in video["original_filename"] else "mp4"
+    raw_path = tempfile.mktemp(suffix=f".{ext}", dir="/var/video_chunks")
+    produced = []
+    try:
+        await _assemble_raw_for_coverage(video, raw_path)
+
+        probe = await run_in_threadpool(
+            subprocess.run,
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", raw_path],
+            capture_output=True, text=True, timeout=60,
+        )
+        duration = 0.0
+        if probe.returncode == 0 and probe.stdout.strip():
+            try:
+                duration = float(probe.stdout.strip())
+            except ValueError:
+                pass
+        if duration <= 0:
+            raise Exception("Could not determine video duration")
+        logger.info(f"[full-coverage] duration {duration:.0f}s ({duration/60:.1f}min)")
+
+        windows = _compute_coverage_windows(duration)
+        n_chunks = len(windows)
+        logger.info(
+            f"[full-coverage] {n_chunks} chunk(s) at "
+            f"{_FULL_COVERAGE_SCALE}/{_FULL_COVERAGE_FPS}fps/crf{_FULL_COVERAGE_CRF}"
+        )
+
+        for i, (start, length) in enumerate(windows):
+            end = start + length
+            chunk_path = tempfile.mktemp(suffix=f"_cov{i}.mp4", dir="/var/video_chunks")
+            cmd = [
+                "ffmpeg", "-y",
+                "-threads", "1",
+                "-fflags", "+discardcorrupt",
+                "-ss", str(int(start)),
+                "-i", raw_path,
+                "-t", str(int(length) + 1),
+                "-an",  # markers don't need audio — smaller payload + raises Gemini duration ceiling
+                "-vf", _FULL_COVERAGE_SCALE,
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", _FULL_COVERAGE_CRF,
+                "-r", _FULL_COVERAGE_FPS,
+                "-bufsize", "16M",
+                "-max_muxing_queue_size", "256",
+                "-movflags", "+faststart",
+                chunk_path,
+            ]
+            res = await run_in_threadpool(
+                subprocess.run, cmd, capture_output=True, text=True, timeout=600,
+            )
+            if res.returncode == 0 and os.path.exists(chunk_path) and os.path.getsize(chunk_path) > 1000:
+                mb = os.path.getsize(chunk_path) / (1024 * 1024)
+                produced.append((chunk_path, start, length))
+                logger.info(f"[full-coverage] chunk {i+1}/{n_chunks}: {start:.0f}-{end:.0f}s, {mb:.1f}MB")
+            else:
+                logger.warning(f"[full-coverage] chunk {i+1} failed at {start:.0f}s: {(res.stderr or '')[-200:]}")
+                if os.path.exists(chunk_path):
+                    os.unlink(chunk_path)
+
+        if not produced:
+            raise Exception("Failed to extract any full-coverage chunks")
+        return produced
+    finally:
+        if os.path.exists(raw_path):
+            try:
+                os.unlink(raw_path)
+                logger.info("[full-coverage] Deleted raw video file")
+            except Exception:
+                pass
+
+
+async def run_timeline_markers_full_coverage(
+    video: dict,
+    match: dict,
+    roster_context: str,
+    video_id: str,
+    user_id: str,
+    match_id: str,
+    auto_create_clips_callback=None,
+) -> int:
+    """iter109 — Detect timeline markers across the ENTIRE match.
+
+    Transcodes the full match into contiguous chunks, runs Gemini on each,
+    offsets per-chunk timestamps to absolute match time, merges + dedupes, and
+    stores the markers in a single atomic pass. Returns the marker count.
+    """
+    chunks = await prepare_full_coverage_chunks(video)
+    all_markers = []
+    n = len(chunks)
+    system_message = (
+        "You are an expert soccer analyst reviewing a continuous portion of a "
+        "match. Detect every key event (goals, shots, saves, cards, fouls) and "
+        "report precise timestamps relative to the clip you are given."
+    )
+    for idx, (path, offset, length) in enumerate(chunks):
+        try:
+            prompt = build_timeline_markers_chunk_prompt(
+                match, roster_context, offset, offset + length
+            )
+            response = await _send_video_to_gemini(
+                path, prompt, session_id=f"markers-{video_id}-{idx}",
+                system_message=system_message,
+            )
+            chunk_markers = _parse_markers_response(response, time_offset=offset)
+            all_markers.extend(chunk_markers)
+            logger.info(
+                f"[full-coverage markers] chunk {idx+1}/{n} "
+                f"({offset:.0f}-{offset+length:.0f}s): {len(chunk_markers)} events"
+            )
+        except Exception as e:
+            logger.warning(f"[full-coverage markers] chunk {idx+1}/{n} failed: {e}")
+        finally:
+            if os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except Exception:
+                    pass
+
+    merged = _dedupe_markers(all_markers)
+    count = await _store_markers(
+        video_id, match_id, user_id, merged, auto_create_clips_callback
+    )
+
+    # Persist one timeline_markers analysis doc for UI consistency. Content is
+    # the merged event array (same shape parse_and_store_markers consumes).
+    await db.analyses.delete_many({
+        "video_id": video_id, "user_id": user_id,
+        "analysis_type": "timeline_markers", "auto_generated": True,
+    })
+    await db.analyses.insert_one({
+        "id": str(uuid.uuid4()),
+        "video_id": video_id,
+        "match_id": match_id,
+        "user_id": user_id,
+        "analysis_type": "timeline_markers",
+        "content": _json.dumps(merged),
+        "status": "completed",
+        "auto_generated": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    logger.info(
+        f"[full-coverage markers] video {video_id}: {count} merged events "
+        f"from {n} chunk(s)"
+    )
+    return count
+
 
 
 async def prepare_video_sample(video: dict, trim_start: float = None, trim_end: float = None) -> str:
@@ -943,7 +1310,6 @@ async def run_auto_processing(
     all_types = ["tactical", "player_performance", "highlights", "timeline_markers", "possession_stats"]
     analysis_types = only_types if only_types else all_types
     tmp_path = None
-    tmp_path_720p = None
 
     try:
         await db.videos.update_one(
@@ -1001,34 +1367,30 @@ async def run_auto_processing(
         roster = await db.players.find({"match_id": video["match_id"]}, {"_id": 0}).to_list(100)
         roster_context = build_roster_context(roster)
 
-        try:
-            tmp_path = await prepare_video_sample(video)
-        except Exception as e:
-            # The new prepare_video_sample raises user-facing exceptions with
-            # actionable copy ("compress further", "trim the match", etc).
-            # Pass them through unchanged instead of burying them under another
-            # "Failed to prepare video: " prefix + 200-char truncation that
-            # hid the real cause on production iter62.
-            msg = str(e).strip() or "Video preparation failed"
-            logger.error(f"Auto-processing: failed to prepare video sample: {msg}")
-            await db.videos.update_one(
-                {"id": video_id},
-                {"$set": {"processing_status": "failed", "processing_error": msg[:500]}},
-            )
-            return
-
-        segments_info = None
-        if "timeline_markers" in analysis_types:
+        # Only the text analyses (tactical/highlights/etc.) need the single
+        # full-match 180p sample. Timeline markers use their own full-coverage
+        # chunks, so skip this transcode when markers are the only request.
+        if any(t != "timeline_markers" for t in analysis_types):
             try:
-                tmp_path_720p, segments_info = await prepare_video_segments_720p(video)
-                logger.info("Prepared 720p segments for timeline markers")
+                tmp_path = await prepare_video_sample(video)
             except Exception as e:
-                logger.warning(f"720p segments failed, will fall back to standard sample: {e}")
+                # The new prepare_video_sample raises user-facing exceptions with
+                # actionable copy ("compress further", "trim the match", etc).
+                # Pass them through unchanged instead of burying them under another
+                # "Failed to prepare video: " prefix + 200-char truncation that
+                # hid the real cause on production iter62.
+                msg = str(e).strip() or "Video preparation failed"
+                logger.error(f"Auto-processing: failed to prepare video sample: {msg}")
+                await db.videos.update_one(
+                    {"id": video_id},
+                    {"$set": {"processing_status": "failed", "processing_error": msg[:500]}},
+                )
+                return
 
-        segment_preamble = ""
-        if segments_info:
-            segment_preamble = "Segment timing (these are the real match times shown in the video):\n" + segments_info + "\n\n"
-        prompts = build_analysis_prompts(match, roster_context, segment_preamble)
+        # iter109 — timeline markers now use full-match coverage (see
+        # run_timeline_markers_full_coverage), NOT the old 13%-sampled
+        # prepare_video_segments_720p path. segment_preamble is therefore empty.
+        prompts = build_analysis_prompts(match, roster_context, "")
 
         for idx, analysis_type in enumerate(analysis_types):
             progress = int((idx / len(analysis_types)) * 100)
@@ -1038,13 +1400,19 @@ async def run_auto_processing(
             )
             logger.info(f"Auto-processing {video_id}: {analysis_type} ({progress}%)")
 
-            use_path = tmp_path_720p if (analysis_type == "timeline_markers" and tmp_path_720p) else tmp_path
-
             try:
-                await run_single_analysis(
-                    video_id, user_id, video["match_id"], analysis_type, use_path,
-                    prompts[analysis_type], auto_create_clips_callback,
-                )
+                if analysis_type == "timeline_markers":
+                    # iter109 — analyze the ENTIRE match in contiguous chunks so
+                    # no goal is missed (root-cause fix for "1 highlight" bug).
+                    await run_timeline_markers_full_coverage(
+                        video, match, roster_context, video_id, user_id,
+                        video["match_id"], auto_create_clips_callback,
+                    )
+                else:
+                    await run_single_analysis(
+                        video_id, user_id, video["match_id"], analysis_type, tmp_path,
+                        prompts[analysis_type], auto_create_clips_callback,
+                    )
             except Exception as e:
                 logger.error(f"Auto-processing {video_id}: {analysis_type} FAILED: {e}")
                 analysis_doc = {
@@ -1114,5 +1482,3 @@ async def run_auto_processing(
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
-        if tmp_path_720p and os.path.exists(tmp_path_720p):
-            os.unlink(tmp_path_720p)

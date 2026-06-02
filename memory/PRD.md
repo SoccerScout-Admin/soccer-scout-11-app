@@ -1,6 +1,26 @@
 # Soccer Scout - Product Requirements Document
 
 
+## iter109 — ROOT-CAUSE FIX: Full-match coverage for AI timeline markers (Feb 2026)
+
+**Reported bug (production):** "LFC 2007B Premier vs Dayton Cobras" (1.04 GB / 1h43m) produced only **1 timeline marker** for the whole match. Month-long blocker — analysis never worked on full matches.
+
+**Root cause (confirmed in code):** For "heavy" files (>0.8 GB), the timeline-markers step used `prepare_video_segments_720p`, which sampled only **18 × 45s = ~13.5 min (~13%) of the match, evenly spaced, with scene detection OFF**. Gemini literally never saw ~87% of the match, so goals outside those windows were invisible → ~1 marker. This was the end state of a chain of memory band-aids (iter97/iter103) that kept shrinking coverage to avoid OOM on the 4 GB prod pod. Compounding it: a 103-min file exceeds Gemini's ~1-hour single-call video limit.
+
+**The fix (new pipeline in `services/processing.py`):**
+- `prepare_full_coverage_chunks(video)` transcodes the ENTIRE match into contiguous low-res chunks (`_compute_coverage_windows`: 25-min windows, 10s overlap, equal split so no tiny tail) at **360p / 3fps / no-audio / crf32, single streaming `-threads 1` pass** (lighter on memory than the old 480p segments; ~20-40 MB per chunk — under the proven ~100 MB payload).
+- `run_timeline_markers_full_coverage(...)` runs Gemini per chunk with a **clip-relative-time prompt** (`build_timeline_markers_chunk_prompt`), then `_parse_markers_response(resp, time_offset)` converts clip seconds → absolute match seconds, `_dedupe_markers` merges boundary duplicates (keeps higher-importance copy), and `_store_markers` persists in one atomic pass + fires the auto-clip callback once. Stores one `timeline_markers` analysis doc.
+- A 103-min match → 5 chunks → 5 Gemini calls → **100% coverage** (was 13%). ≤25-min matches → 1 chunk (no cost change). Goal detection leans on team-level cues (celebration, center-circle kickoff, keeper retrieving ball) that are clearly visible at 360p even at Gemini's ~1fps sampling.
+- Wired into both `run_auto_processing` (upload + reprocess) and the manual `/api/analysis/generate` worker (`_run_generate_analysis`). Old `prepare_video_segments_720p` retained (tests inspect it) but no longer called for markers.
+- `parse_and_store_markers` refactored into reusable `_parse_markers_response` / `_dedupe_markers` / `_store_markers` (backward compatible). `run_single_analysis` now uses shared `_send_video_to_gemini`.
+
+**Verified:** 13 new tests in `test_iter109_full_coverage_markers.py` (window math/full-coverage, parse+offset, dedupe, prompt, end-to-end orchestration with Gemini mocked against real Mongo) + real ffmpeg chunk transcode smoke + **real Gemini call smoke** (no-audio 360p chunk sent through Emergent proxy → returned parseable `[]`). 69-test processing regression green. `BUILD_VERSION=iter109`; deploy advertises `full-match-coverage-timeline-markers`, `timeline-markers-chunked-full-coverage`, `timeline-markers-merge-dedupe`.
+
+**⚠️ ACTION FOR USER:** This is a code fix in PREVIEW. To get it on production (soccerscout11.com): **redeploy**, then **re-run analysis (reprocess) on the LFC vs Dayton match** to regenerate markers with full coverage.
+
+**Note / possible follow-up:** The other analysis types (tactical, highlights, possession, player_performance) still send the full match as ONE 180p call via `prepare_video_sample`, which may be truncated by Gemini's ~1h limit on very long matches. Not part of this fix (user's issue was markers), but the same chunked-coverage approach can be applied if those read incomplete on 90+ min matches. Cost note: long matches now make more Gemini calls (≈5 for markers on a 103-min match).
+
+
 ## New Brand Logo Rollout (Feb 2026)
 
 User uploaded a new official "Soccer Scout 11" logo (square lockup: white+blue "S11" mark with an embedded play button, "SOCCER SCOUT 11" wordmark, tagline "ANALYZE. IDENTIFY. ELEVATE." on black). Regenerated ALL brand assets in `/app/frontend/public/` from the source, preserving each file's original dimensions/mode so no layout broke:
