@@ -502,7 +502,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter109"
+BUILD_VERSION = "iter110"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -724,6 +724,14 @@ SHIPPED_FEATURES = [
     "full-match-coverage-timeline-markers",
     "timeline-markers-chunked-full-coverage",
     "timeline-markers-merge-dedupe",
+    # iter110 — full-match coverage for the PROSE/STAT analyses too (root-cause
+    # fix: sending a 1h43m match as a single Gemini call returned 400
+    # INVALID_ARGUMENT; now chunked map-reduce + one shared transcode pass)
+    "full-match-coverage-prose-analyses",
+    "chunked-text-analysis-map-reduce",
+    "possession-stats-numeric-aggregate",
+    "shared-coverage-chunk-transcode",
+    "not-found-route-fallback",
 ]
 
 def _get_build_sha() -> str:
@@ -2818,31 +2826,35 @@ async def _run_generate_analysis(
             )
             return
 
-        tmp_path = await prepare_video_sample(video)
+        if not match:
+            raise RuntimeError("Match not found for analysis")
 
-        chat = LlmChat(
-            api_key=EMERGENT_KEY,
-            session_id=f"analysis-{video['id']}",
-            system_message="You are an expert soccer analyst. You will receive video samples from multiple points throughout the match. Analyze the full match based on these samples and provide detailed tactical insights.",
-        ).with_model("gemini", "gemini-3.1-pro-preview")
-        video_file = FileContentWithMimeType(file_path=tmp_path, mime_type="video/mp4")
-        # iter107 — use the shared prompt builder so manual regenerates get
-        # the same jersey-color preamble + tightened prompts as auto-processing
-        from services.processing import build_analysis_prompts
+        # iter110 — full-match prose/stat analyses run on the shared
+        # full-coverage chunk set (map per chunk + reduce), exactly like
+        # auto-processing. Sending the whole 1h43m match as a single Gemini
+        # call exceeded the model's input limit and returned 400
+        # INVALID_ARGUMENT — this chunked path is the verified fix.
+        from services.processing import (
+            prepare_full_coverage_chunks,
+            run_chunked_text_analysis,
+            build_analysis_prompts,
+            _cleanup_chunks,
+        )
         prompts = build_analysis_prompts(
             match=match, roster_context=roster_context, segment_preamble="",
         )
-        prompt = prompts.get(analysis_type, prompts["tactical"])
-        response = await chat.send_message(UserMessage(text=prompt, file_contents=[video_file]))
-
-        await db.analyses.update_one(
-            {"id": analysis_id},
-            {"$set": {
-                "content": response,
-                "status": "completed",
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            }},
-        )
+        base_prompt = prompts.get(analysis_type, prompts["tactical"])
+        chunks = await prepare_full_coverage_chunks(video)
+        try:
+            await run_chunked_text_analysis(
+                chunks, match, analysis_type, base_prompt,
+                video["id"], user_id, video["match_id"], analysis_id=analysis_id,
+            )
+        finally:
+            _cleanup_chunks(chunks)
+        # run_chunked_text_analysis stores the completed doc (delete-prior +
+        # insert with this analysis_id), which also clears the pending
+        # placeholder created by this endpoint.
         logger.info(f"[generate_analysis] analysis_id={analysis_id} completed ({analysis_type})")
     except Exception as e:
         logger.exception(f"[generate_analysis] analysis_id={analysis_id} failed: {e}")

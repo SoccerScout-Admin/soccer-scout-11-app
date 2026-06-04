@@ -1,6 +1,39 @@
 # Soccer Scout - Product Requirements Document
 
 
+## iter110 — ROOT-CAUSE FIX: Full-match coverage for the PROSE/STAT analyses + 404 fallback (Jun 2026)
+
+**Reported bug (production, soccerscout11.com):** On the 1.04 GB / 1h43m match, AI processing failed ~10 min in with a red "Failed" + error. User-supplied error screenshot showed the real cause:
+```
+litellm.BadRequestError: GeminiException - code 400,
+"Request contains an invalid argument.", status "INVALID_ARGUMENT"
+Model: gemini/gemini-3.1-pro-preview
+```
+This is NOT memory/ffmpeg/timeout. **Root cause:** Gemini tokenizes video at ~1 frame/sec (~258 tokens/frame). A 1h43m match ≈ 6,180s → ~1.6M video tokens in a SINGLE call → exceeds the model input limit → Gemini rejects the whole request with 400 INVALID_ARGUMENT. iter109 already chunked **timeline markers** (25-min windows, under the limit), but the **other four analyses (tactical, player_performance, highlights, possession_stats)** still sent the ENTIRE match in one call via `prepare_video_sample` → every one failed.
+
+**Verified via integration playbook:** emergentintegrations exposes NO media-resolution / fps-sampling knob — the only supported fix for long video is to split into shorter time-chunks and make multiple calls (exactly iter109's approach).
+
+**The fix (`services/processing.py` + `server.py`):**
+- ALL analysis types now run on the **shared** iter109 full-coverage chunk set (`prepare_full_coverage_chunks`: 25-min, 360p/3fps/no-audio ≈ 387K tokens/call, safely under limit). Chunks are transcoded **ONCE per match** and reused across markers + the four prose/stat analyses (removes the redundant second full-match `prepare_video_sample` transcode).
+- New `run_chunked_text_analysis(...)`: **MAP** each prose prompt over every chunk (with a `_segment_note` telling Gemini it's segment i-of-n covering match-time a–b), then **REDUCE**: prose types (tactical/player/highlights) are synthesized into one cohesive report via a cheap **text-only** Gemini call (`_send_text_to_gemini`); `possession_stats` is reduced by **deterministic numeric aggregation** (`_aggregate_possession`: duration-weighted possession %, summed passes, max pass-string — no extra LLM call). Single-chunk (≤25-min) matches skip the reduce call entirely (no cost change for short videos).
+- `run_timeline_markers_full_coverage` refactored into a thin chunk-build/cleanup wrapper + reusable `_markers_from_chunks` (no longer deletes chunks itself — the orchestrator owns chunk lifecycle via `_cleanup_chunks`).
+- Wired into both `run_auto_processing` (upload + reprocess) and the manual `_run_generate_analysis` worker (`/api/analysis/generate`) — the latter is the "Generate Highlights" button the user hit. Stored docs use delete-prior + insert (replaces the iter98 pending placeholder, same pattern as markers).
+
+**Cost note:** A 103-min match now makes ~5 Gemini calls per prose type (was 1, but that 1 always failed). Short matches (≤25 min) are unchanged (1 call/type). Correctness over cost; markers cost was already accepted in iter109.
+
+**Also fixed — blank black screen on mistyped URLs:** There was no catch-all route, so e.g. `/admin/processing_events` (underscore vs the real hyphenated `/admin/processing-events`) rendered nothing on the dark background. Added branded `pages/NotFound.js` + `<Route path="*">` in `App.js`.
+
+**Verified:**
+- 13 new tests in `test_iter110_full_coverage_prose.py` (possession aggregation incl. duration-weighting/fence-strip/garbage-tolerance, segment note, multi-chunk map+reduce, single-chunk skips reduce, possession uses numeric aggregate not LLM, all-chunks-fail raises, prior-doc-replaced-not-duplicated, auto-processing wiring guard, deploy flags) — all green.
+- 81 related regression tests green (iter87/98/99/101/103/107/109 + ffmpeg classification). iter109 marker tests still pass (wrapper preserved).
+- **Real Gemini smokes:** text-only reduce returned a 343-char synthesis; full `run_chunked_text_analysis` on a real synthesized 360p video chunk returned content + stored a `completed` doc.
+- `BUILD_VERSION=iter110`; deploy advertises `full-match-coverage-prose-analyses`, `chunked-text-analysis-map-reduce`, `possession-stats-numeric-aggregate`, `shared-coverage-chunk-transcode`, `not-found-route-fallback`.
+
+**⚠️ ACTION FOR USER:** This is a code fix in PREVIEW. To get it on production (soccerscout11.com): **redeploy**, then **re-run analysis (reprocess) on the LFC vs Dayton match** — all five analyses (tactical, player, highlights, possession, markers) should now complete instead of failing with the 400.
+
+**Deferred (deployment static-scan finding, NOT this bug):** `APP_NAME` is hardcoded in `server.py:32` + `db.py:16`. Safe to make env-driven (`os.environ.get("APP_NAME","soccer-analysis")`) since the default preserves current object-storage paths — backlog P3.
+
+
 ## iter109 — ROOT-CAUSE FIX: Full-match coverage for AI timeline markers (Feb 2026)
 
 **Reported bug (production):** "LFC 2007B Premier vs Dayton Cobras" (1.04 GB / 1h43m) produced only **1 timeline marker** for the whole match. Month-long blocker — analysis never worked on full matches.

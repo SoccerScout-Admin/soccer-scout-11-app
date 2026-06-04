@@ -328,6 +328,24 @@ async def _send_video_to_gemini(
     )
 
 
+async def _send_text_to_gemini(
+    prompt: str,
+    session_id: str,
+    system_message: str = "You are an expert soccer analyst writing a polished match report.",
+) -> str:
+    """Send a TEXT-ONLY prompt to Gemini (no video). Used by the iter110
+    map-reduce 'reduce' step that synthesizes per-segment analysis notes into a
+    single cohesive report — cheap since it carries no video tokens."""
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+
+    chat = LlmChat(
+        api_key=_emergent_key(),
+        session_id=session_id,
+        system_message=system_message,
+    ).with_model("gemini", "gemini-3.1-pro-preview")
+    return await chat.send_message(UserMessage(text=prompt))
+
+
 async def run_single_analysis(
     video_id: str,
     user_id: str,
@@ -598,11 +616,44 @@ async def run_timeline_markers_full_coverage(
 ) -> int:
     """iter109 — Detect timeline markers across the ENTIRE match.
 
-    Transcodes the full match into contiguous chunks, runs Gemini on each,
-    offsets per-chunk timestamps to absolute match time, merges + dedupes, and
-    stores the markers in a single atomic pass. Returns the marker count.
+    Thin wrapper: builds the full-coverage chunks, processes them, and cleans
+    them up. Used by the manual markers-only regenerate path. The auto-process
+    orchestrator builds chunks ONCE and calls `_markers_from_chunks` directly so
+    the (expensive) transcode is shared with the text analyses.
     """
     chunks = await prepare_full_coverage_chunks(video)
+    try:
+        return await _markers_from_chunks(
+            chunks, match, roster_context, video_id, user_id, match_id,
+            auto_create_clips_callback,
+        )
+    finally:
+        _cleanup_chunks(chunks)
+
+
+def _cleanup_chunks(chunks: list) -> None:
+    """Best-effort delete of transcoded chunk files (path, offset, length)."""
+    for path, _o, _l in chunks or []:
+        if path and os.path.exists(path):
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
+
+
+async def _markers_from_chunks(
+    chunks: list,
+    match: dict,
+    roster_context: str,
+    video_id: str,
+    user_id: str,
+    match_id: str,
+    auto_create_clips_callback=None,
+) -> int:
+    """Run timeline-marker detection over pre-built chunks (does NOT delete the
+    chunk files — the caller owns their lifecycle so they can be shared across
+    analysis types). Offsets per-chunk timestamps to absolute match time,
+    merges + dedupes, and stores the markers in one atomic pass."""
     all_markers = []
     n = len(chunks)
     system_message = (
@@ -627,12 +678,6 @@ async def run_timeline_markers_full_coverage(
             )
         except Exception as e:
             logger.warning(f"[full-coverage markers] chunk {idx+1}/{n} failed: {e}")
-        finally:
-            if os.path.exists(path):
-                try:
-                    os.unlink(path)
-                except Exception:
-                    pass
 
     merged = _dedupe_markers(all_markers)
     count = await _store_markers(
@@ -643,7 +688,7 @@ async def run_timeline_markers_full_coverage(
     # the merged event array (same shape parse_and_store_markers consumes).
     await db.analyses.delete_many({
         "video_id": video_id, "user_id": user_id,
-        "analysis_type": "timeline_markers", "auto_generated": True,
+        "analysis_type": "timeline_markers",
     })
     await db.analyses.insert_one({
         "id": str(uuid.uuid4()),
@@ -661,6 +706,207 @@ async def run_timeline_markers_full_coverage(
         f"from {n} chunk(s)"
     )
     return count
+
+
+# ===========================================================================
+# iter110 — Full-match coverage for the PROSE analyses (tactical, player
+# performance, highlights) + possession stats.
+#
+# ROOT CAUSE this fixes (production 2026-06-04): these four analyses sent the
+# ENTIRE match as ONE Gemini call via prepare_video_sample. A 1h43m match is
+# ~6,180s of video ≈ 1.6M video tokens at Gemini's 1fps sampling — OVER the
+# model input limit — so Gemini rejected the request with
+# `400 INVALID_ARGUMENT "Request contains an invalid argument."` and every
+# non-marker analysis failed. emergentintegrations exposes no media-resolution
+# / fps knob, so (per the verified playbook) the only fix is to chunk the
+# video into sub-limit segments and make multiple calls.
+#
+# We reuse iter109's `prepare_full_coverage_chunks` (25-min, 360p/3fps/no-audio
+# chunks ≈ 387K tokens/call — safely under the limit) and run each prose prompt
+# per chunk (MAP), then synthesize the per-segment notes into one cohesive
+# report with a cheap TEXT-ONLY call (REDUCE). possession_stats is reduced by
+# deterministic numeric aggregation instead (no extra LLM call).
+# ===========================================================================
+_PROSE_TYPE_LABELS = {
+    "tactical": "tactical",
+    "player_performance": "player performance",
+    "highlights": "match highlights",
+}
+
+
+def _fmt_mmss(sec: float) -> str:
+    m, s = divmod(int(max(0, sec)), 60)
+    return f"{m}:{s:02d}"
+
+
+def _aggregate_possession(partials: list, match: dict) -> str:
+    """Combine per-segment possession_stats JSON objects into one match-level
+    JSON string. Possession % = duration-weighted average (normalized to 100);
+    total passes = sum; longest pass string = max. Deterministic, no LLM."""
+    total_len = 0.0
+    home_acc = away_acc = 0.0
+    home_passes = away_passes = 0
+    home_longest = away_longest = 0
+    summaries = []
+    parsed_any = False
+    for offset, length, resp in partials:
+        clean = (resp or "").strip()
+        if clean.startswith("```"):
+            clean = clean.split("\n", 1)[1] if "\n" in clean else clean[3:]
+            if clean.endswith("```"):
+                clean = clean[:-3]
+            clean = clean.strip()
+        try:
+            d = _json.loads(clean)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(d, dict):
+            continue
+        parsed_any = True
+        w = max(1.0, float(length))
+        try:
+            hp = float(d.get("team_home_possession_pct", 50) or 50)
+            ap = float(d.get("team_away_possession_pct", 50) or 50)
+        except (TypeError, ValueError):
+            hp, ap = 50.0, 50.0
+        home_acc += hp * w
+        away_acc += ap * w
+        total_len += w
+
+        def _int(v):
+            try:
+                return int(float(v))
+            except (TypeError, ValueError):
+                return 0
+        home_passes += _int(d.get("team_home_total_passes_estimate", 0))
+        away_passes += _int(d.get("team_away_total_passes_estimate", 0))
+        home_longest = max(home_longest, _int(d.get("team_home_longest_pass_string", 0)))
+        away_longest = max(away_longest, _int(d.get("team_away_longest_pass_string", 0)))
+        s = d.get("summary")
+        if s:
+            summaries.append(str(s))
+
+    if not parsed_any:
+        # Could not parse any segment — hand back the first raw response so the
+        # frontend card can attempt its own parse rather than showing nothing.
+        return partials[0][2] if partials else "{}"
+
+    h = home_acc / total_len if total_len else 50.0
+    a = away_acc / total_len if total_len else 50.0
+    tot = h + a
+    if tot > 0:
+        h = round(h / tot * 100)
+        a = 100 - h
+    else:
+        h, a = 50, 50
+    summary = summaries[0] if summaries else (
+        f"{match['team_home']} held {int(h)}% possession across the full match."
+    )
+    return _json.dumps({
+        "team_home_possession_pct": int(h),
+        "team_away_possession_pct": int(a),
+        "team_home_longest_pass_string": home_longest,
+        "team_away_longest_pass_string": away_longest,
+        "team_home_total_passes_estimate": home_passes,
+        "team_away_total_passes_estimate": away_passes,
+        "summary": summary[:240],
+    })
+
+
+def _segment_note(analysis_type: str, idx: int, n: int, offset: float, length: float) -> str:
+    """Preamble injected before the base prompt for each chunk so Gemini knows
+    it's analyzing ONE segment of a longer match."""
+    rng = f"{_fmt_mmss(offset)}\u2013{_fmt_mmss(offset + length)}"
+    note = (
+        f"**IMPORTANT: This video is ONE continuous segment of a longer match "
+        f"\u2014 segment {idx + 1} of {n}, covering match time {rng}. Analyze ONLY "
+        f"what you can observe in THIS segment; your notes will be combined with "
+        f"the other segments afterward.**\n\n"
+    )
+    if analysis_type == "possession_stats":
+        note += (
+            "Report possession % and pass stats for THIS SEGMENT ONLY. Do NOT "
+            "scale up to the full match \u2014 give the numbers for just this "
+            "segment; we combine the segments ourselves.\n\n"
+        )
+    return note
+
+
+async def run_chunked_text_analysis(
+    chunks: list,
+    match: dict,
+    analysis_type: str,
+    base_prompt: str,
+    video_id: str,
+    user_id: str,
+    match_id: str,
+    analysis_id: str = None,
+) -> str:
+    """iter110 — Run a prose/stat analysis across ALL match chunks (map) then
+    synthesize one cohesive result (reduce). Stores ONE completed analysis doc
+    (delete-prior + insert) and returns its content. Does NOT delete the chunk
+    files \u2014 the caller owns their lifecycle (shared across analysis types)."""
+    n = len(chunks)
+    partials = []
+    for idx, (path, offset, length) in enumerate(chunks):
+        prompt = _segment_note(analysis_type, idx, n, offset, length) + base_prompt
+        try:
+            resp = await _send_video_to_gemini(
+                path, prompt, session_id=f"{analysis_type}-{video_id}-{idx}",
+            )
+            partials.append((offset, length, resp))
+            logger.info(f"[chunked {analysis_type}] chunk {idx+1}/{n}: {len(resp or '')} chars")
+        except Exception as e:
+            logger.warning(f"[chunked {analysis_type}] chunk {idx+1}/{n} failed: {e}")
+
+    if not partials:
+        raise Exception(f"All {n} segment analyses failed for {analysis_type}")
+
+    # ---- REDUCE ----
+    if analysis_type == "possession_stats":
+        content = _aggregate_possession(partials, match)
+    elif len(partials) == 1:
+        # Short match (single chunk) — no synthesis needed, saves an LLM call.
+        content = partials[0][2]
+    else:
+        label = _PROSE_TYPE_LABELS.get(analysis_type, "match")
+        combined = "\n\n".join(
+            f"=== Segment covering {_fmt_mmss(o)}\u2013{_fmt_mmss(o + ln)} ===\n{r}"
+            for (o, ln, r) in partials
+        )
+        reduce_prompt = (
+            f"You are an expert soccer analyst. You analyzed a match between "
+            f"{match['team_home']} and {match['team_away']} in {len(partials)} "
+            f"consecutive segments and wrote the per-segment notes below. "
+            f"Synthesize them into a SINGLE cohesive {label} analysis for the WHOLE "
+            f"match. Merge duplicate observations, keep a chronological narrative "
+            f"where relevant, preserve the section structure of a normal full-match "
+            f"analysis, and do NOT refer to 'segments', 'clips', or 'parts' in your "
+            f"final output \u2014 write it as one continuous report.\n\n{combined}"
+        )
+        content = await _send_text_to_gemini(
+            reduce_prompt, session_id=f"{analysis_type}-{video_id}-reduce",
+        )
+
+    await db.analyses.delete_many({
+        "video_id": video_id, "user_id": user_id, "analysis_type": analysis_type,
+    })
+    await db.analyses.insert_one({
+        "id": analysis_id or str(uuid.uuid4()),
+        "video_id": video_id,
+        "match_id": match_id,
+        "user_id": user_id,
+        "analysis_type": analysis_type,
+        "content": content,
+        "status": "completed",
+        "auto_generated": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    logger.info(
+        f"[chunked {analysis_type}] video {video_id}: stored from "
+        f"{len(partials)}/{n} segment(s)"
+    )
+    return content
 
 
 
@@ -1309,7 +1555,7 @@ async def run_auto_processing(
     """
     all_types = ["tactical", "player_performance", "highlights", "timeline_markers", "possession_stats"]
     analysis_types = only_types if only_types else all_types
-    tmp_path = None
+    chunks = None
 
     try:
         await db.videos.update_one(
@@ -1367,29 +1613,25 @@ async def run_auto_processing(
         roster = await db.players.find({"match_id": video["match_id"]}, {"_id": 0}).to_list(100)
         roster_context = build_roster_context(roster)
 
-        # Only the text analyses (tactical/highlights/etc.) need the single
-        # full-match 180p sample. Timeline markers use their own full-coverage
-        # chunks, so skip this transcode when markers are the only request.
-        if any(t != "timeline_markers" for t in analysis_types):
-            try:
-                tmp_path = await prepare_video_sample(video)
-            except Exception as e:
-                # The new prepare_video_sample raises user-facing exceptions with
-                # actionable copy ("compress further", "trim the match", etc).
-                # Pass them through unchanged instead of burying them under another
-                # "Failed to prepare video: " prefix + 200-char truncation that
-                # hid the real cause on production iter62.
-                msg = str(e).strip() or "Video preparation failed"
-                logger.error(f"Auto-processing: failed to prepare video sample: {msg}")
-                await db.videos.update_one(
-                    {"id": video_id},
-                    {"$set": {"processing_status": "failed", "processing_error": msg[:500]}},
-                )
-                return
+        # iter110 — ALL analysis types now run on the SHARED full-coverage chunk
+        # set (25-min, 360p/3fps/no-audio). This fixes the production Gemini
+        # "400 INVALID_ARGUMENT" caused by sending a 1h43m match as a single call
+        # (the prose analyses used to do this via prepare_video_sample), and
+        # removes the redundant second full-match transcode — markers + the four
+        # prose/stat analyses now reuse ONE transcode pass.
+        try:
+            chunks = await prepare_full_coverage_chunks(video)
+        except Exception as e:
+            # prepare_full_coverage_chunks raises user-facing exceptions with
+            # actionable copy (re-upload required, etc.). Pass them through.
+            msg = str(e).strip() or "Video preparation failed"
+            logger.error(f"Auto-processing: failed to prepare coverage chunks: {msg}")
+            await db.videos.update_one(
+                {"id": video_id},
+                {"$set": {"processing_status": "failed", "processing_error": msg[:500]}},
+            )
+            return
 
-        # iter109 — timeline markers now use full-match coverage (see
-        # run_timeline_markers_full_coverage), NOT the old 13%-sampled
-        # prepare_video_segments_720p path. segment_preamble is therefore empty.
         prompts = build_analysis_prompts(match, roster_context, "")
 
         for idx, analysis_type in enumerate(analysis_types):
@@ -1402,16 +1644,17 @@ async def run_auto_processing(
 
             try:
                 if analysis_type == "timeline_markers":
-                    # iter109 — analyze the ENTIRE match in contiguous chunks so
-                    # no goal is missed (root-cause fix for "1 highlight" bug).
-                    await run_timeline_markers_full_coverage(
-                        video, match, roster_context, video_id, user_id,
+                    # iter109/110 — analyze the ENTIRE match in contiguous chunks
+                    # so no goal is missed (root-cause fix for "1 highlight" bug).
+                    await _markers_from_chunks(
+                        chunks, match, roster_context, video_id, user_id,
                         video["match_id"], auto_create_clips_callback,
                     )
                 else:
-                    await run_single_analysis(
-                        video_id, user_id, video["match_id"], analysis_type, tmp_path,
-                        prompts[analysis_type], auto_create_clips_callback,
+                    # iter110 — prose/stat analyses run per-chunk + reduce.
+                    await run_chunked_text_analysis(
+                        chunks, match, analysis_type, prompts[analysis_type],
+                        video_id, user_id, video["match_id"],
                     )
             except Exception as e:
                 logger.error(f"Auto-processing {video_id}: {analysis_type} FAILED: {e}")
@@ -1480,5 +1723,4 @@ async def run_auto_processing(
             {"$set": {"processing_status": "failed", "processing_error": str(e)[:200]}},
         )
     finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        _cleanup_chunks(chunks)
