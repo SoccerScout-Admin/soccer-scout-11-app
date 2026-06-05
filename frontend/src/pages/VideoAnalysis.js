@@ -434,6 +434,13 @@ const VideoAnalysis = () => {
     [markers]
   );
 
+  // iter111 — coverage telemetry from the timeline_markers analysis doc, so the
+  // markers panel can show how much of the match was actually analyzed.
+  const markersCoverage = useMemo(
+    () => (analyses || []).find((a) => a.analysis_type === 'timeline_markers')?.coverage || null,
+    [analyses]
+  );
+
   if (!videoMetadata) {
     return (
       <div className="min-h-screen bg-[#0A0A0A] flex items-center justify-center">
@@ -571,6 +578,7 @@ const VideoAnalysis = () => {
               onSeek={seekTo}
               matchId={match?.id}
               videoId={videoId}
+              coverage={markersCoverage}
               onMarkerUpdated={(updated) => setMarkers((prev) => prev.map((m) => m.id === updated.id ? updated : m))}
               onMarkerDeleted={(id) => setMarkers((prev) => prev.filter((m) => m.id !== id))}
               onClipCreated={(clip) => setClips((prev) => [clip, ...prev])}

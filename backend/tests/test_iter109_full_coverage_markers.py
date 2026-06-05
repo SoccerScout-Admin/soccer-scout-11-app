@@ -160,17 +160,20 @@ def test_full_coverage_orchestration_merges_and_stores(monkeypatch):
 
     # chunk 0 reports a goal at clip-second 600 (→ absolute 600)
     # chunk 1 reports a goal at clip-second 910 (→ absolute 1490+910 = 2400)
-    responses = {
-        "markers-%s-0" % video_id: json.dumps([
+    # iter111 — session_id is now "markers-{video_id}-{idx}-{attempt}", so key by idx.
+    responses_by_idx = {
+        "0": json.dumps([
             {"time": 600, "type": "goal", "label": "G1", "team": "LFC", "importance": 5}
         ]),
-        "markers-%s-1" % video_id: json.dumps([
+        "1": json.dumps([
             {"time": 910, "type": "goal", "label": "G2", "team": "Dayton", "importance": 5}
         ]),
     }
 
     async def fake_send(video_file_path, prompt, session_id, system_message=None):
-        return responses[session_id]
+        # "markers-<video_id>-<idx>-<attempt>" → second-to-last token is the idx
+        idx = session_id.rsplit("-", 2)[-2]
+        return responses_by_idx[idx]
 
     monkeypatch.setattr(P, "prepare_full_coverage_chunks", fake_prepare)
     monkeypatch.setattr(P, "_send_video_to_gemini", fake_send)

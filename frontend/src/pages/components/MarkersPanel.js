@@ -124,7 +124,7 @@ const MarkerRow = ({ marker, onSeek, onEdit, onClip, clipBusyForId }) => {
   );
 };
 
-const MarkersPanel = ({ markers, onSeek, matchId, videoId, onMarkerUpdated, onMarkerDeleted, onClipCreated }) => {
+const MarkersPanel = ({ markers, onSeek, matchId, videoId, coverage, onMarkerUpdated, onMarkerDeleted, onClipCreated }) => {
   const [filter, setFilter] = useState(ALL_FILTER);
   const [editingMarker, setEditingMarker] = useState(null);
   const [clipBusyForId, setClipBusyForId] = useState(null);
@@ -189,6 +189,33 @@ const MarkersPanel = ({ markers, onSeek, matchId, videoId, onMarkerUpdated, onMa
           </span>
         </div>
       </div>
+
+      {/* iter111 — AI coverage line: shows how much of the match was actually
+          analyzed so a partial/dropped-chunk run is visible at a glance. */}
+      {coverage && coverage.chunks_total > 0 && (
+        <div
+          data-testid="markers-coverage"
+          className="px-4 py-2 border-b border-white/5 text-[10px] text-[#888] flex items-center gap-1.5 flex-wrap"
+        >
+          <span className="text-[#7DD3FC]">AI coverage:</span>
+          <span className="tabular-nums">
+            {coverage.chunks_total} segment{coverage.chunks_total === 1 ? '' : 's'}
+          </span>
+          <span className="text-[#555]">·</span>
+          <span className="tabular-nums">
+            {formatTime(coverage.covered_from_sec)}–{formatTime(coverage.covered_to_sec)}
+          </span>
+          {coverage.chunks_errored > 0 && (
+            <span
+              data-testid="markers-coverage-warning"
+              className="text-[#F97316]"
+              title="Some segments could not be processed — reprocess to fill the gaps"
+            >
+              · {coverage.chunks_errored} segment{coverage.chunks_errored === 1 ? '' : 's'} failed
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Filter pills */}
       <div className="flex flex-wrap gap-1.5 px-3 py-2.5 border-b border-white/5">

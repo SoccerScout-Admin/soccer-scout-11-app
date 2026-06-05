@@ -502,7 +502,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # BUILD_VERSION should be bumped each iteration that ships to production.
 # SHIPPED_FEATURES is the human-readable changelog the dashboard footer pings to confirm
 # "yes, the latest code reached production".
-BUILD_VERSION = "iter110"
+BUILD_VERSION = "iter111"
 
 # Max number of times resume_interrupted_processing will re-queue a video
 # that's still stuck at 0% progress. After this many attempts with no
@@ -732,6 +732,14 @@ SHIPPED_FEATURES = [
     "possession-stats-numeric-aggregate",
     "shared-coverage-chunk-transcode",
     "not-found-route-fallback",
+    # iter111 — marker recall + coverage: 480p sharper frames, audio cues,
+    # strict event-type decision guide, tighter 18-min chunks, per-chunk
+    # transcode/Gemini retries so segments stop getting silently dropped, and
+    # coverage telemetry surfaced on the markers panel.
+    "markers-480p-audio-coverage",
+    "markers-strict-type-guide",
+    "markers-chunk-retry-resilience",
+    "markers-coverage-telemetry",
 ]
 
 def _get_build_sha() -> str:

@@ -1,6 +1,31 @@
 # Soccer Scout - Product Requirements Document
 
 
+## iter111 — Marker RECALL + COVERAGE + RESILIENCE (Jun 2026)
+
+**Reported (production, soccerscout11.com, on iter110 after reprocess):** Full games produced only **5-10 markers** (user expects 60-80), the AI output referenced only a single **"segment provided ≈ 20-25 min" (a quarter of the game)**, and event **types were frequently mislabeled** (e.g. saves/goals tagged as shots).
+
+**Diagnosis:** The "only a quarter analyzed" symptom = most coverage chunks were being **silently dropped**. The old `prepare_full_coverage_chunks` logged a warning and skipped any chunk whose ffmpeg transcode failed (OOM-killed child / timeout on the 4 GB pod), so a 5-chunk match could end up with **1 surviving chunk**. Both markers and the iter110 prose map-reduce then only saw that one segment. Low recall + mislabels were compounded by 360p frames (ball/net too small to classify) and no audio (no whistle/roar cues).
+
+**The fix (`services/processing.py`, `MarkersPanel.js`, `VideoAnalysis.js`):**
+- **Sharper frames:** chunk transcode 360p → **480p**, crf 32 → **30**. Gemini resizes internally so token cost is unchanged, but it now sees the ball/net/keeper clearly → better detection + correct types.
+- **Audio re-enabled** on chunks (`-c:a aac 64k mono`): ref whistle → foul/stoppage, crowd roar → goal/chance, net/keeper sounds → save/goal. ~32 tokens/s, trivially under the limit for an 18-min chunk.
+- **Tighter chunks:** 25-min → **18-min** windows (`_FULL_COVERAGE_CHUNK_SECONDS=1080`) → ~6 chunks for a 103-min game → more granular recall (model stops summarizing a long stretch).
+- **Per-chunk transcode RETRY tier:** if the 480p+audio encode fails (e.g. OOM on the 4 GB pod), it **retries at 360p/no-audio** before giving up — chunks stop being silently dropped (root cause of "only a quarter").
+- **Per-chunk Gemini RETRY:** a transient 5xx/timeout retries once instead of dropping the whole segment.
+- **Strict event-type DECISION GUIDE in the prompt:** explicit rules — ball-in-net=`goal` (never `shot`); keeper-stops-it=`save`; misses/post/defender-block=`shot`; dangerous build-up with no shot=`chance`; whistle+free-kick=`foul`; card=`card`. Plus "BE EXHAUSTIVE — aim for 12-20+ events per 18-min clip, list them ALL, don't summarize."
+- **Coverage TELEMETRY:** the `timeline_markers` analysis doc now stores `coverage` `{chunks_total, chunks_errored, events_per_chunk, covered_from_sec, covered_to_sec, total_events}`, surfaced on the **markers panel** ("AI coverage: 6 segments · 0:00–1:43", with an orange "N segments failed" warning if any chunk dropped). This makes a partial/dropped-chunk run visible at a glance and gives us the exact diagnostic on the next reprocess.
+
+**Verified:**
+- 9 new tests in `test_iter111_marker_recall_coverage.py` (tightened constants, 18-min → 6 chunks, audio+retry-tier in transcoder source, strict-type-guide + audio cues + exhaustiveness in prompt, coverage telemetry persisted, Gemini retry recovers a transient failure, fully-failed chunk counts as errored, frontend coverage wiring). iter109/iter110 tests updated for the new session-id scheme — all green.
+- 110 related regression tests green (iter87/98/99/101/103/107/109/110 + ffmpeg).
+- **Real ffmpeg smoke:** a 24-min source produced **2 chunks, both 480p, both with video+audio**, covering the full duration.
+- **Real Gemini smoke:** a 480p+audio chunk was accepted (no 400) and parsed.
+- `BUILD_VERSION=iter111`; deploy advertises `markers-480p-audio-coverage`, `markers-strict-type-guide`, `markers-chunk-retry-resilience`, `markers-coverage-telemetry`.
+
+**⚠️ ACTION FOR USER:** Code fix in PREVIEW. **Redeploy** to production, then **reprocess** the match. Then check the new **"AI coverage"** line on the markers panel — if it says e.g. "6 segments · 0:00–1:43" you've got full coverage; if it shows "N segments failed" or a short span, share that number and I'll know exactly which chunks are still dropping on the 4 GB pod (next step would be S3/GCS + more memory, or a lighter transcode tier).
+
+
 ## iter110 — ROOT-CAUSE FIX: Full-match coverage for the PROSE/STAT analyses + 404 fallback (Jun 2026)
 
 **Reported bug (production, soccerscout11.com):** On the 1.04 GB / 1h43m match, AI processing failed ~10 min in with a red "Failed" + error. User-supplied error screenshot showed the real cause:

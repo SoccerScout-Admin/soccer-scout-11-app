@@ -399,11 +399,22 @@ async def run_single_analysis(
 # (~40-55 MB) and transcoded in a single streaming pass (-threads 1) so the
 # 4 GB production pod stays well under its memory budget.
 # ===========================================================================
-_FULL_COVERAGE_CHUNK_SECONDS = 1500   # 25 min of match time per Gemini call
-_FULL_COVERAGE_SCALE = "scale=-2:360"  # 360p — proven safe (480p segments worked)
+_FULL_COVERAGE_CHUNK_SECONDS = 1080   # iter111: 18 min/call (was 25) — tighter
+                                      # windows = more granular event recall and
+                                      # more chunks per match (~6 for a 103-min
+                                      # game) so the model stops summarizing.
+_FULL_COVERAGE_SCALE = "scale=-2:480"  # iter111: 480p (was 360p). Gemini resizes
+                                       # internally so token cost is unchanged, but
+                                       # 480p gives it a far clearer view of the
+                                       # ball/net/keeper → better detection + types.
 _FULL_COVERAGE_FPS = "3"               # Gemini samples ~1fps; 3 gives headroom
-_FULL_COVERAGE_CRF = "32"
+_FULL_COVERAGE_CRF = "30"              # iter111: 30 (was 32) — sharper at 480p
 _FULL_COVERAGE_OVERLAP = 10            # sec of overlap so boundary goals aren't split
+_FULL_COVERAGE_FALLBACK_SCALE = "scale=-2:360"  # iter111: per-chunk retry tier if
+                                                # the 480p encode is OOM-killed on a
+                                                # 4 GB pod — recover the chunk instead
+                                                # of silently dropping a quarter of
+                                                # the match.
 
 
 def build_timeline_markers_chunk_prompt(
@@ -455,6 +466,23 @@ def build_timeline_markers_chunk_prompt(
         "**PLAYER IDENTIFICATION.** If a jersey number is clearly visible, record it in `player_number` "
         "(and `player_name` if it matches the roster below). If the number is too small/blurry to read "
         "confidently, leave `player_number` null and add an appearance hint in `label` — do NOT guess.\n\n"
+        "**LISTEN TO THE AUDIO — it disambiguates events.** This clip has sound. Use it:\n"
+        "  • A sharp REFEREE WHISTLE → a `foul` or stoppage (free kick / offside). A whistle followed by a card shown → `card`.\n"
+        "  • A sudden CROWD ROAR / cheer → a `goal` or a big `chance` (cross-check the video for net/celebration).\n"
+        "  • A loud thump + keeper diving + crowd groan → likely a `save` or blocked `shot`.\n\n"
+        "**EVENT-TYPE DECISION GUIDE — classify each event correctly (this is where most mistakes happen):**\n"
+        "  • `goal` = the ball fully crosses the goal line into the net (net bulges / celebration / center-circle restart). If it went IN, it is a GOAL, never a `shot`.\n"
+        "  • `save` = a shot ON TARGET that the goalkeeper stops, catches, parries, or tips away. The keeper makes contact and the ball does NOT go in. Tag this `save`, NOT `shot`.\n"
+        "  • `shot` = an attempt at goal that does NOT go in and is NOT saved by the keeper — i.e. it misses (wide/over), hits the post/bar, or is blocked by a defender (not the keeper).\n"
+        "  • `chance` = a dangerous build-up or clear opportunity where NO shot was actually taken (a through-ball, a cross flashing across the box, a 1-on-1 that fizzles).\n"
+        "  • `foul` = a free kick / handball / trip / push the referee whistles for (no card).\n"
+        "  • `card` = the referee shows a yellow or red card.\n"
+        "  • `substitution` = a player swap at the touchline. `tactical` = a clear shift in shape/pressing.\n"
+        "  When unsure between `shot` and `save`: if the KEEPER touched it → `save`; if it missed or a defender blocked it → `shot`.\n\n"
+        "**BE EXHAUSTIVE.** A competitive half typically has many events. For an 18-minute clip, aim to log "
+        "12–20+ events — every shot, every save, every goal, every clear chance, every whistled foul, every card. "
+        "It is better to log a borderline attempt as a `chance` than to skip it. Do NOT summarize or report only "
+        "the 'top' moments — list them ALL in chronological order.\n\n"
         "**OUTPUT FORMAT.** Return ONLY a JSON array of event objects. Each object MUST have:\n"
         "  - \"time\": seconds FROM THE START OF THIS CLIP (number, 0 to "
         f"{clip_len}) — NOT absolute match time\n"
@@ -560,9 +588,13 @@ async def prepare_full_coverage_chunks(video: dict) -> list:
             f"{_FULL_COVERAGE_SCALE}/{_FULL_COVERAGE_FPS}fps/crf{_FULL_COVERAGE_CRF}"
         )
 
-        for i, (start, length) in enumerate(windows):
-            end = start + length
-            chunk_path = tempfile.mktemp(suffix=f"_cov{i}.mp4", dir="/var/video_chunks")
+        # iter111 — per-chunk transcode with a retry tier. A 4 GB production pod
+        # was OOM-killing the ffmpeg child on some chunks; the old code logged a
+        # warning and SILENTLY DROPPED that chunk, so a 5-chunk match could end
+        # up with only 1 surviving chunk = a quarter of the game analyzed. Now
+        # each chunk gets a second attempt at a lighter 360p/no-audio tier before
+        # we give up on it.
+        def _build_cmd(scale, with_audio, chunk_path, start, length):
             cmd = [
                 "ffmpeg", "-y",
                 "-threads", "1",
@@ -570,8 +602,17 @@ async def prepare_full_coverage_chunks(video: dict) -> list:
                 "-ss", str(int(start)),
                 "-i", raw_path,
                 "-t", str(int(length) + 1),
-                "-an",  # markers don't need audio — smaller payload + raises Gemini duration ceiling
-                "-vf", _FULL_COVERAGE_SCALE,
+            ]
+            if with_audio:
+                # iter111 — re-enable audio: ref whistle (foul/stoppage), crowd
+                # roar (goal/chance) and net/keeper sounds are strong event +
+                # type cues. 64k mono ≈ 32 tokens/s — trivially under the limit
+                # for an 18-min chunk.
+                cmd += ["-c:a", "aac", "-b:a", "64k", "-ac", "1"]
+            else:
+                cmd += ["-an"]
+            cmd += [
+                "-vf", scale,
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
                 "-crf", _FULL_COVERAGE_CRF,
@@ -581,20 +622,56 @@ async def prepare_full_coverage_chunks(video: dict) -> list:
                 "-movflags", "+faststart",
                 chunk_path,
             ]
-            res = await run_in_threadpool(
-                subprocess.run, cmd, capture_output=True, text=True, timeout=600,
-            )
-            if res.returncode == 0 and os.path.exists(chunk_path) and os.path.getsize(chunk_path) > 1000:
-                mb = os.path.getsize(chunk_path) / (1024 * 1024)
-                produced.append((chunk_path, start, length))
-                logger.info(f"[full-coverage] chunk {i+1}/{n_chunks}: {start:.0f}-{end:.0f}s, {mb:.1f}MB")
-            else:
-                logger.warning(f"[full-coverage] chunk {i+1} failed at {start:.0f}s: {(res.stderr or '')[-200:]}")
+            return cmd
+
+        n_failed = 0
+        for i, (start, length) in enumerate(windows):
+            end = start + length
+            attempts = [
+                (_FULL_COVERAGE_SCALE, True, 900),            # 480p + audio
+                (_FULL_COVERAGE_FALLBACK_SCALE, False, 600),  # 360p no-audio retry
+            ]
+            chunk_ok = False
+            for tier_idx, (scale, with_audio, tmo) in enumerate(attempts):
+                chunk_path = tempfile.mktemp(suffix=f"_cov{i}.mp4", dir="/var/video_chunks")
+                cmd = _build_cmd(scale, with_audio, chunk_path, start, length)
+                try:
+                    res = await run_in_threadpool(
+                        subprocess.run, cmd, capture_output=True, text=True, timeout=tmo,
+                    )
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"[full-coverage] chunk {i+1}/{n_chunks} tier{tier_idx} timed out ({tmo}s)")
+                    if os.path.exists(chunk_path):
+                        try:
+                            os.unlink(chunk_path)
+                        except Exception:
+                            pass
+                    continue
+                if res.returncode == 0 and os.path.exists(chunk_path) and os.path.getsize(chunk_path) > 1000:
+                    mb = os.path.getsize(chunk_path) / (1024 * 1024)
+                    produced.append((chunk_path, start, length))
+                    tag = "" if tier_idx == 0 else " [retry-360p]"
+                    logger.info(f"[full-coverage] chunk {i+1}/{n_chunks}: {start:.0f}-{end:.0f}s, {mb:.1f}MB{tag}")
+                    chunk_ok = True
+                    break
+                logger.warning(
+                    f"[full-coverage] chunk {i+1}/{n_chunks} tier{tier_idx} failed at "
+                    f"{start:.0f}s (rc={res.returncode}): {(res.stderr or '')[-160:]}"
+                )
                 if os.path.exists(chunk_path):
-                    os.unlink(chunk_path)
+                    try:
+                        os.unlink(chunk_path)
+                    except Exception:
+                        pass
+            if not chunk_ok:
+                n_failed += 1
 
         if not produced:
             raise Exception("Failed to extract any full-coverage chunks")
+        logger.info(
+            f"[full-coverage] produced {len(produced)}/{n_chunks} chunk(s) "
+            f"({n_failed} dropped) covering ~{duration/60:.0f}min"
+        )
         return produced
     finally:
         if os.path.exists(raw_path):
@@ -656,33 +733,64 @@ async def _markers_from_chunks(
     merges + dedupes, and stores the markers in one atomic pass."""
     all_markers = []
     n = len(chunks)
+    per_chunk_events = []   # iter111 telemetry: events found per chunk
+    chunks_errored = 0
     system_message = (
         "You are an expert soccer analyst reviewing a continuous portion of a "
-        "match. Detect every key event (goals, shots, saves, cards, fouls) and "
-        "report precise timestamps relative to the clip you are given."
+        "match. Detect EVERY key event (goals, shots, saves, cards, fouls, clear "
+        "chances) — be exhaustive, not a highlights summary — and report precise "
+        "timestamps relative to the clip you are given."
     )
     for idx, (path, offset, length) in enumerate(chunks):
-        try:
-            prompt = build_timeline_markers_chunk_prompt(
-                match, roster_context, offset, offset + length
-            )
-            response = await _send_video_to_gemini(
-                path, prompt, session_id=f"markers-{video_id}-{idx}",
-                system_message=system_message,
-            )
-            chunk_markers = _parse_markers_response(response, time_offset=offset)
-            all_markers.extend(chunk_markers)
-            logger.info(
-                f"[full-coverage markers] chunk {idx+1}/{n} "
-                f"({offset:.0f}-{offset+length:.0f}s): {len(chunk_markers)} events"
-            )
-        except Exception as e:
-            logger.warning(f"[full-coverage markers] chunk {idx+1}/{n} failed: {e}")
+        prompt = build_timeline_markers_chunk_prompt(
+            match, roster_context, offset, offset + length
+        )
+        # iter111 — retry the Gemini call once on transient failure so a single
+        # 5xx/timeout doesn't drop a whole ~18-min segment of coverage.
+        response = None
+        last_err = None
+        for attempt in range(2):
+            try:
+                response = await _send_video_to_gemini(
+                    path, prompt, session_id=f"markers-{video_id}-{idx}-{attempt}",
+                    system_message=system_message,
+                )
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(
+                    f"[full-coverage markers] chunk {idx+1}/{n} attempt {attempt+1} failed: {e}"
+                )
+        if response is None:
+            chunks_errored += 1
+            per_chunk_events.append(0)
+            logger.error(f"[full-coverage markers] chunk {idx+1}/{n} gave up: {last_err}")
+            continue
+        chunk_markers = _parse_markers_response(response, time_offset=offset)
+        all_markers.extend(chunk_markers)
+        per_chunk_events.append(len(chunk_markers))
+        logger.info(
+            f"[full-coverage markers] chunk {idx+1}/{n} "
+            f"({offset:.0f}-{offset+length:.0f}s): {len(chunk_markers)} events"
+        )
 
     merged = _dedupe_markers(all_markers)
     count = await _store_markers(
         video_id, match_id, user_id, merged, auto_create_clips_callback
     )
+
+    # iter111 — coverage telemetry so the user (and we) can SEE whether the whole
+    # match was analyzed or only part of it. Surfaced on the markers panel.
+    covered_from = min((o for _p, o, _l in chunks), default=0.0)
+    covered_to = max((o + ln for _p, o, ln in chunks), default=0.0)
+    coverage = {
+        "chunks_total": n,
+        "chunks_errored": chunks_errored,
+        "events_per_chunk": per_chunk_events,
+        "covered_from_sec": round(covered_from, 1),
+        "covered_to_sec": round(covered_to, 1),
+        "total_events": count,
+    }
 
     # Persist one timeline_markers analysis doc for UI consistency. Content is
     # the merged event array (same shape parse_and_store_markers consumes).
@@ -697,13 +805,15 @@ async def _markers_from_chunks(
         "user_id": user_id,
         "analysis_type": "timeline_markers",
         "content": _json.dumps(merged),
+        "coverage": coverage,
         "status": "completed",
         "auto_generated": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     logger.info(
-        f"[full-coverage markers] video {video_id}: {count} merged events "
-        f"from {n} chunk(s)"
+        f"[full-coverage markers] video {video_id}: {count} merged events from "
+        f"{n} chunk(s) ({chunks_errored} errored), per-chunk={per_chunk_events}, "
+        f"covered {covered_from/60:.0f}-{covered_to/60:.0f}min"
     )
     return count
 
