@@ -90,9 +90,9 @@ agenthub/agents/youtube/db
 # Test credentials — read by the testing subagent only
 memory/test_credentials.md
 
-frontend/node_modules/.cache/default-development/70.pack
+.env
+.env.*
+*.env
 frontend/node_modules/.cache/default-development/70.pack
 frontend/node_modules/.cache/default-development/10.pack
-frontend/node_modules/.cache/default-development/10.pack
-frontend/node_modules/.cache/default-development/22.pack
 frontend/node_modules/.cache/default-development/22.pack
